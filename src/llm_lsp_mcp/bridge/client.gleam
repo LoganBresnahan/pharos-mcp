@@ -9,3 +9,7 @@
 //// `doc/bridge-protocol.md` for the endpoint spec.
 ////
 //// Stub — probe + GET helpers land in Milestone 7.
+
+/// Placeholder so Gleam does not flag this as an empty module.
+/// Removed in the milestone that implements this module.
+pub const placeholder: Nil = Nil

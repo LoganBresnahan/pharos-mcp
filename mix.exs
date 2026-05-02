@@ -31,11 +31,13 @@ defmodule LlmLspMcp.MixProject do
 
   defp deps do
     [
-      {:gleam_stdlib, "~> 0.40"},
-      {:gleam_otp, "~> 0.13"},
+      {:gleam_stdlib, "~> 1.0"},
+      {:gleam_otp, "~> 1.2"},
+      {:gleam_erlang, "~> 1.3"},
+      {:gleam_json, "~> 3.1"},
       {:pollux, "~> 1.0"},
-      {:gleeunit, "~> 1.0", only: [:dev, :test], runtime: false},
-      {:burrito, "~> 1.3", runtime: false}
+      {:gleeunit, "~> 1.10", only: [:dev, :test], runtime: false},
+      {:burrito, "~> 1.5", runtime: false}
     ]
   end
 

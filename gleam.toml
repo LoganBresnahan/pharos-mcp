@@ -1,8 +1,21 @@
 # Project metadata for the Gleam CLI. Build is driven by Mix via the
-# mix_gleam archive — dependency declarations live in mix.exs.
+# mix_gleam archive — version resolution authoritatively lives in
+# mix.exs. This file is duplicated here so the Gleam compiler can
+# recognize gleeunit and other dev deps as direct dependencies (Gleam
+# does not consult Mix's env-scoped deps when classifying imports).
 
 name = "llm_lsp_mcp"
 version = "0.0.1"
 target = "erlang"
 description = "MCP server bridging LLMs to LSP servers."
 licences = ["MIT"]
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_otp = ">= 1.2.0 and < 2.0.0"
+gleam_erlang = ">= 1.3.0 and < 2.0.0"
+gleam_json = ">= 3.1.0 and < 4.0.0"
+pollux = ">= 1.0.0 and < 2.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.10.0 and < 2.0.0"

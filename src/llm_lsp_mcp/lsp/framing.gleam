@@ -14,3 +14,7 @@
 //// `gleam_qcheck` cover partial-read cases.
 ////
 //// Stub — parser + encoder land in Milestone 2.
+
+/// Placeholder so Gleam does not flag this as an empty module.
+/// Removed in the milestone that implements this module.
+pub const placeholder: Nil = Nil

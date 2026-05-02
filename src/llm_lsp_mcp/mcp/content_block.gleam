@@ -11,3 +11,7 @@
 ////
 //// Stub — block types land in Milestone 1; rendering helpers in
 //// Milestone 4 and 8.
+
+/// Placeholder so Gleam does not flag this as an empty module.
+/// Removed in the milestone that implements this module.
+pub const placeholder: Nil = Nil
