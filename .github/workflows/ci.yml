@@ -37,8 +37,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-otp28-elixir1.19-mix-
 
-      - name: Install mix_gleam archive
-        run: mix archive.install --force hex mix_gleam
+      - name: Install mix_gleam archive (LoganBresnahan/mix_gleam fork)
+        run: mix archive.install --force github LoganBresnahan/mix_gleam
 
       - name: Fetch dependencies
         run: mix deps.get

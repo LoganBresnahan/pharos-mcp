@@ -37,7 +37,11 @@ LLMs talk MCP. Editors talk LSP. Both already speak JSON-RPC 2.0 over stdio. Not
 Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, rebar3 3.27+. Pinned versions in [.tool-versions](.tool-versions) (`asdf install`).
 
 ```bash
-mix archive.install hex mix_gleam       # one-time, installs the Gleam compiler archive
+# One-time: install the Gleam compiler archive (LoganBresnahan/mix_gleam fork —
+# tracks Elixir 1.15+ and Gleam 1.x; upstream gleam-lang/mix_gleam is dormant
+# and pinned to Gleam pre-1.0 on Hex).
+mix archive.install --force github LoganBresnahan/mix_gleam
+
 mix deps.get                             # fetches Hex dependencies (Gleam + Elixir)
 mix compile                              # compiles Gleam → BEAM via mix_gleam
 mix gleam.test                           # runs gleeunit tests
