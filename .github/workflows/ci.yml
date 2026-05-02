@@ -48,3 +48,20 @@ jobs:
 
       - name: Run tests
         run: mix gleam.test
+
+      - name: Smoke-test the stdio MCP server end-to-end
+        run: |
+          out=$(printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"message":"smoke"}}}' \
+            | mix start)
+          echo "Server output:"
+          echo "$out"
+          echo "$out" | grep -q '"protocolVersion":"2024-11-05"' || { echo "missing initialize response"; exit 1; }
+          echo "$out" | grep -q '"name":"echo"' || { echo "missing tools/list echo entry"; exit 1; }
+          echo "$out" | grep -q '"text":"smoke"' || { echo "missing tools/call echo result"; exit 1; }
+          # Notification line must produce no response — exactly 3 result lines.
+          lines=$(echo "$out" | grep -c '^{"jsonrpc"')
+          [ "$lines" = "3" ] || { echo "expected 3 response lines, got $lines"; exit 1; }

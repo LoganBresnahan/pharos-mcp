@@ -27,6 +27,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 006 | [Curated tool surface, no LSP JSON Schema auto-gen](006-curated-tools-no-schema.md) | Accepted |
 | 007 | [Two-repo split: binary and extension as independent repos](007-two-repo-split.md) | Accepted |
 | 008 | [Fork mix_gleam to remove third-party stall risk on the build chain](008-fork-mix-gleam.md) | Accepted |
+| 009 | [Dogfood the MCP server via Claude Code at every milestone](009-dogfood-via-claude-code.md) | Accepted |
 
 ## Anticipated future ADRs
 
@@ -34,9 +35,9 @@ Written when the corresponding decision actually arises with tradeoffs — not p
 
 | # | Title | Trigger |
 |---|-------|---------|
-| 009 | Tool result format: MCP content blocks | First tool ships, rendering choices firm up |
-| 010 | Config file format and location | Language-registry config gets implemented |
-| 011 | LSP lifecycle policy: kept-warm vs spawn-per-call | rust-analyzer cold-start hits in real use |
-| 012 | Bridge port discovery mechanism | Extension repo bootstraps |
-| 013 | Workspace root determination | First multi-root project test runs |
-| 014 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
+| 010 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
+| 011 | Config file format and location | Language-registry config gets implemented |
+| 012 | LSP lifecycle policy: kept-warm vs spawn-per-call | rust-analyzer cold-start hits in real use |
+| 013 | Bridge port discovery mechanism | Extension repo bootstraps |
+| 014 | Workspace root determination | First multi-root project test runs |
+| 015 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
