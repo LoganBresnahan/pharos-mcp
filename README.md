@@ -65,6 +65,26 @@ printf '%s\n' \
 
 Expected: three JSON-RPC responses on stdout (initialize → tools/list → tools/call echo), with `[info]` log lines on stderr. The notification line produces no response, by spec.
 
+### Wiring as a real MCP server (dev mode)
+
+`mix start` is fine for the smoke test above (where stdout is captured into a variable), but it cannot be used directly as an MCP server `command` because Mix prints compile progress to stdout, corrupting the JSON-RPC stream.
+
+The repo ships [`bin/llm-lsp-mcp-dev`](bin/llm-lsp-mcp-dev) — a small bash wrapper that compiles silently (output to stderr) then boots Erlang directly so stdout stays reserved for the MCP protocol.
+
+Add this to your MCP host's config (e.g. `~/.claude.json`'s `mcpServers`):
+
+```json
+{
+  "mcpServers": {
+    "llm-lsp-mcp": {
+      "command": "/absolute/path/to/llm_lsp_mcp/bin/llm-lsp-mcp-dev"
+    }
+  }
+}
+```
+
+Restart the host (or use its MCP reconnect command). Once registered, the LLM has tools named `mcp__llm_lsp_mcp__<tool>` available. The dev wrapper goes away at Milestone 6 when the Burrito-built binary becomes the canonical command.
+
 For binary builds (requires Zig 0.15.2 + xz, see [Burrito's setup notes](https://github.com/burrito-elixir/burrito#preparation-and-requirements)):
 
 ```bash
