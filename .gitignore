@@ -1,0 +1,38 @@
+# Mix / Elixir
+/_build/
+/cover/
+/deps/
+/doc/_build/
+*.ez
+erl_crash.dump
+
+# Gleam
+/build/
+*.beam
+
+# Burrito output
+/burrito_out/
+
+# IDE / editor
+.elixir_ls/
+.elixir-tools/
+.lexical/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# npm publish artifacts (built binaries)
+/npm/platforms/*/llm-lsp-mcp
+/npm/platforms/*/llm-lsp-mcp.exe
+/npm/platforms/*/node_modules/
+/npm/meta/node_modules/
+
+# Local secrets / config overrides
+*.local.exs
+.envrc
+.env
