@@ -16,9 +16,12 @@ Distributed as a single self-contained binary via [Burrito](https://github.com/b
 // .mcp.json or claude_desktop_config.json
 {
   "mcpServers": {
-    "llm-lsp-mcp": {
+    "llm_lsp_mcp": {              // config key — arbitrary, but using
+                                   // underscores keeps it aligned with the
+                                   // BEAM identifier and the repo directory;
+                                   // tools register as mcp__llm_lsp_mcp__*
       "command": "npx",
-      "args": ["-y", "llm-lsp-mcp"]
+      "args": ["-y", "llm-lsp-mcp"]   // npm package name MUST use hyphens
     }
   }
 }
@@ -76,7 +79,7 @@ Add this to your MCP host's config (e.g. `~/.claude.json`'s `mcpServers`):
 ```json
 {
   "mcpServers": {
-    "llm-lsp-mcp": {
+    "llm_lsp_mcp": {
       "command": "/absolute/path/to/llm_lsp_mcp/bin/llm-lsp-mcp-dev"
     }
   }
@@ -84,6 +87,8 @@ Add this to your MCP host's config (e.g. `~/.claude.json`'s `mcpServers`):
 ```
 
 Restart the host (or use its MCP reconnect command). Once registered, the LLM has tools named `mcp__llm_lsp_mcp__<tool>` available. The dev wrapper goes away at Milestone 6 when the Burrito-built binary becomes the canonical command.
+
+**Naming convention recap.** The config key (`llm_lsp_mcp`) is arbitrary but conventionally matches the BEAM identifier and repo directory. The binary's executable filename (`llm-lsp-mcp`) and npm package name (`llm-lsp-mcp`) use hyphens because their respective ecosystems require it (Unix CLI tradition; npm package-naming rule). Stay underscored on the BEAM side, hyphenated on the distribution-channel side.
 
 For binary builds (requires Zig 0.15.2 + xz, see [Burrito's setup notes](https://github.com/burrito-elixir/burrito#preparation-and-requirements)):
 
