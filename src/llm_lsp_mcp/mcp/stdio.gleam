@@ -1,14 +1,35 @@
-//// MCP stdio transport.
+//// MCP stdio transport — NDJSON framing.
 ////
-//// Reads NDJSON-framed JSON-RPC 2.0 messages from stdin and writes
-//// responses to stdout. Each message is one line of JSON terminated by
-//// `\n`. Partial reads are buffered until a newline arrives.
+//// Reads JSON-RPC 2.0 messages from stdin one line at a time and
+//// writes responses to stdout one line at a time. The MCP spec uses
+//// newline-delimited JSON over stdio, so each `\n` boundary is a
+//// complete message; no Content-Length parsing here (that lives in
+//// `lsp/framing` for the LSP side).
 ////
-//// Pairs with `mcp/server` for dispatch. Always-on in v0.1; coexists
-//// with `mcp/http` (both can run in the same binary).
-////
-//// Stub — framing + reader land in Milestone 1.
+//// stdin reading is done via the Erlang FFI helper
+//// `llm_lsp_mcp_stdin_ffi:read_line/0`, which wraps `io:get_line/1`
+//// and returns a tagged tuple matching `StdinResult`.
 
-/// Placeholder so Gleam does not flag this as an empty module.
-/// Removed in the milestone that implements this module.
-pub const placeholder: Nil = Nil
+import gleam/io
+import gleam/string
+
+pub type StdinResult {
+  StdinLine(line: String)
+  StdinEof
+  StdinError(reason: String)
+}
+
+@external(erlang, "llm_lsp_mcp_stdin_ffi", "read_line")
+pub fn read_line() -> StdinResult
+
+/// Strip the trailing newline (if any) from a line read from stdin.
+pub fn trim_trailing_newline(line: String) -> String {
+  line
+  |> string.trim_end
+}
+
+/// Write a JSON-RPC message to stdout with the trailing newline that
+/// NDJSON framing requires. The body should already be encoded JSON.
+pub fn write(body: String) -> Nil {
+  io.println(body)
+}

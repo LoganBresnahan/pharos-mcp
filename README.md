@@ -4,7 +4,11 @@ MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) 
 
 Distributed as a single self-contained binary via [Burrito](https://github.com/burrito-elixir/burrito), shipped through GitHub Releases and npm. Optionally augmented by a thin VSCode extension (separate repo) that exposes unsaved-buffer state.
 
-> **Status:** Pre-alpha. Documentation and ADRs are in place; code lands incrementally per the milestone plan in [doc/init.md](doc/init.md).
+> **Status:** Pre-alpha, Milestone 1.
+> Stdio transport works against any MCP client: `initialize` handshake,
+> `tools/list`, `tools/call` for a stub `echo` tool. Real LSP-backed tools
+> arrive in Milestones 3–4. See [doc/init.md](doc/init.md) for the milestone
+> plan.
 
 ## Quick install (planned, post-Milestone 6)
 
@@ -45,7 +49,21 @@ mix archive.install --force github LoganBresnahan/mix_gleam
 mix deps.get                             # fetches Hex dependencies (Gleam + Elixir)
 mix compile                              # compiles Gleam → BEAM via mix_gleam
 mix gleam.test                           # runs gleeunit tests
+mix start                                # runs the stdio MCP server (reads stdin, writes stdout)
 ```
+
+### Smoke-testing the stdio server
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hello"}}}' \
+  | mix start
+```
+
+Expected: three JSON-RPC responses on stdout (initialize → tools/list → tools/call echo), with `[info]` log lines on stderr. The notification line produces no response, by spec.
 
 For binary builds (requires Zig 0.15.2 + xz, see [Burrito's setup notes](https://github.com/burrito-elixir/burrito#preparation-and-requirements)):
 

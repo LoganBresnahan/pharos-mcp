@@ -60,7 +60,8 @@ defmodule LlmLspMcp.MixProject do
 
   defp aliases do
     [
-      "deps.get": ["deps.get", "gleam.deps.get"]
+      "deps.get": ["deps.get", "gleam.deps.get"],
+      start: ["run -e \":llm_lsp_mcp.main()\""]
     ]
   end
 end
