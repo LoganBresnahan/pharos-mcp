@@ -26,7 +26,7 @@ jobs:
           rebar3-version: "3.27.0"
 
       - name: Set up Gleam
-        uses: erlef/setup-gleam@v1
+        uses: gleam-lang/setup-gleam@v1
         with:
           gleam-version: "1.16.0"
 
