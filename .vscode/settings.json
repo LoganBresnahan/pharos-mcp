@@ -1,0 +1,12 @@
+{
+  "// elixirLS.dialyzerEnabled": "Disabled because the project is primarily Gleam (already type-checked at compile time) and the only Elixir is mix.exs build config. Dialyzer adds no signal here, and ElixirLS 0.30.0's incremental Dialyzer crashes on first-time per-dep PLT generation (transfer_plt/2 MatchError, no_such_file). Re-enable only if substantial Elixir code lands.",
+  "elixirLS.dialyzerEnabled": false,
+
+  "// elixirLS.suggestSpecs": "Spec suggestions are Dialyzer-driven; with Dialyzer off they have nothing to suggest from. Disable to silence the empty hints.",
+  "elixirLS.suggestSpecs": false,
+
+  "// files.associations": "Treat .gleam files as Gleam (the official Gleam VSCode extension already does this; the explicit mapping helps when the extension is not installed).",
+  "files.associations": {
+    "*.gleam": "gleam"
+  }
+}

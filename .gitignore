@@ -17,10 +17,14 @@ erl_crash.dump
 .elixir_ls/
 .elixir-tools/
 .lexical/
-.vscode/
 .idea/
 *.swp
 *.swo
+
+# VSCode — track project-level settings/extensions, ignore everything else
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # OS
 .DS_Store
