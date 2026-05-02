@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Manual LSP smoke test (Milestone 2 verification).
+#
+# Spawns rust-analyzer against the workspace passed as the first arg,
+# runs the initialize handshake, drains a few seconds of incoming
+# notifications, then shuts down. Output goes to stderr; the smoke
+# itself writes nothing to stdout.
+#
+# Usage:
+#     bin/lsp-smoke /path/to/cargo/project
+#
+# Requires rust-analyzer installed (defaults to /home/oof/.cargo/bin in
+# llm_lsp_mcp/smoke.gleam — adjust if your install differs).
+
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: $0 <workspace_path>" >&2
+  exit 2
+fi
+
+WORKSPACE="$1"
+
+if [ ! -d "$WORKSPACE" ]; then
+  echo "smoke: workspace does not exist: $WORKSPACE" >&2
+  exit 2
+fi
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
+
+if [ -d "$HOME/.asdf/shims" ]; then
+  export PATH="$HOME/.asdf/shims:$PATH"
+fi
+
+mix compile 1>&2
+
+exec erl \
+  -pa _build/dev/lib/*/ebin \
+  -noshell \
+  -eval "llm_lsp_mcp@smoke:run(<<\"$WORKSPACE\">>), halt(0)."
