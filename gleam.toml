@@ -1,0 +1,8 @@
+# Project metadata for the Gleam CLI. Build is driven by Mix via the
+# mix_gleam archive — dependency declarations live in mix.exs.
+
+name = "llm_lsp_mcp"
+version = "0.0.1"
+target = "erlang"
+description = "MCP server bridging LLMs to LSP servers."
+licences = ["MIT"]

@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: build & test
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Erlang, Elixir, and rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.0"
+          elixir-version: "1.19.5"
+          rebar3-version: "3.27.0"
+
+      - name: Set up Gleam
+        uses: erlef/setup-gleam@v1
+        with:
+          gleam-version: "1.16.0"
+
+      - name: Cache Mix and Gleam build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            build
+          key: ${{ runner.os }}-otp28-elixir1.19-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-otp28-elixir1.19-mix-
+
+      - name: Install mix_gleam archive
+        run: mix archive.install --force hex mix_gleam
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix gleam.test

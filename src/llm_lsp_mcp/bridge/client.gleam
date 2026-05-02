@@ -1,0 +1,11 @@
+//// HTTP client for the optional `llm_lsp_mcp_ext` VSCode extension.
+////
+//// On startup, probes `http://127.0.0.1:<port>/healthz` (port from
+//// `~/.config/llm-lsp-mcp/bridge-port` or `LLM_LSP_MCP_BRIDGE_PORT`).
+//// If the extension responds and bridge protocol versions match,
+//// bridge mode activates. Otherwise the binary runs disk-only.
+////
+//// All requests carry `X-Bridge-Protocol-Version: <ver>`. See
+//// `doc/bridge-protocol.md` for the endpoint spec.
+////
+//// Stub — probe + GET helpers land in Milestone 7.
