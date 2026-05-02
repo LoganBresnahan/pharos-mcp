@@ -37,6 +37,7 @@ defmodule LlmLspMcp.MixProject do
       {:gleam_json, "~> 3.1"},
       {:pollux, "~> 1.0"},
       {:gleeunit, "~> 1.10", only: [:dev, :test], runtime: false},
+      {:qcheck, "~> 1.0", only: [:dev, :test], runtime: false},
       {:burrito, "~> 1.5", runtime: false}
     ]
   end
