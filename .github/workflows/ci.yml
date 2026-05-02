@@ -18,17 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Erlang, Elixir, and rebar3
+      - name: Set up Erlang, Elixir, Gleam, and rebar3
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "28.0"
+          otp-version: "28.1"
           elixir-version: "1.19.5"
-          rebar3-version: "3.27.0"
-
-      - name: Set up Gleam
-        uses: gleam-lang/setup-gleam@v1
-        with:
           gleam-version: "1.16.0"
+          rebar3-version: "3.27.0"
 
       - name: Cache Mix and Gleam build
         uses: actions/cache@v4
