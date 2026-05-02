@@ -18,7 +18,7 @@ dirname(Path) ->
     list_to_binary(filename:dirname(binary_to_list(Path))).
 
 read_file(Path) ->
-    case file:read_file(Path) of
+    case file:read_file(binary_to_list(Path)) of
         {ok, Bytes} ->
             {ok, Bytes};
         {error, Reason} ->

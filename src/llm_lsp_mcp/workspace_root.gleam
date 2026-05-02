@@ -26,6 +26,9 @@ fn is_regular_file(path: String) -> Bool
 @external(erlang, "llm_lsp_mcp_fs_ffi", "dirname")
 fn dirname(path: String) -> String
 
+@external(erlang, "llm_lsp_mcp_fs_ffi", "read_file")
+pub fn read_file(path: String) -> Result(BitArray, String)
+
 /// Strip `file://` from a URI to get a local filesystem path. Does
 /// not validate the path exists.
 pub fn uri_to_path(uri: String) -> Result(String, DiscoveryError) {

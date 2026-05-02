@@ -14,6 +14,7 @@ import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import llm_lsp_mcp/mcp/content_block
+import llm_lsp_mcp/tools/tier1/diagnostics
 
 const protocol_version: String = "2024-11-05"
 
@@ -117,8 +118,71 @@ fn server_capabilities() -> Json {
 
 fn tools_list_response(id: Id) -> String {
   success_response(id, fn() {
-    json.object([#("tools", json.array([echo_tool_definition()], of: fn(t) { t }))])
+    json.object([
+      #(
+        "tools",
+        json.array(
+          [echo_tool_definition(), get_diagnostics_tool_definition()],
+          of: fn(t) { t },
+        ),
+      ),
+    ])
   })
+}
+
+fn get_diagnostics_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("get_diagnostics")),
+    #(
+      "description",
+      json.string(
+        "Return LSP diagnostics (errors and warnings) for a Rust source file. "
+          <> "Spawns rust-analyzer against the workspace containing the file "
+          <> "(by walking up to the nearest Cargo.toml), opens the file, and "
+          <> "returns the verbatim textDocument/publishDiagnostics body the "
+          <> "server emits. Cold start is ~5-15 seconds for the LSP to index "
+          <> "the project. Only Rust (.rs) files are supported in v0.1.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of the Rust source file to inspect. "
+                      <> "Example: file:///home/user/project/src/main.rs",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "timeout_ms",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Optional. How long to wait for diagnostics after the "
+                      <> "LSP initialize handshake. Defaults to 8000ms.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #("required", json.array(["uri"], of: json.string)),
+      ]),
+    ),
+  ])
 }
 
 fn echo_tool_definition() -> Json {
@@ -172,11 +236,84 @@ fn handle_tool_call(id: Id, params: Option(Dynamic)) -> String {
           )
       }
 
+    Ok(#("get_diagnostics", arguments)) -> handle_get_diagnostics(id, arguments)
+
     Ok(#(name, _)) ->
       error_response(Some(id), -32_602, "Unknown tool: " <> name)
 
     Error(reason) ->
       error_response(Some(id), -32_602, "Invalid tools/call params: " <> reason)
+  }
+}
+
+fn handle_get_diagnostics(id: Id, arguments: Option(Dynamic)) -> String {
+  case decode_get_diagnostics_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid params for get_diagnostics: " <> reason,
+      )
+
+    Ok(#(uri, timeout_ms)) ->
+      case diagnostics.handle(uri, timeout_ms) {
+        Ok(diagnostics.Diagnostics(uri: _, body_json: body)) ->
+          success_response(id, fn() { tool_text_result(body, False) })
+
+        Ok(diagnostics.NoDiagnosticsObserved(uri: u)) ->
+          success_response(
+            id,
+            fn() {
+              tool_text_result(
+                "No textDocument/publishDiagnostics notification was received "
+                  <> "for "
+                  <> u
+                  <> " within the timeout. The LSP may still be indexing, "
+                  <> "or the file may have no diagnostics.",
+                False,
+              )
+            },
+          )
+
+        Error(err) ->
+          success_response(
+            id,
+            fn() { tool_text_result(describe_diagnostics_error(err), True) },
+          )
+      }
+  }
+}
+
+fn decode_get_diagnostics_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      8000,
+      decode.int,
+    )
+    decode.success(#(uri, timeout_ms))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) { "expected `uri: string` (and optional `timeout_ms: int`)" })
+}
+
+fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
+  case err {
+    diagnostics.NotAFileUri(uri) -> "uri must start with file:// — got: " <> uri
+    diagnostics.WorkspaceNotFound(uri) ->
+      "no Cargo.toml found ascending from " <> uri
+    diagnostics.SpawnFailed(reason) ->
+      "rust-analyzer failed to spawn: " <> reason
+    diagnostics.HandshakeFailed(reason) ->
+      "LSP initialize handshake failed: " <> reason
+    diagnostics.TransportFailed(reason) ->
+      "LSP transport error: " <> reason
+    diagnostics.UnsupportedFileType(uri) ->
+      "v0.1 only supports .rs files; got: " <> uri
   }
 }
 
