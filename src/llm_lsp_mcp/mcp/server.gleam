@@ -16,6 +16,11 @@ import gleam/result
 import llm_lsp_mcp/lsp/pool.{type Pool}
 import llm_lsp_mcp/mcp/content_block
 import llm_lsp_mcp/tools/tier1/diagnostics
+import llm_lsp_mcp/tools/tier1/document_symbols
+import llm_lsp_mcp/tools/tier1/find_references
+import llm_lsp_mcp/tools/tier1/goto_definition
+import llm_lsp_mcp/tools/tier1/hover
+import llm_lsp_mcp/tools/tier1/workspace_symbols
 
 const protocol_version: String = "2024-11-05"
 
@@ -123,12 +128,260 @@ fn tools_list_response(id: Id) -> String {
       #(
         "tools",
         json.array(
-          [echo_tool_definition(), get_diagnostics_tool_definition()],
+          [
+            echo_tool_definition(),
+            get_diagnostics_tool_definition(),
+            hover_tool_definition(),
+            goto_definition_tool_definition(),
+            find_references_tool_definition(),
+            document_symbols_tool_definition(),
+            workspace_symbols_tool_definition(),
+          ],
           of: fn(t) { t },
         ),
       ),
     ])
   })
+}
+
+fn position_arg_schema() -> Json {
+  json.object([
+    #(
+      "properties",
+      json.object([
+        #(
+          "uri",
+          json.object([
+            #("type", json.string("string")),
+            #(
+              "description",
+              json.string(
+                "file:// URI of the Rust source file. Example: "
+                  <> "file:///home/user/project/src/main.rs",
+              ),
+            ),
+          ]),
+        ),
+        #(
+          "line",
+          json.object([
+            #("type", json.string("integer")),
+            #(
+              "description",
+              json.string(
+                "Zero-based line number, per LSP spec. Editor "
+                  <> "convention shows it as 1-based; subtract 1 for "
+                  <> "this field.",
+              ),
+            ),
+          ]),
+        ),
+        #(
+          "character",
+          json.object([
+            #("type", json.string("integer")),
+            #(
+              "description",
+              json.string(
+                "Zero-based UTF-16 code-unit offset within the line, "
+                  <> "per LSP spec.",
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+    #(
+      "required",
+      json.array(["uri", "line", "character"], of: json.string),
+    ),
+    #("type", json.string("object")),
+  ])
+}
+
+fn hover_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("hover")),
+    #(
+      "description",
+      json.string(
+        "Get the type signature, documentation, and other "
+          <> "language-server hover info for the symbol at a position "
+          <> "in a Rust source file. Wraps LSP `textDocument/hover`. "
+          <> "Returns the verbatim LSP `Hover` result as JSON: "
+          <> "`{contents: ..., range?: ...}`. `contents` may be "
+          <> "MarkupContent, plain string, or a list of MarkedString — "
+          <> "the LLM reads whichever shape rust-analyzer sends.",
+      ),
+    ),
+    #("inputSchema", position_arg_schema()),
+  ])
+}
+
+fn goto_definition_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("goto_definition")),
+    #(
+      "description",
+      json.string(
+        "Find where the symbol at a position is defined. Wraps "
+          <> "LSP `textDocument/definition`. Returns the verbatim LSP "
+          <> "result: a single Location, a list of Location, a list of "
+          <> "LocationLink (3.14+), or null if no definition. Each "
+          <> "Location has `uri` plus `range` (zero-based positions).",
+      ),
+    ),
+    #("inputSchema", position_arg_schema()),
+  ])
+}
+
+fn find_references_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("find_references")),
+    #(
+      "description",
+      json.string(
+        "Find all usages of the symbol at a position across the "
+          <> "workspace. Wraps LSP `textDocument/references`. Returns "
+          <> "the verbatim list of LSP Locations (zero-based "
+          <> "positions). Set `include_declaration` (default true) to "
+          <> "include or exclude the symbol's definition site from the "
+          <> "result.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([#("type", json.string("string"))]),
+            ),
+            #(
+              "line",
+              json.object([#("type", json.string("integer"))]),
+            ),
+            #(
+              "character",
+              json.object([#("type", json.string("integer"))]),
+            ),
+            #(
+              "include_declaration",
+              json.object([
+                #("type", json.string("boolean")),
+                #(
+                  "description",
+                  json.string(
+                    "Whether to include the definition site in the "
+                      <> "results. Defaults to true.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.array(["uri", "line", "character"], of: json.string),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn document_symbols_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("document_symbols")),
+    #(
+      "description",
+      json.string(
+        "Return the outline of a Rust source file — functions, "
+          <> "types, modules, etc. — with their positions. Wraps LSP "
+          <> "`textDocument/documentSymbol`. Returns the verbatim LSP "
+          <> "result: either a hierarchical `DocumentSymbol[]` (each "
+          <> "with `children`) or a flat deprecated "
+          <> "`SymbolInformation[]`, depending on what rust-analyzer "
+          <> "emits.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([#("type", json.string("string"))]),
+            ),
+          ]),
+        ),
+        #("required", json.array(["uri"], of: json.string)),
+      ]),
+    ),
+  ])
+}
+
+fn workspace_symbols_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("workspace_symbols")),
+    #(
+      "description",
+      json.string(
+        "Search across the workspace for symbols whose name "
+          <> "matches a query. Wraps LSP `workspace/symbol`. Returns "
+          <> "the verbatim list of `SymbolInformation` or "
+          <> "`WorkspaceSymbol` (LSP 3.17+). Caller must pass any "
+          <> "file:// URI inside the workspace as `workspace_uri_hint` "
+          <> "so the bridge knows which LSP to query.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "workspace_uri_hint",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of any file inside the workspace, or "
+                      <> "the workspace root itself.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "query",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "Substring to match against symbol names. Empty "
+                      <> "string returns all symbols (potentially many).",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.array(["workspace_uri_hint", "query"], of: json.string),
+        ),
+      ]),
+    ),
+  ])
 }
 
 fn get_diagnostics_tool_definition() -> Json {
@@ -240,6 +493,20 @@ fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
     Ok(#("get_diagnostics", arguments)) ->
       handle_get_diagnostics(pool, id, arguments)
 
+    Ok(#("hover", arguments)) -> handle_hover(pool, id, arguments)
+
+    Ok(#("goto_definition", arguments)) ->
+      handle_goto_definition(pool, id, arguments)
+
+    Ok(#("find_references", arguments)) ->
+      handle_find_references(pool, id, arguments)
+
+    Ok(#("document_symbols", arguments)) ->
+      handle_document_symbols(pool, id, arguments)
+
+    Ok(#("workspace_symbols", arguments)) ->
+      handle_workspace_symbols(pool, id, arguments)
+
     Ok(#(name, _)) ->
       error_response(Some(id), -32_602, "Unknown tool: " <> name)
 
@@ -305,6 +572,187 @@ fn decode_get_diagnostics_arguments(
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) { "expected `uri: string` (and optional `timeout_ms: int`)" })
+}
+
+// -- Tier-1 LSP-backed tool handlers ------------------------------------
+
+fn handle_hover(pool: Pool, id: Id, arguments: Option(Dynamic)) -> String {
+  case decode_position_arguments(arguments) {
+    Error(reason) ->
+      error_response(Some(id), -32_602, "Invalid hover params: " <> reason)
+    Ok(#(uri, line, character)) ->
+      case hover.handle(pool, uri, line, character) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(hover.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(hover.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_goto_definition(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_position_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid goto_definition params: " <> reason,
+      )
+    Ok(#(uri, line, character)) ->
+      case goto_definition.handle(pool, uri, line, character) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(goto_definition.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(goto_definition.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_find_references(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_find_references_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid find_references params: " <> reason,
+      )
+    Ok(#(uri, line, character, include_decl)) ->
+      case find_references.handle(pool, uri, line, character, include_decl) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(find_references.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(find_references.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_document_symbols(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_uri_only_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid document_symbols params: " <> reason,
+      )
+    Ok(uri) ->
+      case document_symbols.handle(pool, uri) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(document_symbols.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(document_symbols.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_workspace_symbols(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_workspace_symbols_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid workspace_symbols params: " <> reason,
+      )
+    Ok(#(workspace_uri_hint, query)) ->
+      case workspace_symbols.handle(pool, workspace_uri_hint, query) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(workspace_symbols.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(workspace_symbols.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+// -- Argument decoders --------------------------------------------------
+
+fn decode_position_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int, Int), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use line <- decode.field("line", decode.int)
+    use character <- decode.field("character", decode.int)
+    decode.success(#(uri, line, character))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, `line: int`, `character: int`"
+  })
+}
+
+fn decode_find_references_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int, Int, Bool), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use line <- decode.field("line", decode.int)
+    use character <- decode.field("character", decode.int)
+    use include_decl <- decode.optional_field(
+      "include_declaration",
+      True,
+      decode.bool,
+    )
+    decode.success(#(uri, line, character, include_decl))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, `line: int`, `character: int`, "
+    <> "optional `include_declaration: bool`"
+  })
+}
+
+fn decode_uri_only_arguments(
+  args: Option(Dynamic),
+) -> Result(String, String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    decode.success(uri)
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) { "expected `uri: string`" })
+}
+
+fn decode_workspace_symbols_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, String), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use hint <- decode.field("workspace_uri_hint", decode.string)
+    use query <- decode.field("query", decode.string)
+    decode.success(#(hint, query))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `workspace_uri_hint: string`, `query: string`"
+  })
 }
 
 fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
