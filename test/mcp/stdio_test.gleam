@@ -6,10 +6,21 @@
 
 import gleam/string
 import gleeunit/should
+import llm_lsp_mcp/lsp/pool.{type Pool}
 import llm_lsp_mcp/mcp/server
 
 fn contains(haystack: String, needle: String) -> Nil {
   string.contains(haystack, needle) |> should.be_true
+}
+
+/// Spawn a Pool actor for tests. Each test gets its own; the actor
+/// exits cleanly when the test process dies. Pool's get/3 is only
+/// invoked by get_diagnostics dispatch — tests of other dispatch
+/// paths never query the pool, so the cache stays empty and no LSPs
+/// are spawned.
+fn fresh_pool() -> Pool {
+  let assert Ok(p) = pool.start()
+  p
 }
 
 // -- initialize ----------------------------------------------------------
@@ -20,7 +31,7 @@ pub fn initialize_returns_reply_with_matching_id_test() {
     <> "\"params\":{\"protocolVersion\":\"2024-11-05\","
     <> "\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"0\"}}}"
 
-  case server.handle_line(line) {
+  case server.handle_line(fresh_pool(), line) {
     server.Reply(json) -> {
       contains(json, "\"id\":1")
       contains(json, "\"protocolVersion\":\"2024-11-05\"")
@@ -34,7 +45,7 @@ pub fn initialize_with_string_id_echoes_id_test() {
   let line =
     "{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"method\":\"initialize\",\"params\":{}}"
 
-  case server.handle_line(line) {
+  case server.handle_line(fresh_pool(), line) {
     server.Reply(json) -> contains(json, "\"id\":\"abc\"")
     _ -> should.fail()
   }
@@ -43,14 +54,18 @@ pub fn initialize_with_string_id_echoes_id_test() {
 // -- notifications produce no reply --------------------------------------
 
 pub fn initialized_notification_has_no_reply_test() {
-  server.handle_line("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\"}")
+  server.handle_line(
+    fresh_pool(),
+    "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\"}",
+  )
   |> should.equal(server.NoReply)
 }
 
 pub fn cancelled_notification_has_no_reply_test() {
   server.handle_line(
+    fresh_pool(),
     "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\","
-    <> "\"params\":{\"requestId\":1}}",
+      <> "\"params\":{\"requestId\":1}}",
   )
   |> should.equal(server.NoReply)
 }
@@ -60,6 +75,7 @@ pub fn cancelled_notification_has_no_reply_test() {
 pub fn tools_list_includes_echo_tool_test() {
   case
     server.handle_line(
+      fresh_pool(),
       "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}",
     )
   {
@@ -78,7 +94,7 @@ pub fn tools_call_echo_returns_message_as_content_test() {
     "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\","
     <> "\"params\":{\"name\":\"echo\",\"arguments\":{\"message\":\"hi\"}}}"
 
-  case server.handle_line(line) {
+  case server.handle_line(fresh_pool(), line) {
     server.Reply(json) -> {
       contains(json, "\"text\":\"hi\"")
       contains(json, "\"isError\":false")
@@ -92,7 +108,7 @@ pub fn tools_call_unknown_tool_returns_invalid_params_test() {
     "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\","
     <> "\"params\":{\"name\":\"nope\",\"arguments\":{}}}"
 
-  case server.handle_line(line) {
+  case server.handle_line(fresh_pool(), line) {
     server.Reply(json) -> {
       contains(json, "\"code\":-32602")
       contains(json, "Unknown tool: nope")
@@ -106,7 +122,7 @@ pub fn tools_call_echo_missing_message_argument_test() {
     "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\","
     <> "\"params\":{\"name\":\"echo\",\"arguments\":{}}}"
 
-  case server.handle_line(line) {
+  case server.handle_line(fresh_pool(), line) {
     server.Reply(json) -> contains(json, "\"code\":-32602")
     _ -> should.fail()
   }
@@ -115,7 +131,7 @@ pub fn tools_call_echo_missing_message_argument_test() {
 // -- error responses -----------------------------------------------------
 
 pub fn parse_error_returns_negative_32700_test() {
-  case server.handle_line("not valid json") {
+  case server.handle_line(fresh_pool(), "not valid json") {
     server.ProtocolError(json) -> {
       contains(json, "\"code\":-32700")
       contains(json, "Parse error")
@@ -127,7 +143,7 @@ pub fn parse_error_returns_negative_32700_test() {
 pub fn unknown_method_returns_negative_32601_test() {
   let line = "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"some/missing\"}"
 
-  case server.handle_line(line) {
+  case server.handle_line(fresh_pool(), line) {
     server.Reply(json) -> {
       contains(json, "\"code\":-32601")
       contains(json, "Method not found")

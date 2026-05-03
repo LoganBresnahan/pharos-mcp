@@ -22,7 +22,7 @@ import gleam/result
 import gleam/string
 import llm_lsp_mcp/lsp/client
 import llm_lsp_mcp/lsp/lifecycle
-import llm_lsp_mcp/lsp/port
+import llm_lsp_mcp/lsp/pool.{type Pool}
 import llm_lsp_mcp/workspace_root
 
 // Absolute path. The MCP host spawns the wrapper with a minimal PATH
@@ -30,8 +30,6 @@ import llm_lsp_mcp/workspace_root
 // resolves to enoent. M4 will replace this with the language registry
 // + PATH-resolution helper.
 const rust_analyzer_command: String = "/home/oof/.cargo/bin/rust-analyzer"
-
-const initialize_timeout_ms: Int = 30_000
 
 const default_drain_window_ms: Int = 8000
 
@@ -66,10 +64,13 @@ pub type DiagnosticsResult {
   NoDiagnosticsObserved(uri: String)
 }
 
-/// Run get_diagnostics for one URI. Caller controls how long to drain
-/// for; default is 8 seconds (enough for rust-analyzer to index a
-/// small project from a cold start).
+/// Run get_diagnostics for one URI via the kept-warm LSP pool. The
+/// pool returns a Client (cached or freshly spawned + initialized).
+/// On cache hit subsequent calls pay only the per-call drain cost
+/// (~hundreds of ms once indexed), not the rust-analyzer cold-start
+/// tax.
 pub fn handle(
+  pool: Pool,
   file_uri: String,
   drain_window_ms: Int,
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
@@ -85,26 +86,27 @@ pub fn handle(
     }),
   )
 
+  let spec =
+    pool.SpawnSpec(
+      command: rust_analyzer_command,
+      args: [],
+      init_params: build_initialize_params(workspace),
+    )
+
   use lsp <- result.try(
-    client.start(rust_analyzer_command, [], workspace)
-    |> result.map_error(describe_client_error_as_spawn),
+    pool.get(pool, "rust", workspace, spec)
+    |> result.map_error(describe_pool_error),
   )
 
-  let init_params = build_initialize_params(workspace)
+  let _ = send_did_open(lsp, file_uri)
+  drain(lsp, file_uri, drain_window_ms, None)
+}
 
-  case lifecycle.initialize(lsp, 0, init_params, initialize_timeout_ms) {
-    Error(err) -> {
-      client.close(lsp)
-      Error(HandshakeFailed(describe_initialize_error(err)))
-    }
-
-    Ok(#(lsp, _capabilities)) -> {
-      let _ = send_did_open(lsp, file_uri)
-      let outcome = drain(lsp, file_uri, drain_window_ms, None)
-      client.close(lsp)
-      outcome
-    }
-  }
+pub fn handle_with_default_timeout(
+  pool: Pool,
+  file_uri: String,
+) -> Result(DiagnosticsResult, DiagnosticsError) {
+  handle(pool, file_uri, default_drain_window_ms)
 }
 
 /// Tell the LSP we have the file "open". Some servers (rust-analyzer
@@ -151,12 +153,6 @@ fn send_did_open(lsp: client.Client, file_uri: String) -> Nil {
           }
       }
   }
-}
-
-pub fn handle_with_default_timeout(
-  file_uri: String,
-) -> Result(DiagnosticsResult, DiagnosticsError) {
-  handle(file_uri, default_drain_window_ms)
 }
 
 // -- LSP loop -------------------------------------------------------------
@@ -263,10 +259,10 @@ fn check_supported_extension(uri: String) -> Result(Nil, DiagnosticsError) {
 
 // -- Error description helpers -------------------------------------------
 
-fn describe_client_error_as_spawn(err: client.Error) -> DiagnosticsError {
+fn describe_pool_error(err: pool.GetError) -> DiagnosticsError {
   case err {
-    client.SpawnError(port.SpawnFailed(reason)) -> SpawnFailed(reason)
-    other -> SpawnFailed(describe_client_error(other))
+    pool.StartFailed(c) -> SpawnFailed(describe_client_error(c))
+    pool.HandshakeFailed(h) -> HandshakeFailed(describe_initialize_error(h))
   }
 }
 

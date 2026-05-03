@@ -11,6 +11,8 @@
 //// the actor abstraction in a later milestone when multiple in-flight
 //// requests need to multiplex.
 
+import gleam/erlang/process.{type Pid}
+
 /// An opaque handle to a running subprocess. Internally an Erlang
 /// `port()`; treated as opaque so Gleam can keep type discipline at
 /// the boundary.
@@ -60,3 +62,13 @@ pub fn receive_data(
 /// Close the port. Idempotent; closing a closed port is a no-op.
 @external(erlang, "llm_lsp_mcp_lsp_port_ffi", "close")
 pub fn close(port: Port) -> Nil
+
+/// Transfer Port ownership to a different process. Subsequent
+/// `{Port, {data, _}}` and `{Port, {exit_status, _}}` messages flow
+/// to that process's mailbox instead of the previous owner's.
+///
+/// MUST be called by the current owner (BEAM enforces this). Used by
+/// the LSP pool to hand a freshly initialized Client over to the
+/// tool process that will consume its messages.
+@external(erlang, "llm_lsp_mcp_lsp_port_ffi", "connect")
+pub fn connect(port: Port, new_owner: Pid) -> Result(Nil, Nil)

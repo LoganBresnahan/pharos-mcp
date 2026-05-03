@@ -9,7 +9,7 @@
 %% them as the variants declared in `lsp/port.gleam`.
 
 -module(llm_lsp_mcp_lsp_port_ffi).
--export([spawn/3, send/2, receive_data/2, close/1]).
+-export([spawn/3, send/2, receive_data/2, close/1, connect/2]).
 
 %% Spawn a subprocess. `Command` is the absolute path or PATH-resolved
 %% binary name; `Args` is a list of binary arguments; `Cwd` is the
@@ -77,4 +77,26 @@ close(Port) ->
         nil
     catch
         _:_ -> nil
+    end.
+
+%% Transfer Port ownership to a different Pid. Erlang delivers Port
+%% messages ({Port, {data, _}} and {Port, {exit_status, _}}) to the
+%% process recorded as the Port's owner. The pool actor spawns the
+%% LSP (so it is initial owner) and runs the initialize handshake;
+%% before returning the Client to a tool, the pool calls connect/2
+%% to hand ownership over to the tool's process so subsequent
+%% receive_data/2 calls drain the tool's own mailbox, not the pool's.
+%%
+%% port_connect/2 must be called by the current owner — that is why
+%% this lives on the pool's path, not the consumer's.
+connect(Port, Pid) ->
+    try
+        true = erlang:port_connect(Port, Pid),
+        %% After connect, the original owner stops receiving messages
+        %% but is still linked. Unlink so the pool process is not
+        %% killed if the LSP exits.
+        true = unlink(Port),
+        {ok, nil}
+    catch
+        _:_ -> {error, nil}
     end.

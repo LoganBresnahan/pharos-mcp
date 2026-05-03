@@ -10,23 +10,35 @@
 //// when LSP clients are added (each LSP requires crash-recovery).
 
 import llm_lsp_mcp/log
+import llm_lsp_mcp/lsp/pool.{type Pool}
 import llm_lsp_mcp/mcp/server
 import llm_lsp_mcp/mcp/stdio
 
 pub fn main() -> Nil {
-  log.info("llm_lsp_mcp starting (stdio transport, Milestone 1)")
-  loop()
+  log.info("llm_lsp_mcp starting (stdio transport)")
+  case pool.start() {
+    Error(_) -> {
+      log.error("failed to start LSP pool; exiting")
+      Nil
+    }
+    Ok(p) -> {
+      log.info("LSP pool started")
+      loop(p)
+    }
+  }
 }
 
-fn loop() -> Nil {
+fn loop(pool: Pool) -> Nil {
   case stdio.read_line() {
     stdio.StdinEof -> {
-      log.info("stdin closed; exiting")
+      log.info("stdin closed; shutting down LSP pool")
+      pool.close_all(pool)
       Nil
     }
 
     stdio.StdinError(reason) -> {
       log.error("stdin read error: " <> reason)
+      pool.close_all(pool)
       Nil
     }
 
@@ -35,13 +47,13 @@ fn loop() -> Nil {
       case trimmed {
         "" -> Nil
         body ->
-          case server.handle_line(body) {
+          case server.handle_line(pool, body) {
             server.Reply(json) -> stdio.write(json)
             server.NoReply -> Nil
             server.ProtocolError(json) -> stdio.write(json)
           }
       }
-      loop()
+      loop(pool)
     }
   }
 }

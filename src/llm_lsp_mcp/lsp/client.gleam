@@ -16,6 +16,7 @@
 //// frames is consumed one frame per call.
 
 import gleam/bit_array
+import gleam/erlang/process.{type Pid}
 import llm_lsp_mcp/lsp/framing
 import llm_lsp_mcp/lsp/port
 
@@ -107,4 +108,18 @@ fn read_until_message(
 /// Tear down the subprocess. Idempotent.
 pub fn close(client: Client) -> Nil {
   port.close(client.port)
+}
+
+/// Transfer the underlying Port's ownership to `new_owner`. After
+/// this call, the new owner receives all `{Port, {data, _}}` and
+/// `{Port, {exit_status, _}}` messages — `next_message/2` invoked by
+/// the new owner will succeed; invoked by anyone else, it will hang
+/// until timeout.
+///
+/// Must be called by the current owner (the process that called
+/// `start/3` or the previous owner of a transferred Port). Used by
+/// the LSP pool to hand a Client over to the tool process that will
+/// consume from it.
+pub fn connect(client: Client, new_owner: Pid) -> Result(Nil, Nil) {
+  port.connect(client.port, new_owner)
 }

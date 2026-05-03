@@ -13,6 +13,7 @@ import gleam/dynamic/decode
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import llm_lsp_mcp/lsp/pool.{type Pool}
 import llm_lsp_mcp/mcp/content_block
 import llm_lsp_mcp/tools/tier1/diagnostics
 
@@ -39,9 +40,9 @@ pub type DispatchResult {
 }
 
 /// Top-level entry: parse one inbound line and dispatch.
-pub fn handle_line(line: String) -> DispatchResult {
+pub fn handle_line(pool: Pool, line: String) -> DispatchResult {
   case json.parse(line, message_decoder()) {
-    Ok(message) -> dispatch(message)
+    Ok(message) -> dispatch(pool, message)
     Error(_) -> ProtocolError(error_response(None, -32_700, "Parse error"))
   }
 }
@@ -71,12 +72,12 @@ fn id_decoder() -> decode.Decoder(Id) {
 
 // -- Dispatch ------------------------------------------------------------
 
-fn dispatch(message: Message) -> DispatchResult {
+fn dispatch(pool: Pool, message: Message) -> DispatchResult {
   case message {
     RequestMessage(id, "initialize", _params) -> Reply(initialize_response(id))
     RequestMessage(id, "tools/list", _params) -> Reply(tools_list_response(id))
     RequestMessage(id, "tools/call", params) ->
-      Reply(handle_tool_call(id, params))
+      Reply(handle_tool_call(pool, id, params))
     RequestMessage(id, method, _) ->
       Reply(error_response(
         Some(id),
@@ -222,7 +223,7 @@ fn echo_tool_definition() -> Json {
 
 // -- tools/call ----------------------------------------------------------
 
-fn handle_tool_call(id: Id, params: Option(Dynamic)) -> String {
+fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
   case decode_tool_call(params) {
     Ok(#("echo", arguments)) ->
       case decode_echo_arguments(arguments) {
@@ -236,7 +237,8 @@ fn handle_tool_call(id: Id, params: Option(Dynamic)) -> String {
           )
       }
 
-    Ok(#("get_diagnostics", arguments)) -> handle_get_diagnostics(id, arguments)
+    Ok(#("get_diagnostics", arguments)) ->
+      handle_get_diagnostics(pool, id, arguments)
 
     Ok(#(name, _)) ->
       error_response(Some(id), -32_602, "Unknown tool: " <> name)
@@ -246,7 +248,11 @@ fn handle_tool_call(id: Id, params: Option(Dynamic)) -> String {
   }
 }
 
-fn handle_get_diagnostics(id: Id, arguments: Option(Dynamic)) -> String {
+fn handle_get_diagnostics(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
   case decode_get_diagnostics_arguments(arguments) {
     Error(reason) ->
       error_response(
@@ -256,7 +262,7 @@ fn handle_get_diagnostics(id: Id, arguments: Option(Dynamic)) -> String {
       )
 
     Ok(#(uri, timeout_ms)) ->
-      case diagnostics.handle(uri, timeout_ms) {
+      case diagnostics.handle(pool, uri, timeout_ms) {
         Ok(diagnostics.Diagnostics(uri: _, body_json: body)) ->
           success_response(id, fn() { tool_text_result(body, False) })
 
