@@ -156,7 +156,7 @@ fn position_arg_schema() -> Json {
             #(
               "description",
               json.string(
-                "file:// URI of the Rust source file. Example: "
+                "file:// URI of the source file. Example: "
                   <> "file:///home/user/project/src/main.rs",
               ),
             ),
@@ -207,11 +207,11 @@ fn hover_tool_definition() -> Json {
       json.string(
         "Get the type signature, documentation, and other "
           <> "language-server hover info for the symbol at a position "
-          <> "in a Rust source file. Wraps LSP `textDocument/hover`. "
+          <> "in a source file. Wraps LSP `textDocument/hover`. "
           <> "Returns the verbatim LSP `Hover` result as JSON: "
           <> "`{contents: ..., range?: ...}`. `contents` may be "
           <> "MarkupContent, plain string, or a list of MarkedString — "
-          <> "the LLM reads whichever shape rust-analyzer sends.",
+          <> "the LLM reads whichever shape the server sends.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -298,7 +298,7 @@ fn document_symbols_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Return the outline of a Rust source file — functions, "
+        "Return the outline of a source file — functions, "
           <> "types, modules, etc. — with their positions. Wraps LSP "
           <> "`textDocument/documentSymbol`. Returns the verbatim LSP "
           <> "result: either a hierarchical `DocumentSymbol[]` (each "
@@ -390,12 +390,16 @@ fn get_diagnostics_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Return LSP diagnostics (errors and warnings) for a Rust source file. "
-          <> "Spawns rust-analyzer against the workspace containing the file "
-          <> "(by walking up to the nearest Cargo.toml), opens the file, and "
-          <> "returns the verbatim textDocument/publishDiagnostics body the "
-          <> "server emits. Cold start is ~5-15 seconds for the LSP to index "
-          <> "the project. Only Rust (.rs) files are supported in v0.1.",
+        "Return LSP diagnostics (errors and warnings) for a source file. "
+          <> "Picks the language by file extension and spawns the matching "
+          <> "LSP (rust-analyzer for .rs, gopls for .go, "
+          <> "typescript-language-server for .ts/.tsx/.js/.jsx, pyright for "
+          <> ".py). Returns the verbatim textDocument/publishDiagnostics body "
+          <> "the server emits. Cold start is ~5-15 seconds for the LSP to "
+          <> "index the project. Some servers (notably "
+          <> "typescript-language-server) emit diagnostics via pull-mode only "
+          <> "and may return NoDiagnosticsObserved here; pull-mode support "
+          <> "lands in a later milestone.",
       ),
     ),
     #(
@@ -412,7 +416,7 @@ fn get_diagnostics_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "file:// URI of the Rust source file to inspect. "
+                    "file:// URI of the source file to inspect. "
                       <> "Example: file:///home/user/project/src/main.rs",
                   ),
                 ),
@@ -759,7 +763,7 @@ fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
   case err {
     diagnostics.NotAFileUri(uri) -> "uri must start with file:// — got: " <> uri
     diagnostics.WorkspaceNotFound(uri) ->
-      "no Cargo.toml found ascending from " <> uri
+      "no workspace root marker found ascending from " <> uri
     diagnostics.SpawnFailed(reason) ->
       "rust-analyzer failed to spawn: " <> reason
     diagnostics.HandshakeFailed(reason) ->
