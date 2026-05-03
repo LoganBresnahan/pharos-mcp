@@ -35,13 +35,16 @@ pub type SessionError {
 }
 
 /// Prepare a Client for tools that operate on a single file. Runs
-/// the per-call boilerplate then sends `didOpen` so subsequent
-/// per-file LSP requests have context.
+/// the per-call boilerplate and asks the pool to send `didOpen` if
+/// it has not already done so this session for this (language,
+/// workspace, uri) triple. The pool's didOpen-once tracking avoids
+/// rust-analyzer's "content modified" cancellation that fires when
+/// duplicate didOpens land mid-request.
 pub fn prepare(pool: Pool, file_uri: String) -> Result(Client, SessionError) {
   use Nil <- result.try(check_extension(file_uri))
   use workspace <- result.try(discover_workspace(file_uri))
   use lsp <- result.try(get_lsp(pool, workspace))
-  let _ = send_did_open(lsp, file_uri)
+  let _ = ensure_doc_opened(pool, workspace, file_uri)
   Ok(lsp)
 }
 
@@ -109,7 +112,16 @@ fn build_initialize_params(workspace_path: String) -> json.Json {
   ])
 }
 
-fn send_did_open(lsp: Client, file_uri: String) -> Nil {
+/// Read file content from disk and ask the pool to send didOpen if
+/// it has not already done so for this triple. Best-effort —
+/// failures (file gone, content not utf-8, pool busy) are swallowed
+/// since the subsequent LSP request will surface a real error if
+/// the document state is genuinely missing.
+fn ensure_doc_opened(
+  pool: Pool,
+  workspace: String,
+  file_uri: String,
+) -> Nil {
   case workspace_root.uri_to_path(file_uri) {
     Error(_) -> Nil
     Ok(path) ->
@@ -119,29 +131,8 @@ fn send_did_open(lsp: Client, file_uri: String) -> Nil {
           case bit_array.to_string(content_bytes) {
             Error(_) -> Nil
             Ok(text) -> {
-              let body =
-                json.object([
-                  #("jsonrpc", json.string("2.0")),
-                  #("method", json.string("textDocument/didOpen")),
-                  #(
-                    "params",
-                    json.object([
-                      #(
-                        "textDocument",
-                        json.object([
-                          #("uri", json.string(file_uri)),
-                          #("languageId", json.string("rust")),
-                          #("version", json.int(1)),
-                          #("text", json.string(text)),
-                        ]),
-                      ),
-                    ]),
-                  ),
-                ])
-                |> json.to_string
-                |> bit_array.from_string
-
-              let _ = client.send_body(lsp, body)
+              let _ =
+                pool.ensure_open(pool, "rust", workspace, file_uri, "rust", text)
               Nil
             }
           }
