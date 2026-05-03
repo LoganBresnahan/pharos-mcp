@@ -24,11 +24,17 @@ import gleam/option.{None, Some}
 import gleam/result
 import llm_lsp_mcp/lsp/client.{type Client}
 
-pub type InitializeError {
+pub type RequestError {
   ClientFailure(client.Error)
   ResponseDecodeError(reason: String)
   ServerError(code: Int, message: String)
 }
+
+/// Backwards-compat alias — initialize was the first user of the
+/// request/response correlation logic and named its error type
+/// after itself. Keep the name available so older callers compile.
+pub type InitializeError =
+  RequestError
 
 /// Run the initialize → initialized handshake against an LSP that has
 /// just been spawned by `client.start`. Returns the same client (with
@@ -49,7 +55,7 @@ pub fn initialize(
   request_id: Int,
   init_params: Json,
   timeout_ms: Int,
-) -> Result(#(Client, Dynamic), InitializeError) {
+) -> Result(#(Client, Dynamic), RequestError) {
   use Nil <- result.try(send_initialize_request(
     client,
     request_id,
@@ -67,16 +73,48 @@ pub fn initialize(
   Ok(#(client, result_value))
 }
 
+/// Generic JSON-RPC request: send method + params with the given id,
+/// drain notifications and out-of-order responses, return the result
+/// when a response with the matching id arrives. Caller is
+/// responsible for picking unique request ids (a simple monotonic
+/// counter is sufficient since the kept-warm pool is single-process
+/// per workspace).
+pub fn request(
+  client: Client,
+  method: String,
+  params: Json,
+  request_id: Int,
+  timeout_ms: Int,
+) -> Result(#(Client, Dynamic), RequestError) {
+  use Nil <- result.try(send_method_request(
+    client,
+    method,
+    params,
+    request_id,
+  ))
+
+  wait_for_response(client, request_id, timeout_ms)
+}
+
 fn send_initialize_request(
   client: Client,
   id: Int,
   params: Json,
-) -> Result(Nil, InitializeError) {
+) -> Result(Nil, RequestError) {
+  send_method_request(client, "initialize", params, id)
+}
+
+fn send_method_request(
+  client: Client,
+  method: String,
+  params: Json,
+  id: Int,
+) -> Result(Nil, RequestError) {
   let body =
     json.object([
       #("jsonrpc", json.string("2.0")),
       #("id", json.int(id)),
-      #("method", json.string("initialize")),
+      #("method", json.string(method)),
       #("params", params),
     ])
     |> json.to_string
@@ -88,7 +126,7 @@ fn send_initialize_request(
 
 fn send_initialized_notification(
   client: Client,
-) -> Result(Nil, InitializeError) {
+) -> Result(Nil, RequestError) {
   let body =
     json.object([
       #("jsonrpc", json.string("2.0")),
@@ -106,7 +144,7 @@ fn wait_for_response(
   client: Client,
   expected_id: Int,
   timeout_ms: Int,
-) -> Result(#(Client, Dynamic), InitializeError) {
+) -> Result(#(Client, Dynamic), RequestError) {
   use #(body, client) <- result.try(
     client.next_message(client, timeout_ms)
     |> result.map_error(ClientFailure),
