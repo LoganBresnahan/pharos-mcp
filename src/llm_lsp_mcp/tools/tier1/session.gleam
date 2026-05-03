@@ -60,6 +60,14 @@ pub fn prepare_workspace(
   get_lsp(pool, config, workspace)
 }
 
+/// Public form of the internal config lookup. Tools that need to
+/// branch on per-language behavior (e.g. push vs pull diagnostics)
+/// call this with the file URI; everything else stays inside
+/// `prepare/2`.
+pub fn config_for_uri(uri: String) -> Result(LanguageConfig, SessionError) {
+  lookup_config(uri)
+}
+
 // -- Internals ----------------------------------------------------------
 
 fn lookup_config(uri: String) -> Result(LanguageConfig, SessionError) {

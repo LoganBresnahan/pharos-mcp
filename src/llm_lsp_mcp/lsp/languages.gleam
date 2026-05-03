@@ -22,6 +22,18 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/string
 
+/// How the server delivers diagnostics. Affects which transport
+/// `tools/tier1/diagnostics` uses.
+pub type DiagnosticsMode {
+  /// Server pushes `textDocument/publishDiagnostics` notifications
+  /// at its own pace. Client drains the stream watching for the URI
+  /// it cares about. Used by rust-analyzer, gopls, pyright.
+  Push
+  /// Server only responds to explicit `textDocument/diagnostic`
+  /// requests (LSP 3.17+). Used by typescript-language-server.
+  Pull
+}
+
 pub type LanguageConfig {
   LanguageConfig(
     /// LSP-spec language identifier sent in `textDocument/didOpen`'s
@@ -41,6 +53,8 @@ pub type LanguageConfig {
     /// Server-specific `initializationOptions` payload. Pass-through
     /// to the LSP at the `initialize` request.
     initialization_options: Json,
+    /// Diagnostics delivery mode for this server.
+    diagnostics_mode: DiagnosticsMode,
   )
 }
 
@@ -101,6 +115,7 @@ fn rust() -> LanguageConfig {
       #("check", json.object([#("command", json.string("check"))])),
       #("procMacro", json.object([#("enable", json.bool(True))])),
     ]),
+    diagnostics_mode: Push,
   )
 }
 
@@ -115,6 +130,7 @@ fn go() -> LanguageConfig {
       #("usePlaceholders", json.bool(True)),
       #("completeUnimported", json.bool(True)),
     ]),
+    diagnostics_mode: Push,
   )
 }
 
@@ -128,6 +144,17 @@ fn typescript() -> LanguageConfig {
     initialization_options: json.object([
       #("hostInfo", json.string("llm_lsp_mcp")),
     ]),
+    // typescript-language-server does NOT implement
+    // `textDocument/diagnostic` (returns -32601 "Unhandled method")
+    // and does not push publishDiagnostics until a
+    // `workspace/didChangeConfiguration` notification with TS-server
+    // settings has been sent. Both routes are unimplemented as of
+    // M4 — get_diagnostics will return NoDiagnosticsObserved for
+    // .ts files until a follow-up milestone wires up the
+    // configuration sync. hover / goto_definition /
+    // find_references / document_symbols / workspace_symbols all
+    // work normally.
+    diagnostics_mode: Push,
   )
 }
 
@@ -143,5 +170,6 @@ fn python() -> LanguageConfig {
     ],
     // pyright's main config is in pyrightconfig.json or pyproject.toml.
     initialization_options: json.object([]),
+    diagnostics_mode: Push,
   )
 }

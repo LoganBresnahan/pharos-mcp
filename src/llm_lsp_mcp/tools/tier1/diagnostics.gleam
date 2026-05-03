@@ -1,30 +1,33 @@
 //// MCP tool: `get_diagnostics`.
 ////
 //// Returns LSP diagnostics (errors and warnings) for a file URI.
+//// Implementation branches on the language's `diagnostics_mode`:
 ////
-//// Implementation uses the kept-warm LSP pool (lsp/pool) and
-//// drain-mode collection of `textDocument/publishDiagnostics`
-//// notifications. Push-mode (drain) rather than pull-mode
-//// (`textDocument/diagnostic`) because rust-analyzer's analysis is
-//// lazy: a pull request immediately after `didOpen` returns
-//// `kind: "full", items: []` before analysis runs, and the server
-//// cancels concurrent pull requests rather than queueing them.
-//// Push-mode aligns with what rust-analyzer actually wants the
-//// client to do; the lifecycle.request infrastructure is still
-//// available for tier-1 tools (hover, goto_definition, etc.) that
-//// use synchronous request/response naturally.
+////   - `Push` (rust-analyzer, gopls, pyright): drain incoming
+////     `textDocument/publishDiagnostics` notifications for a fixed
+////     window and return the latest match.
 ////
-//// v0.1 hardcodes rust-analyzer. Multi-language registry replaces
-//// the hardcoding at M4 — until then `.rs` files are the only
-//// supported input.
+////   - `Pull` (typescript-language-server): send a synchronous
+////     `textDocument/diagnostic` request (LSP 3.17+) and return
+////     the response's items. Used for servers that do not push
+////     publishDiagnostics on their own — the only way to get the
+////     diagnostic data out of them is to ask explicitly.
+////
+//// In both cases the result body is shaped as a synthetic
+//// `textDocument/publishDiagnostics` envelope so the MCP caller
+//// reads identical JSON structure regardless of which transport
+//// the LSP supports.
 
 import gleam/bit_array
 import gleam/dynamic/decode
 import gleam/json
 import gleam/option
 import llm_lsp_mcp/lsp/client
+import llm_lsp_mcp/lsp/languages.{Pull, Push}
+import llm_lsp_mcp/lsp/lifecycle
 import llm_lsp_mcp/lsp/pool.{type Pool}
 import llm_lsp_mcp/tools/tier1/session
+import llm_lsp_mcp/tools/tier1/tool_helpers
 
 const default_drain_window_ms: Int = 8000
 
@@ -33,45 +36,52 @@ const drain_step_ms: Int = 500
 pub type DiagnosticsError {
   /// File URI did not have a `file://` prefix.
   NotAFileUri(uri: String)
-  /// Walked the directory tree without finding `Cargo.toml`.
+  /// Walked the directory tree without finding any registered root
+  /// marker for the language.
   WorkspaceNotFound(uri: String)
-  /// rust-analyzer subprocess could not be spawned (not on PATH?
-  /// permissions?).
+  /// LSP subprocess could not be spawned.
   SpawnFailed(reason: String)
   /// Initialize handshake failed.
   HandshakeFailed(reason: String)
-  /// I/O error while waiting for notifications.
+  /// I/O error while waiting for diagnostics.
   TransportFailed(reason: String)
-  /// Tool was called on a file with an unsupported extension. v0.1
-  /// only handles `.rs` files.
+  /// Tool was called on a file with an unsupported extension.
   UnsupportedFileType(uri: String)
 }
 
 pub type DiagnosticsResult {
-  /// Server published diagnostics for the file. `body_json` is the
-  /// verbatim JSON text of the `textDocument/publishDiagnostics`
-  /// notification body — caller can hand it to a content block as
-  /// is, or parse the `params.diagnostics` array inside.
+  /// Server published or returned diagnostics for the file.
+  /// `body_json` is a `textDocument/publishDiagnostics`-shaped
+  /// envelope — verbatim from the server in push mode, synthesized
+  /// from the pull response in pull mode.
   Diagnostics(uri: String, body_json: String)
-  /// Drain window expired with no `publishDiagnostics` for the
-  /// requested URI. Caller can interpret this as "no diagnostics
-  /// available within timeout" — useful info for the LLM.
+  /// Window expired with no diagnostics for the requested URI in
+  /// push mode, OR the pull response had no items. Caller can
+  /// interpret as "no diagnostics available" — useful info for the
+  /// LLM either way.
   NoDiagnosticsObserved(uri: String)
 }
 
-/// Run get_diagnostics for one URI via the kept-warm LSP pool. The
-/// pool returns a Client (cached or freshly spawned + initialized).
-/// On cache hit subsequent calls pay only the per-call drain cost
-/// (~hundreds of ms once indexed), not the rust-analyzer cold-start
-/// tax.
+/// Run get_diagnostics for one URI. Looks up the language config to
+/// decide whether to drain (push mode) or to send a pull request,
+/// then returns the result in publishDiagnostics envelope shape.
 pub fn handle(
   pool: Pool,
   file_uri: String,
   timeout_ms: Int,
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
-  case session.prepare(pool, file_uri) {
+  case session.config_for_uri(file_uri) {
     Error(err) -> Error(map_session_error(err))
-    Ok(lsp) -> drain(lsp, file_uri, timeout_ms, option.None)
+
+    Ok(config) ->
+      case session.prepare(pool, file_uri) {
+        Error(err) -> Error(map_session_error(err))
+        Ok(lsp) ->
+          case config.diagnostics_mode {
+            Push -> drain(lsp, file_uri, timeout_ms, option.None)
+            Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
+          }
+      }
   }
 }
 
@@ -82,7 +92,7 @@ pub fn handle_with_default_timeout(
   handle(pool, file_uri, default_drain_window_ms)
 }
 
-// -- LSP loop -------------------------------------------------------------
+// -- Push mode (drain) ---------------------------------------------------
 
 fn drain(
   lsp: client.Client,
@@ -151,6 +161,77 @@ fn publish_diagnostics_uri_decoder() -> decode.Decoder(String) {
   }
 }
 
+// -- Pull mode (textDocument/diagnostic) ---------------------------------
+
+fn pull_diagnostics(
+  lsp: client.Client,
+  file_uri: String,
+  timeout_ms: Int,
+) -> Result(DiagnosticsResult, DiagnosticsError) {
+  let params =
+    json.object([
+      #("textDocument", json.object([#("uri", json.string(file_uri))])),
+    ])
+
+  case
+    lifecycle.request(
+      lsp,
+      "textDocument/diagnostic",
+      params,
+      tool_helpers.next_id(),
+      timeout_ms,
+    )
+  {
+    Error(err) ->
+      Error(TransportFailed(tool_helpers.describe_request_error(err)))
+
+    Ok(#(_lsp, result_value)) ->
+      case decode.run(result_value, full_report_items_decoder()) {
+        Error(decode_errs) ->
+          Error(TransportFailed(
+            "diagnostic response decode failed: "
+            <> describe_decode_errors(decode_errs),
+          ))
+
+        Ok(items_json) ->
+          case items_json == "[]" {
+            True -> Ok(NoDiagnosticsObserved(uri: file_uri))
+            False ->
+              Ok(Diagnostics(
+                uri: file_uri,
+                body_json: synthesize_publish_body(file_uri, items_json),
+              ))
+          }
+      }
+  }
+}
+
+/// Decoder for the LSP `DocumentDiagnosticReport` (3.17+):
+///   {kind: "full", items: [...], resultId?: "..."} or
+///   {kind: "unchanged", resultId: "..."}
+/// Returns the items as a JSON string, or "[]" for "unchanged" since
+/// we have no prior result cached.
+fn full_report_items_decoder() -> decode.Decoder(String) {
+  use kind <- decode.field("kind", decode.string)
+  case kind {
+    "full" -> {
+      use items <- decode.field("items", decode.dynamic)
+      decode.success(tool_helpers.json_encode(items))
+    }
+    "unchanged" -> decode.success("[]")
+    _ -> decode.failure("[]", "unknown report kind: " <> kind)
+  }
+}
+
+fn synthesize_publish_body(uri: String, items_json: String) -> String {
+  "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
+  <> "\"params\":{\"uri\":\""
+  <> uri
+  <> "\",\"diagnostics\":"
+  <> items_json
+  <> "}}"
+}
+
 // -- Error description helpers -------------------------------------------
 
 fn map_session_error(err: session.SessionError) -> DiagnosticsError {
@@ -171,3 +252,11 @@ fn describe_client_error(err: client.Error) -> String {
     client.SpawnError(_) -> "spawn error"
   }
 }
+
+fn describe_decode_errors(errs: List(decode.DecodeError)) -> String {
+  case errs {
+    [] -> "no error info"
+    [first, ..] -> first.expected <> " (got " <> first.found <> ")"
+  }
+}
+
