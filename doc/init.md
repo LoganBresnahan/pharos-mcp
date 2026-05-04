@@ -514,6 +514,14 @@ Stages (parallel where independent, sequential where dependent):
 - `lsp_request_raw` escape hatch
 - Unified-diff rendering for `WorkspaceEdit` content blocks
 
+**Stage 2 — Reliability sweep for known issues.** Carries forward items dogfood surfaced during Stage 0/1 that were not fully resolved at the time. Each is logged to stderr (via `pharos/log`) when it fires so post-mortem is possible without LLM-side reproduction. Triage list:
+
+- **`find_references` on heavily-used types times out.** rust-analyzer's `textDocument/references` for a workspace-wide type (e.g. `VoxelCoord` referenced in 50+ sites) does not return within 30s on cold cache. The existing retry-on-`-32801` covers ContentModified but not pure slowness. Fix candidates: bump per-tool timeout for references specifically, or implement a "wait for first then end of $/progress" gate (not the idle-bail variant from Stage 0F).
+- **`get_diagnostics` against tsserver returns NoDiagnosticsObserved.** Stage 0C's empty-object `workspace_configuration` push is insufficient. tsserver gates publishDiagnostics on richer settings (the exact required keys are still being mapped from typescript-language-server's source). Fix: enumerate the gating keys and add real settings to the typescript LanguageConfig.
+- **`wait_for_ready` idle-bail returns prematurely.** The 600 ms idle threshold trips before rust-analyzer's first post-`didOpen` `$/progress` notification arrives, so the function returns Ok with no progress drained. Either redesign with a "begin-state-seen" gate (wait for any progress for the token first, then for `end`), or keep it deprecated and use per-tool retry.
+- **Pool does not auto-evict crashed LSPs.** When an LSP child process dies, the pool's cached Client struct still points at the dead Port; the next tool call surfaces a transport error to the LLM but the cache is not cleared. M9 fault-tolerance work supersedes this; tracked here so the symptom is visible.
+- **Tool errors logged to stderr globally** via `mcp/server.tool_text_result/2`. Any new failure mode added during Stage 0D / 0E / 1.x lands in this log automatically. Stage 2 reviews the log and decides which entries graduate to fixes vs documented limitations.
+
 ### Milestone 9 — Polish
 - Config file format (TOML) for language registry
 - Sensible defaults bundled (rust-analyzer, gopls, etc. auto-detected if on PATH)

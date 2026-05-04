@@ -13,6 +13,7 @@ import gleam/dynamic/decode
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import pharos/log
 import pharos/lsp/pool.{type Pool}
 import pharos/mcp/content_block
 import pharos/tools/tier1/diagnostics
@@ -803,6 +804,14 @@ fn decode_echo_arguments(args: Option(Dynamic)) -> Result(String, String) {
 }
 
 fn tool_text_result(message: String, is_error: Bool) -> Json {
+  // Log every tool error to stderr so dogfood post-mortem can see
+  // what went wrong without waiting for the LLM to surface the
+  // content block. Stdout stays reserved for JSON-RPC frames.
+  case is_error {
+    True -> log.warn("tool error returned to client: " <> message)
+    False -> Nil
+  }
+
   let block = content_block.to_json(content_block.text(message))
   json.object([
     #("content", json.array([block], of: fn(b) { b })),
