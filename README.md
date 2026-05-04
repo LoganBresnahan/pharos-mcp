@@ -96,6 +96,10 @@ For binary builds (requires Zig 0.15.2 + xz, see [Burrito's setup notes](https:/
 MIX_ENV=prod mix release                 # produces Burrito binaries in burrito_out/
 ```
 
+### Build note: hpack_erl naming workaround
+
+`mix.exs` runs a `fix_app_names` hook after `deps.compile` to work around a hex-package-name vs OTP-application-name mismatch in `hpack_erl` (transitive via `mist`). The hook writes a wrapper `<hex_name>.app` so Mix's `validate_app/1` filename check passes; runtime behavior is unaffected. See [doc/adr/011-mix-app-name-symlink-workaround.md](doc/adr/011-mix-app-name-symlink-workaround.md). Removed when the upstream Gleam publish fix lands and `mist` republishes against it.
+
 ## Companion repos
 
 - [pharos_ext](https://github.com/LoganBresnahan/pharos_ext) — optional VSCode extension (bootstrapped separately)
