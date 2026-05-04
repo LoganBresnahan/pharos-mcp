@@ -27,6 +27,7 @@ import pharos/tools/tier2/code_actions
 import pharos/tools/tier2/format_document
 import pharos/tools/tier2/goto_implementation
 import pharos/tools/tier2/goto_type_definition
+import pharos/tools/tier2/lsp_request_raw
 import pharos/tools/tier2/rename_preview
 import pharos/tools/tier2/signature_help
 
@@ -151,6 +152,7 @@ fn tools_list_response(id: Id) -> String {
             rename_preview_tool_definition(),
             format_document_tool_definition(),
             code_actions_tool_definition(),
+            lsp_request_raw_tool_definition(),
           ],
           of: fn(t) { t },
         ),
@@ -547,6 +549,9 @@ fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
     Ok(#("code_actions", arguments)) ->
       handle_code_actions(pool, id, arguments)
 
+    Ok(#("lsp_request_raw", arguments)) ->
+      handle_lsp_request_raw(pool, id, arguments)
+
     Ok(#(name, _)) ->
       error_response(Some(id), -32_602, "Unknown tool: " <> name)
 
@@ -902,6 +907,30 @@ fn handle_code_actions(
   }
 }
 
+fn handle_lsp_request_raw(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_lsp_request_raw_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid lsp_request_raw params: " <> reason,
+      )
+    Ok(#(uri, method, params)) ->
+      case lsp_request_raw.handle(pool, uri, method, params) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(lsp_request_raw.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(lsp_request_raw.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
 // -- Tier 2 tool definitions --------------------------------------------
 
 fn goto_type_definition_tool_definition() -> Json {
@@ -1096,6 +1125,81 @@ fn format_document_tool_definition() -> Json {
   ])
 }
 
+fn lsp_request_raw_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("lsp_request_raw")),
+    #(
+      "description",
+      json.string(
+        "Generic escape hatch for LSP methods pharos does not "
+          <> "expose as a typed tool. Sends `(method, params)` to the "
+          <> "LSP for the file at `uri` (routing by extension); "
+          <> "returns the verbatim result as JSON. Use for "
+          <> "`callHierarchy/incomingCalls`, `textDocument/inlayHint`, "
+          <> "server-specific extensions, or any method that arrives "
+          <> "before pharos wraps it. Errors from the LSP surface "
+          <> "with the server's code and message.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of any file in the workspace. Used "
+                    <> "to pick the LSP by extension; the file does "
+                    <> "not have to be relevant to the request.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "method",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "LSP method name, e.g. `textDocument/inlayHint`.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "params",
+              json.object([
+                #(
+                  "description",
+                  json.string(
+                    "Method-specific params object, sent verbatim.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.preprocessed_array([
+            json.string("uri"),
+            json.string("method"),
+            json.string("params"),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
 fn code_actions_tool_definition() -> Json {
   json.object([
     #("name", json.string("code_actions")),
@@ -1247,6 +1351,22 @@ fn decode_code_actions_arguments(
   |> result.map_error(fn(_) {
     "expected `uri: string`, `start_line/start_character: int`, "
     <> "`end_line/end_character: int`"
+  })
+}
+
+fn decode_lsp_request_raw_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, String, Dynamic), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use method <- decode.field("method", decode.string)
+    use params <- decode.field("params", decode.dynamic)
+    decode.success(#(uri, method, params))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, `method: string`, `params: any`"
   })
 }
 

@@ -249,6 +249,54 @@ fn progress_token_and_kind_decoder() -> decode.Decoder(#(String, String)) {
   decode.success(#(token, kind))
 }
 
+/// Send a JSON-RPC request whose `params` field is supplied as
+/// already-encoded JSON text, await the matching response, and
+/// return the verbatim result Dynamic. Used by the
+/// `lsp_request_raw` escape hatch (Stage 1C) and by any future tool
+/// that needs to round-trip an LSP-server-returned value (such as a
+/// `CallHierarchyItem`) without re-decoding all its fields into a
+/// typed `Json`.
+pub fn request_raw_params(
+  client: Client,
+  method: String,
+  params_json: String,
+  request_id: Int,
+  timeout_ms: Int,
+) -> Result(#(Client, Dynamic), RequestError) {
+  use Nil <- result.try(send_raw_method_request(
+    client,
+    method,
+    params_json,
+    request_id,
+  ))
+
+  wait_for_response(client, request_id, timeout_ms)
+}
+
+fn send_raw_method_request(
+  client: Client,
+  method: String,
+  params_json: String,
+  id: Int,
+) -> Result(Nil, RequestError) {
+  // Build the JSON-RPC envelope as text so `params_json` (already-
+  // encoded JSON) can pass through verbatim.
+  let body_text =
+    "{\"jsonrpc\":\"2.0\",\"id\":"
+    <> int_to_string(id)
+    <> ",\"method\":"
+    <> json.to_string(json.string(method))
+    <> ",\"params\":"
+    <> params_json
+    <> "}"
+
+  client.send_body(client, bit_array.from_string(body_text))
+  |> result.map_error(ClientFailure)
+}
+
+@external(erlang, "erlang", "integer_to_binary")
+fn int_to_string(value: Int) -> String
+
 /// Run `body` with `handler` installed for `method` in the Client's
 /// server-request registry, then return whatever `body` produced.
 /// Per ADR-012 decision 5 the override is scoped to the closure
