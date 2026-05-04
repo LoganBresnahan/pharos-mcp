@@ -497,6 +497,16 @@ Stages (parallel where independent, sequential where dependent):
 - End-to-end test: edit unsaved file in VSCode, MCP `hover` returns info on unsaved content
 
 ### Milestone 8 — Tier 2 tools
+
+**Stage 0 (gating prerequisite) — bidirectional LSP server-request handling.** Must land before any Tier 2 tool code. See [adr/010-defer-server-request-handling.md](adr/010-defer-server-request-handling.md).
+- Convert `lsp/lifecycle.gleam`'s inbound loop into a classifier (response by id / notification / server-request)
+- Server-request handler registry keyed by method, with default handlers for `workspace/configuration`, `client/registerCapability`, `client/unregisterCapability`, `window/showMessageRequest`, `window/workDoneProgress/create`, `workspace/applyEdit`
+- Per-language post-`initialized` push hook for `workspace/didChangeConfiguration` (and any server-specific config). Add `workspace_configuration: Option(Json)` to `LanguageConfig`; populate for typescript-language-server.
+- Per-tool handler override surface (e.g. `rename_preview`'s `workspace/applyEdit` policy)
+- HTTP transport stateful sessions: `Mcp-Session-Id` header issued at `initialize`, validated on every subsequent request, used to route server-initiated requests to the originating client. Deferred from M5 because Tier 1 is pure request/response with no server-push; Stage 0 makes the first server-initiated request real (`workspace/applyEdit`) and HTTP needs an addressable client to deliver it to. Includes idle session eviction policy.
+- Fixes deferred tsserver `get_diagnostics` as a side effect — verify in dogfood before moving on
+
+**Stage 1 — Tier 2 tools.**
 - Read deep cuts: `goto_type_definition`, `goto_implementation`, `signature_help`, `call_hierarchy_*`
 - Edit-as-data: `rename_preview`, `format_document`, `code_actions`
 - `lsp_request_raw` escape hatch
