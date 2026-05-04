@@ -162,13 +162,52 @@ fn wait_for_response(
       // Keep looping; the matching one should arrive.
       wait_for_response(client, expected_id, timeout_ms)
 
-    NotificationOrOther ->
-      // Server-side notification (progress, log, $/showMessage, etc.).
-      // Drain and keep looking.
+    ServerRequest(id: id, method: _method, params: _params) -> {
+      // Server-initiated request (e.g. workspace/configuration,
+      // workspace/applyEdit). Stage 0B introduces a handler registry
+      // for these. Until then, reply with the spec-default
+      // "method-not-found" so the server proceeds (degraded but not
+      // hung) and continue waiting for the response we actually need.
+      let _ = send_method_not_found(client, id)
+      wait_for_response(client, expected_id, timeout_ms)
+    }
+
+    Notification(method: _, params: _) ->
+      // Server-side notification (progress, log, $/showMessage,
+      // publishDiagnostics, etc.). Stage 0F starts tracking $/progress
+      // tokens here. For now: drain and keep looking.
       wait_for_response(client, expected_id, timeout_ms)
 
     DecodeFailure(reason) -> Error(ResponseDecodeError(reason))
   }
+}
+
+/// Send a JSON-RPC error response with code -32601 (method-not-found)
+/// for an inbound server-initiated request whose method we do not
+/// handle. Per ADR-012 decision 2, this is the spec-correct default —
+/// it forces visibility on unhandled methods rather than silently
+/// accepting them. Returns the result of the underlying client write
+/// so callers can decide whether to surface a transport error; most
+/// callers ignore it because the original request's flow continues
+/// regardless.
+fn send_method_not_found(client: Client, id: Int) -> Result(Nil, RequestError) {
+  let body =
+    json.object([
+      #("jsonrpc", json.string("2.0")),
+      #("id", json.int(id)),
+      #(
+        "error",
+        json.object([
+          #("code", json.int(-32_601)),
+          #("message", json.string("Method not found")),
+        ]),
+      ),
+    ])
+    |> json.to_string
+    |> bit_array.from_string
+
+  client.send_body(client, body)
+  |> result.map_error(ClientFailure)
 }
 
 // -- Inbound message classification --------------------------------------
@@ -176,7 +215,16 @@ fn wait_for_response(
 type Classified {
   ResponseOk(id: Int, result: Dynamic)
   ResponseErr(id: Int, code: Int, message: String)
-  NotificationOrOther
+  /// Server-initiated request: has both `id` and `method`. Server
+  /// expects a response with the same id. Examples:
+  /// `workspace/configuration`, `workspace/applyEdit`,
+  /// `client/registerCapability`. See ADR-012.
+  ServerRequest(id: Int, method: String, params: Dynamic)
+  /// Server-side notification: has `method` but no `id`. Fire-and-
+  /// forget; no response expected. Examples:
+  /// `textDocument/publishDiagnostics`, `$/progress`,
+  /// `window/logMessage`.
+  Notification(method: String, params: Dynamic)
   DecodeFailure(reason: String)
 }
 
@@ -193,14 +241,35 @@ fn classify(body: BitArray) -> Classified {
 }
 
 fn classify_dynamic(value: Dynamic) -> Classified {
-  case decode.run(value, response_or_notification_decoder()) {
+  case decode.run(value, message_decoder()) {
     Ok(classified) -> classified
-    Error(_) -> NotificationOrOther
+    // Decoder failure means none of the four shapes matched. Fall
+    // through to a synthetic notification with no method so the
+    // wait_for_response loop drains it as it would any other
+    // unrecognized server message.
+    Error(_) ->
+      Notification(method: "", params: dynamic.nil())
   }
 }
 
-fn response_or_notification_decoder() -> decode.Decoder(Classified) {
+/// Classifies inbound JSON-RPC messages from the LSP into one of four
+/// shapes per the JSON-RPC 2.0 spec:
+///
+/// | id present | method present | result/error present | shape           |
+/// |------------|----------------|----------------------|-----------------|
+/// | yes        | no             | yes                  | response (ok/err) |
+/// | yes        | yes            | no                   | server-initiated request |
+/// | no         | yes            | no                   | notification    |
+///
+/// Anything else is treated as a notification with an empty method
+/// (drained by the receive loop).
+fn message_decoder() -> decode.Decoder(Classified) {
   use maybe_id <- decode.optional_field("id", None, decode.optional(decode.int))
+  use maybe_method <- decode.optional_field(
+    "method",
+    None,
+    decode.optional(decode.string),
+  )
   use maybe_result <- decode.optional_field(
     "result",
     None,
@@ -211,15 +280,33 @@ fn response_or_notification_decoder() -> decode.Decoder(Classified) {
     None,
     decode.optional(error_object_decoder()),
   )
+  use maybe_params <- decode.optional_field(
+    "params",
+    None,
+    decode.optional(decode.dynamic),
+  )
 
-  case maybe_id, maybe_result, maybe_error {
-    Some(id), Some(result_value), _ ->
+  let params = option.unwrap(maybe_params, dynamic.nil())
+
+  case maybe_id, maybe_method, maybe_result, maybe_error {
+    // Response (success): id + result, no method.
+    Some(id), None, Some(result_value), _ ->
       decode.success(ResponseOk(id: id, result: result_value))
 
-    Some(id), _, Some(#(code, message)) ->
+    // Response (error): id + error, no method.
+    Some(id), None, _, Some(#(code, message)) ->
       decode.success(ResponseErr(id: id, code: code, message: message))
 
-    _, _, _ -> decode.success(NotificationOrOther)
+    // Server-initiated request: id + method.
+    Some(id), Some(method), _, _ ->
+      decode.success(ServerRequest(id: id, method: method, params: params))
+
+    // Notification: method, no id.
+    None, Some(method), _, _ ->
+      decode.success(Notification(method: method, params: params))
+
+    // Anything else: treat as notification with empty method.
+    _, _, _, _ -> decode.success(Notification(method: "", params: params))
   }
 }
 

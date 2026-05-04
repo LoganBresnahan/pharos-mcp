@@ -85,13 +85,12 @@ defmodule Pharos.MixProject do
       # republish. See doc/adr/011-mix-app-name-symlink-workaround.md
       "deps.compile": ["deps.compile", &fix_app_names/1],
       compile: ["deps.compile", "compile"],
-      # `mix run --no-halt` is enough now that pharos_app_ffi:start/2 is
-      # the OTP application's `mod:` callback: starting the :pharos
-      # application spawns pharos:main/0. An explicit `-e ":pharos.main()"`
-      # would invoke main twice (once via OTP app boot, once via eval),
-      # racing on stdin and triggering early init:stop/1 from whichever
-      # copy reaches EOF first.
-      start: ["run --no-halt"],
+      # `mix start` invokes pharos:main/0 directly. The OTP application
+      # callback (pharos_app_ffi:start/2) only auto-spawns main when
+      # __BURRITO is set, so this -e path runs main exactly once. mix
+      # run still loads applications (so the pool actor and other
+      # children are running) — main is on top of that.
+      start: ["run -e \":pharos.main()\""],
     ]
   end
 

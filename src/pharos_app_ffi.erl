@@ -18,17 +18,44 @@
 -export([start/2, stop/1]).
 
 start(_Type, _Args) ->
-    Pid = spawn_link(fun() ->
-        pharos:main(),
-        %% Explicitly halt instead of letting the spawn_link'd process
-        %% die. Mix release sets :pharos to start_permanent in :prod, so
-        %% normal termination of the application's primary process would
-        %% otherwise crash the BEAM with a "Kernel pid terminated" notice
-        %% and an erl_crash.dump in cwd. init:stop/1 closes applications
-        %% gracefully and exits with the given status code, no dump.
-        init:stop(0)
-    end),
-    {ok, Pid}.
+    %% Gate on the __BURRITO env var (set by Burrito's launcher) to
+    %% decide whether the application's start callback owns the
+    %% MCP-stdio main loop. Burrito sets it; nothing else does. The
+    %% other entry paths invoke pharos:main/0 themselves: bin/pharos-dev
+    %% via `erl -eval`, `mix start` via the `run -e ":pharos.main()"`
+    %% alias. gleeunit-driven tests (via `mix gleam.test`) do not need
+    %% main at all and would crash the BEAM mid-suite if main ran here
+    %% (its stdin loop hits EOF immediately and calls init:stop/0).
+    case os:getenv("__BURRITO") of
+        false ->
+            %% Spawn an idle child process so OTP has something to
+            %% supervise as the application's primary; the application
+            %% boots successfully and idles until the BEAM is brought
+            %% down by whatever invoked main externally.
+            Pid = spawn_link(fun idle/0),
+            {ok, Pid};
+        _ ->
+            Pid = spawn_link(fun() ->
+                pharos:main(),
+                %% Explicitly halt instead of letting the spawn_link'd
+                %% process die. Mix release sets :pharos to
+                %% start_permanent in :prod, so normal termination of
+                %% the application's primary process would otherwise
+                %% crash the BEAM with a "Kernel pid terminated"
+                %% notice and an erl_crash.dump in cwd. init:stop/1
+                %% closes applications gracefully and exits with the
+                %% given status code, no dump.
+                init:stop(0)
+            end),
+            {ok, Pid}
+    end.
+
+idle() ->
+    receive
+        stop -> ok
+    after infinity ->
+        ok
+    end.
 
 stop(_State) ->
     ok.
