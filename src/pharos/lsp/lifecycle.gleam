@@ -23,6 +23,7 @@ import gleam/json.{type Json}
 import gleam/option.{None, Some}
 import gleam/result
 import pharos/lsp/client.{type Client}
+import pharos/lsp/server_request_handlers.{ErrorReply, Reply}
 
 pub type RequestError {
   ClientFailure(client.Error)
@@ -162,13 +163,13 @@ fn wait_for_response(
       // Keep looping; the matching one should arrive.
       wait_for_response(client, expected_id, timeout_ms)
 
-    ServerRequest(id: id, method: _method, params: _params) -> {
-      // Server-initiated request (e.g. workspace/configuration,
-      // workspace/applyEdit). Stage 0B introduces a handler registry
-      // for these. Until then, reply with the spec-default
-      // "method-not-found" so the server proceeds (degraded but not
-      // hung) and continue waiting for the response we actually need.
-      let _ = send_method_not_found(client, id)
+    ServerRequest(id: id, method: method, params: params) -> {
+      // Server-initiated request. Look up a handler in the Client's
+      // registry; if found, send its reply. If not, reply with the
+      // spec-default `-32601 Method not found` so the server proceeds
+      // (degraded but not hung). Either way, continue waiting for the
+      // response we were originally after.
+      let _ = dispatch_server_request(client, id, method, params)
       wait_for_response(client, expected_id, timeout_ms)
     }
 
@@ -182,15 +183,62 @@ fn wait_for_response(
   }
 }
 
-/// Send a JSON-RPC error response with code -32601 (method-not-found)
-/// for an inbound server-initiated request whose method we do not
-/// handle. Per ADR-012 decision 2, this is the spec-correct default —
-/// it forces visibility on unhandled methods rather than silently
-/// accepting them. Returns the result of the underlying client write
-/// so callers can decide whether to surface a transport error; most
-/// callers ignore it because the original request's flow continues
-/// regardless.
-fn send_method_not_found(client: Client, id: Int) -> Result(Nil, RequestError) {
+/// Look up a handler for the inbound server-initiated request and
+/// send its reply. If no handler is registered, reply with the
+/// spec-default `-32601` (Method not found) per ADR-012 decision 2.
+/// Either way, the original `wait_for_response` loop continues — the
+/// server's request has been answered (or rejected); the response we
+/// were originally waiting for should still arrive.
+fn dispatch_server_request(
+  client: Client,
+  id: Int,
+  method: String,
+  params: Dynamic,
+) -> Result(Nil, RequestError) {
+  let registry = client.handlers(client)
+
+  case server_request_handlers.lookup(registry, method) {
+    Some(handler) -> send_handler_result(client, id, handler(id, params))
+    None -> send_error_response(client, id, -32_601, "Method not found")
+  }
+}
+
+fn send_handler_result(
+  client: Client,
+  id: Int,
+  result: server_request_handlers.HandlerResult,
+) -> Result(Nil, RequestError) {
+  case result {
+    Reply(payload) -> send_result_response(client, id, payload)
+    ErrorReply(code: code, message: message) ->
+      send_error_response(client, id, code, message)
+  }
+}
+
+fn send_result_response(
+  client: Client,
+  id: Int,
+  result: Json,
+) -> Result(Nil, RequestError) {
+  let body =
+    json.object([
+      #("jsonrpc", json.string("2.0")),
+      #("id", json.int(id)),
+      #("result", result),
+    ])
+    |> json.to_string
+    |> bit_array.from_string
+
+  client.send_body(client, body)
+  |> result.map_error(ClientFailure)
+}
+
+fn send_error_response(
+  client: Client,
+  id: Int,
+  code: Int,
+  message: String,
+) -> Result(Nil, RequestError) {
   let body =
     json.object([
       #("jsonrpc", json.string("2.0")),
@@ -198,8 +246,8 @@ fn send_method_not_found(client: Client, id: Int) -> Result(Nil, RequestError) {
       #(
         "error",
         json.object([
-          #("code", json.int(-32_601)),
-          #("message", json.string("Method not found")),
+          #("code", json.int(code)),
+          #("message", json.string(message)),
         ]),
       ),
     ])

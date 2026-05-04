@@ -19,12 +19,14 @@ import gleam/bit_array
 import gleam/erlang/process.{type Pid}
 import pharos/lsp/framing
 import pharos/lsp/port
+import pharos/lsp/server_request_handlers.{type Registry}
 
 pub opaque type Client {
   Client(
     port: port.Port,
     buffer: BitArray,
     queue: List(BitArray),
+    handlers: Registry,
   )
 }
 
@@ -43,10 +45,30 @@ pub fn start(
 ) -> Result(Client, Error) {
   case port.spawn(command, args, cwd) {
     Ok(p) ->
-      Ok(Client(port: p, buffer: <<>>, queue: []))
+      Ok(Client(
+        port: p,
+        buffer: <<>>,
+        queue: [],
+        handlers: server_request_handlers.defaults(),
+      ))
     Error(spawn_err) ->
       Error(SpawnError(spawn_err))
   }
+}
+
+/// Replace the client's server-request handler registry. Used by the
+/// language registry to attach per-language defaults (Stage 0C) and
+/// by tools that want process-wide overrides. Per-call scoped
+/// overrides are added separately in Stage 0E.
+pub fn with_handlers(client: Client, handlers: Registry) -> Client {
+  Client(..client, handlers: handlers)
+}
+
+/// Read access for the lifecycle inbound classifier. Internal-ish but
+/// public so `pharos/lsp/lifecycle` can dispatch ServerRequest
+/// classifications without reaching into the opaque struct's fields.
+pub fn handlers(client: Client) -> Registry {
+  client.handlers
 }
 
 /// Send a JSON-RPC body to the subprocess. Body is wrapped in
