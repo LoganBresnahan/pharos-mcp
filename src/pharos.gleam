@@ -28,6 +28,7 @@ import pharos/log
 import pharos/lsp/pool.{type Pool}
 import pharos/mcp/http
 import pharos/mcp/server
+import pharos/mcp/sessions
 import pharos/mcp/stdio
 
 const default_http_port: Int = 3535
@@ -95,9 +96,16 @@ fn start_http(pool: Pool) -> Result(Nil, String) {
   log.info(
     "HTTP transport binding " <> bind <> ":" <> int.to_string(port),
   )
-  case http.start(pool, port, bind) {
-    Error(http.ListenFailed(reason)) -> Error(reason)
-    Ok(_started) -> Ok(Nil)
+
+  case sessions.start() {
+    Error(_) ->
+      Error("failed to start MCP session table")
+
+    Ok(sessions_handle) ->
+      case http.start(pool, sessions_handle, port, bind) {
+        Error(http.ListenFailed(reason)) -> Error(reason)
+        Ok(_started) -> Ok(Nil)
+      }
   }
 }
 

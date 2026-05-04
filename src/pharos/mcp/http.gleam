@@ -20,10 +20,12 @@
 
 import gleam/bit_array
 import gleam/bytes_tree
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http.{Get, Post}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response, Response}
+import gleam/json
 import gleam/list
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
@@ -32,6 +34,7 @@ import gleam/string
 import pharos/log
 import pharos/lsp/pool.{type Pool}
 import pharos/mcp/server
+import pharos/mcp/sessions.{type Sessions}
 import mist
 
 /// Cap incoming bodies. A JSON-RPC message larger than this would
@@ -44,13 +47,16 @@ pub type StartError {
 }
 
 /// Start a mist HTTP listener bound to `bind`:`port` that dispatches
-/// `POST /mcp` to the shared MCP server with `pool`.
+/// `POST /mcp` to the shared MCP server with `pool`. The `sessions`
+/// table issues a session id on the first `initialize` POST and
+/// validates `Mcp-Session-Id` on every subsequent request.
 pub fn start(
   pool: Pool,
+  sessions: Sessions,
   port: Int,
   bind: String,
 ) -> Result(actor.Started(supervisor.Supervisor), StartError) {
-  let handler = fn(req) { route(req, pool) }
+  let handler = fn(req) { route(req, pool, sessions) }
   mist.new(handler)
   |> mist.bind(bind)
   |> mist.port(port)
@@ -63,9 +69,10 @@ pub fn start(
 fn route(
   req: Request(mist.Connection),
   pool: Pool,
+  sessions: Sessions,
 ) -> Response(mist.ResponseData) {
   case req.method, request.path_segments(req) {
-    Post, ["mcp"] -> handle_post(req, pool)
+    Post, ["mcp"] -> handle_post(req, pool, sessions)
     Get, ["mcp"] -> method_not_allowed()
     _, _ -> not_found()
   }
@@ -74,6 +81,7 @@ fn route(
 fn handle_post(
   req: Request(mist.Connection),
   pool: Pool,
+  sessions: Sessions,
 ) -> Response(mist.ResponseData) {
   case origin_allowed(req) {
     False -> {
@@ -86,10 +94,42 @@ fn handle_post(
         Ok(loaded) ->
           case bit_array.to_string(loaded.body) {
             Error(_) -> bad_request("body is not valid utf-8")
-            Ok(body_text) -> dispatch(pool, body_text)
+            Ok(body_text) -> handle_session(req, pool, sessions, body_text)
           }
       }
     }
+  }
+}
+
+/// Decide whether this POST should issue a fresh session id (first
+/// `initialize`) or be validated against an existing one. Per ADR-012
+/// decision 3 the header is required from the second request onward;
+/// missing or unknown id → 400.
+fn handle_session(
+  req: Request(mist.Connection),
+  pool: Pool,
+  sessions: Sessions,
+  body_text: String,
+) -> Response(mist.ResponseData) {
+  case is_initialize(body_text) {
+    True -> {
+      let id = sessions.issue(sessions)
+      log.info("issued session " <> id)
+      with_session_id(dispatch(pool, body_text), id)
+    }
+
+    False ->
+      case request.get_header(req, "mcp-session-id") {
+        Error(_) -> bad_request("missing Mcp-Session-Id header")
+        Ok(id) ->
+          case sessions.validate(sessions, id) {
+            False -> {
+              log.warn("rejecting unknown Mcp-Session-Id " <> id)
+              bad_request("unknown Mcp-Session-Id")
+            }
+            True -> dispatch(pool, body_text)
+          }
+      }
   }
 }
 
@@ -99,6 +139,29 @@ fn dispatch(pool: Pool, body_text: String) -> Response(mist.ResponseData) {
     server.ProtocolError(json) -> json_response(200, json)
     server.NoReply -> empty_response(204)
   }
+}
+
+fn with_session_id(
+  resp: Response(mist.ResponseData),
+  id: String,
+) -> Response(mist.ResponseData) {
+  Response(..resp, headers: [#("mcp-session-id", id), ..resp.headers])
+}
+
+/// Fast pre-dispatch parse of just the JSON-RPC `method` field. Used
+/// to gate session issuance on the protocol's `initialize` handshake
+/// without parsing the full request twice (the MCP server below does
+/// its own complete parse).
+fn is_initialize(body_text: String) -> Bool {
+  case json.parse(body_text, method_decoder()) {
+    Ok(method) -> method == "initialize"
+    Error(_) -> False
+  }
+}
+
+fn method_decoder() -> decode.Decoder(String) {
+  use method <- decode.optional_field("method", "", decode.string)
+  decode.success(method)
 }
 
 // -- Origin validation ---------------------------------------------------
