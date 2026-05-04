@@ -20,7 +20,7 @@ import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json.{type Json}
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import pharos/lsp/client.{type Client}
 import pharos/lsp/server_request_handlers.{ErrorReply, Reply}
@@ -139,6 +139,107 @@ fn send_initialized_notification(
 
   client.send_body(client, body)
   |> result.map_error(ClientFailure)
+}
+
+/// Drain inbound notifications until the server signals it has
+/// reached a stable analysis state for the given progress token, or
+/// the timeout budget is exhausted. Per ADR-012 stage 0F, this is
+/// what tools call before issuing requests sensitive to mid-indexing
+/// state changes (notably `find_references` against rust-analyzer,
+/// which raises `-32801 ContentModified` if its analysis is in
+/// flight).
+///
+/// `maybe_token` is `None` for servers that do not emit progress
+/// (tsserver) — the function returns immediately. Otherwise it polls
+/// for messages with a short per-iteration timeout, returning early
+/// when it sees `$/progress` with `params.token == maybe_token` and
+/// `params.value.kind == "end"`. If the server has been idle (no
+/// inbound message) for several short timeouts in a row, the
+/// function also returns success — already-indexed servers do not
+/// emit any progress at all, so absence is taken as readiness.
+///
+/// Total wall-clock cap is `timeout_ms`. On timeout the function
+/// returns success rather than an error: a server that emitted some
+/// progress but never an `end` is best handled as "good enough" and
+/// the actual request will surface its own error if needed.
+pub fn wait_for_ready(
+  client: Client,
+  maybe_token: Option(String),
+  timeout_ms: Int,
+) -> Result(Client, RequestError) {
+  case maybe_token {
+    None -> Ok(client)
+    Some(token) ->
+      drain_until_ready(client, token, max_iterations(timeout_ms), 0)
+  }
+}
+
+const idle_iter_ms: Int = 200
+
+const idle_iter_threshold: Int = 3
+
+fn max_iterations(timeout_ms: Int) -> Int {
+  case timeout_ms / idle_iter_ms {
+    n if n < 1 -> 1
+    n -> n
+  }
+}
+
+fn drain_until_ready(
+  client: Client,
+  token: String,
+  iterations_left: Int,
+  consecutive_idle: Int,
+) -> Result(Client, RequestError) {
+  case iterations_left, consecutive_idle >= idle_iter_threshold {
+    0, _ -> Ok(client)
+    _, True -> Ok(client)
+    _, False ->
+      case client.next_message(client, idle_iter_ms) {
+        Error(_) ->
+          drain_until_ready(
+            client,
+            token,
+            iterations_left - 1,
+            consecutive_idle + 1,
+          )
+
+        Ok(#(body, client)) ->
+          case classify(body) {
+            Notification(method: method, params: params)
+              if method == "$/progress"
+            ->
+              case is_progress_end_for_token(params, token) {
+                True -> Ok(client)
+                False ->
+                  drain_until_ready(client, token, iterations_left - 1, 0)
+              }
+
+            ServerRequest(id: id, method: method, params: params) -> {
+              let _ = dispatch_server_request(client, id, method, params)
+              drain_until_ready(client, token, iterations_left - 1, 0)
+            }
+
+            _ ->
+              // Stale response (out of order) or other notification:
+              // drain and reset idle counter — the channel is alive.
+              drain_until_ready(client, token, iterations_left - 1, 0)
+          }
+      }
+  }
+}
+
+fn is_progress_end_for_token(params: Dynamic, token: String) -> Bool {
+  case decode.run(params, progress_token_and_kind_decoder()) {
+    Ok(#(t, kind)) -> t == token && kind == "end"
+    Error(_) -> False
+  }
+}
+
+fn progress_token_and_kind_decoder() -> decode.Decoder(#(String, String)) {
+  use token <- decode.field("token", decode.string)
+  use kind <- decode.subfield(["value", "kind"], decode.string)
+  decode.success(#(token, kind))
 }
 
 /// Push a `workspace/didChangeConfiguration` notification with the

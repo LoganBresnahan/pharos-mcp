@@ -64,6 +64,16 @@ pub type LanguageConfig {
     /// `None` means the server gets no configuration push and the
     /// server-pull request returns nulls. Per ADR-012 stage 0C.
     workspace_configuration: Option(Dict(String, Json)),
+    /// `$/progress` token name the server emits during readiness work
+    /// (typically initial indexing). Tools that issue analysis
+    /// requests sensitive to mid-indexing state changes (notably
+    /// `find_references` against rust-analyzer, which raises
+    /// `-32801 ContentModified`) call `lifecycle.wait_for_ready/3`
+    /// before the actual request to drain the in-progress notifications.
+    /// `None` means no readiness wait — either the server does not
+    /// emit progress (tsserver) or the wait is not needed for any
+    /// known tool. Per ADR-012 stage 0F.
+    readiness_token: Option(String),
   )
 }
 
@@ -126,6 +136,7 @@ fn rust() -> LanguageConfig {
     ]),
     diagnostics_mode: Push,
     workspace_configuration: None,
+    readiness_token: Some("rustAnalyzer/Indexing"),
   )
 }
 
@@ -142,6 +153,7 @@ fn go() -> LanguageConfig {
     ]),
     diagnostics_mode: Push,
     workspace_configuration: None,
+    readiness_token: Some("setup"),
   )
 }
 
@@ -172,6 +184,7 @@ fn typescript() -> LanguageConfig {
         #("javascript", json.object([])),
       ]),
     ),
+    readiness_token: None,
   )
 }
 
@@ -189,5 +202,6 @@ fn python() -> LanguageConfig {
     initialization_options: json.object([]),
     diagnostics_mode: Push,
     workspace_configuration: None,
+    readiness_token: Some("Indexing"),
   )
 }

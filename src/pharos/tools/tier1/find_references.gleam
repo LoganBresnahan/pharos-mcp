@@ -7,18 +7,15 @@
 //// definition site is in the result; defaults to true so the LLM
 //// gets a complete picture.
 ////
-//// Includes a retry-once-on-content-modified loop: rust-analyzer
-//// in particular cancels references requests with
-//// `ServerError(-32801, "content modified")` when its analysis
-//// state evolves mid-request (background indexing or reanalysis).
-//// gopls / pyright / typescript-language-server do not exhibit this
-//// behavior, but the retry costs nothing in their case since they
-//// never emit -32801. We retry once with a one-second sleep so
-//// rust-analyzer has time to reach a stable state.
+//// Calls `lifecycle.wait_for_ready/3` between session setup and the
+//// actual request. Per ADR-012 stage 0F this drains in-flight
+//// `$/progress` notifications so rust-analyzer's mid-indexing state
+//// has settled before we send the request. Replaces the old
+//// retry-on-`-32801`-ContentModified loop, which was rust-analyzer-
+//// specific and brittle (a 1s sleep covers small workspaces but
+//// times out on larger ones).
 
-import gleam/erlang/process
 import gleam/json
-import pharos/lsp/client
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
@@ -26,9 +23,7 @@ import pharos/tools/tier1/tool_helpers
 
 const default_timeout_ms: Int = 10_000
 
-const content_modified_retry_delay_ms: Int = 1000
-
-const content_modified_code: Int = -32_801
+const readiness_timeout_ms: Int = 30_000
 
 pub type FindReferencesError {
   SessionFailed(reason: String)
@@ -42,12 +37,45 @@ pub fn handle(
   character: Int,
   include_declaration: Bool,
 ) -> Result(String, FindReferencesError) {
-  case session.prepare(pool, file_uri) {
+  case session.config_for_uri(file_uri) {
     Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params = build_params(file_uri, line, character, include_declaration)
-      attempt(lsp, params, retries_left: 1)
-    }
+    Ok(config) ->
+      case session.prepare(pool, file_uri) {
+        Error(err) -> Error(SessionFailed(describe_session_error(err)))
+        Ok(lsp) -> {
+          let params =
+            build_params(file_uri, line, character, include_declaration)
+
+          case
+            lifecycle.wait_for_ready(
+              lsp,
+              config.readiness_token,
+              readiness_timeout_ms,
+            )
+          {
+            Error(err) ->
+              Error(RequestFailed(tool_helpers.describe_request_error(err)))
+
+            Ok(lsp) ->
+              case
+                lifecycle.request(
+                  lsp,
+                  "textDocument/references",
+                  params,
+                  tool_helpers.next_id(),
+                  default_timeout_ms,
+                )
+              {
+                Ok(#(_lsp, result_value)) ->
+                  Ok(tool_helpers.json_encode(result_value))
+                Error(err) ->
+                  Error(RequestFailed(
+                    tool_helpers.describe_request_error(err),
+                  ))
+              }
+          }
+        }
+      }
   }
 }
 
@@ -76,37 +104,6 @@ fn build_params(
       ]),
     ),
   ])
-}
-
-fn attempt(
-  lsp: client.Client,
-  params: json.Json,
-  retries_left retries_left: Int,
-) -> Result(String, FindReferencesError) {
-  case
-    lifecycle.request(
-      lsp,
-      "textDocument/references",
-      params,
-      tool_helpers.next_id(),
-      default_timeout_ms,
-    )
-  {
-    Ok(#(_lsp, result_value)) -> Ok(tool_helpers.json_encode(result_value))
-
-    Error(lifecycle.ServerError(code, _message))
-      if code == content_modified_code && retries_left > 0
-    -> {
-      // Content state changed during the request — usually
-      // rust-analyzer doing background indexing. Sleep briefly so
-      // the server reaches a steady state, then try again.
-      process.sleep(content_modified_retry_delay_ms)
-      attempt(lsp, params, retries_left: retries_left - 1)
-    }
-
-    Error(err) ->
-      Error(RequestFailed(tool_helpers.describe_request_error(err)))
-  }
 }
 
 fn describe_session_error(err: session.SessionError) -> String {
