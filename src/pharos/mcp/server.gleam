@@ -22,6 +22,10 @@ import pharos/tools/tier1/find_references
 import pharos/tools/tier1/goto_definition
 import pharos/tools/tier1/hover
 import pharos/tools/tier1/workspace_symbols
+import pharos/tools/tier2/call_hierarchy
+import pharos/tools/tier2/goto_implementation
+import pharos/tools/tier2/goto_type_definition
+import pharos/tools/tier2/signature_help
 
 const protocol_version: String = "2024-11-05"
 
@@ -137,6 +141,10 @@ fn tools_list_response(id: Id) -> String {
             find_references_tool_definition(),
             document_symbols_tool_definition(),
             workspace_symbols_tool_definition(),
+            goto_type_definition_tool_definition(),
+            goto_implementation_tool_definition(),
+            signature_help_tool_definition(),
+            call_hierarchy_prepare_tool_definition(),
           ],
           of: fn(t) { t },
         ),
@@ -512,6 +520,18 @@ fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
     Ok(#("workspace_symbols", arguments)) ->
       handle_workspace_symbols(pool, id, arguments)
 
+    Ok(#("goto_type_definition", arguments)) ->
+      handle_goto_type_definition(pool, id, arguments)
+
+    Ok(#("goto_implementation", arguments)) ->
+      handle_goto_implementation(pool, id, arguments)
+
+    Ok(#("signature_help", arguments)) ->
+      handle_signature_help(pool, id, arguments)
+
+    Ok(#("call_hierarchy_prepare", arguments)) ->
+      handle_call_hierarchy_prepare(pool, id, arguments)
+
     Ok(#(name, _)) ->
       error_response(Some(id), -32_602, "Unknown tool: " <> name)
 
@@ -691,6 +711,177 @@ fn handle_workspace_symbols(
           success_response(id, fn() { tool_text_result(reason, True) })
       }
   }
+}
+
+// -- Tier 2 handlers ----------------------------------------------------
+
+fn handle_goto_type_definition(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_position_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid goto_type_definition params: " <> reason,
+      )
+    Ok(#(uri, line, character)) ->
+      case goto_type_definition.handle(pool, uri, line, character) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(goto_type_definition.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(goto_type_definition.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_goto_implementation(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_position_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid goto_implementation params: " <> reason,
+      )
+    Ok(#(uri, line, character)) ->
+      case goto_implementation.handle(pool, uri, line, character) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(goto_implementation.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(goto_implementation.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_signature_help(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_position_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid signature_help params: " <> reason,
+      )
+    Ok(#(uri, line, character)) ->
+      case signature_help.handle(pool, uri, line, character) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(signature_help.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(signature_help.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_call_hierarchy_prepare(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_position_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid call_hierarchy_prepare params: " <> reason,
+      )
+    Ok(#(uri, line, character)) ->
+      case call_hierarchy.prepare(pool, uri, line, character) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(call_hierarchy.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(call_hierarchy.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+// -- Tier 2 tool definitions --------------------------------------------
+
+fn goto_type_definition_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("goto_type_definition")),
+    #(
+      "description",
+      json.string(
+        "Find the *type* declaration for the symbol at a position. "
+          <> "Wraps LSP `textDocument/typeDefinition`. For "
+          <> "`let x: Foo = ...`, calling on `x` returns where `Foo` "
+          <> "is declared, not where `x` is bound. Same response shape "
+          <> "as goto_definition (Location | Location[] | "
+          <> "LocationLink[] | null).",
+      ),
+    ),
+    #("inputSchema", position_arg_schema()),
+  ])
+}
+
+fn goto_implementation_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("goto_implementation")),
+    #(
+      "description",
+      json.string(
+        "Find concrete implementation site(s) for the trait/interface "
+          <> "method or abstract symbol at a position. Wraps LSP "
+          <> "`textDocument/implementation`. Returns each `impl` block "
+          <> "(or equivalent in other languages) that provides this "
+          <> "symbol's behavior. Same response shape as goto_definition.",
+      ),
+    ),
+    #("inputSchema", position_arg_schema()),
+  ])
+}
+
+fn signature_help_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("signature_help")),
+    #(
+      "description",
+      json.string(
+        "Get the signature(s) and active parameter for a function "
+          <> "call at the given position (typically inside the call's "
+          <> "parentheses). Wraps LSP `textDocument/signatureHelp`. "
+          <> "Returns `{signatures: [...], activeSignature?: int, "
+          <> "activeParameter?: int}` or null.",
+      ),
+    ),
+    #("inputSchema", position_arg_schema()),
+  ])
+}
+
+fn call_hierarchy_prepare_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("call_hierarchy_prepare")),
+    #(
+      "description",
+      json.string(
+        "Prepare a call hierarchy at the given position. Wraps LSP "
+          <> "`textDocument/prepareCallHierarchy`. Returns a list of "
+          <> "`CallHierarchyItem` identifying the callable. The "
+          <> "follow-on `incomingCalls`/`outgoingCalls` requests "
+          <> "round-trip a returned item; until pharos exposes a "
+          <> "passthrough for those, use the `lsp_request_raw` escape "
+          <> "hatch (Stage 1C).",
+      ),
+    ),
+    #("inputSchema", position_arg_schema()),
+  ])
 }
 
 // -- Argument decoders --------------------------------------------------
