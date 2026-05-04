@@ -38,22 +38,40 @@ pub type StartError {
 pub type SessionState {
   SessionState(
     last_activity_us: Int,
-    /// Reserved for the SSE channel handle added in the follow-up
-    /// commit. Holding the field shape now keeps the struct stable
-    /// for the actor's message protocol.
-    sse_channel: Option(SseChannel),
+    /// Subject the SSE handler runs against. When set, the session
+    /// has an active `GET /mcp/events` stream the routing actor can
+    /// push server-initiated requests to. None for sessions that
+    /// have not opened (or have closed) their SSE channel.
+    sse_subject: Option(Subject(SseMsg)),
   )
 }
 
-/// Placeholder for the SSE channel handle. Filled in when SSE lands.
-pub type SseChannel {
-  SseChannel
+/// Messages the routing layer sends down an SSE channel. Each one
+/// becomes a single SSE event written to the stream by the SSE
+/// loop in `pharos/mcp/http`.
+pub type SseMsg {
+  /// Server-initiated request to forward to the MCP client. Body is
+  /// the pre-encoded JSON-RPC request frame; `correlation_id` is
+  /// the UUID the client must include in its `POST /mcp/respond`.
+  Push(correlation_id: String, body: String)
+  /// Idle heartbeat — the SSE loop turns this into a comment-line so
+  /// proxies do not idle-close the stream.
+  Heartbeat
+  /// Cooperative shutdown signal — the routing layer asks the SSE
+  /// loop to close cleanly (e.g. on session eviction).
+  Close
 }
 
 pub opaque type Msg {
   Issue(reply_to: Subject(String))
   Validate(session_id: String, reply_to: Subject(Bool))
   Touch(session_id: String)
+  AttachSse(
+    session_id: String,
+    subject: Subject(SseMsg),
+    reply_to: Subject(Bool),
+  )
+  DetachSse(session_id: String)
   Evict(now_us: Int)
 }
 
@@ -93,6 +111,29 @@ pub fn validate(sessions: Sessions, session_id: String) -> Bool {
   })
 }
 
+/// Attach an SSE subject to an existing session. Returns `False` if
+/// the session is unknown — callers should reject with 400 in that
+/// case. Replaces any prior SSE subject for the session
+/// (re-connecting after a drop).
+pub fn attach_sse(
+  sessions: Sessions,
+  session_id: String,
+  subject: Subject(SseMsg),
+) -> Bool {
+  let Sessions(actor_subject) = sessions
+  actor.call(actor_subject, default_call_timeout_ms, fn(reply) {
+    AttachSse(session_id, subject, reply)
+  })
+}
+
+/// Detach the SSE subject for a session. Used by the SSE loop on
+/// graceful shutdown. No-op if the session is gone or never had an
+/// SSE channel.
+pub fn detach_sse(sessions: Sessions, session_id: String) -> Nil {
+  let Sessions(subject) = sessions
+  actor.send(subject, DetachSse(session_id))
+}
+
 fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     Issue(reply) -> {
@@ -101,7 +142,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let table =
         dict.insert(state.table, id, SessionState(
           last_activity_us: now,
-          sse_channel: None,
+          sse_subject: None,
         ))
       process.send(reply, id)
       actor.continue(State(table: table))
@@ -128,6 +169,30 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         Ok(existing) -> {
           let now = now_us()
           let updated = SessionState(..existing, last_activity_us: now)
+          let table = dict.insert(state.table, session_id, updated)
+          actor.continue(State(table: table))
+        }
+      }
+
+    AttachSse(session_id, subject, reply) ->
+      case dict.get(state.table, session_id) {
+        Error(_) -> {
+          process.send(reply, False)
+          actor.continue(state)
+        }
+        Ok(existing) -> {
+          let updated = SessionState(..existing, sse_subject: option.Some(subject))
+          let table = dict.insert(state.table, session_id, updated)
+          process.send(reply, True)
+          actor.continue(State(table: table))
+        }
+      }
+
+    DetachSse(session_id) ->
+      case dict.get(state.table, session_id) {
+        Error(_) -> actor.continue(state)
+        Ok(existing) -> {
+          let updated = SessionState(..existing, sse_subject: None)
           let table = dict.insert(state.table, session_id, updated)
           actor.continue(State(table: table))
         }
