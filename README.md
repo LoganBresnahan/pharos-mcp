@@ -68,13 +68,29 @@ printf '%s\n' \
 
 Expected: three JSON-RPC responses on stdout (initialize → tools/list → tools/call echo), with `[info]` log lines on stderr. The notification line produces no response, by spec.
 
-### Wiring as a real MCP server (dev mode)
+### Wiring as a real MCP server
 
-`mix start` is fine for the smoke test above (where stdout is captured into a variable), but it cannot be used directly as an MCP server `command` because Mix prints compile progress to stdout, corrupting the JSON-RPC stream.
+`mix start` is fine for the smoke test above (where stdout is captured into a variable), but it cannot be used directly as an MCP server `command` because Mix prints compile progress to stdout, corrupting the JSON-RPC stream. Two ways to wire pharos as a real MCP server:
 
-The repo ships [`bin/pharos-dev`](bin/pharos-dev) — a small bash wrapper that compiles silently (output to stderr) then boots Erlang directly so stdout stays reserved for the MCP protocol.
+**Burrito binary (recommended, M6 path).** Build once, then point your MCP host at the resulting binary:
 
-Add this to your MCP host's config (e.g. `~/.claude.json`'s `mcpServers`):
+```bash
+MIX_ENV=prod mix release   # produces burrito_out/pharos_<target>
+```
+
+```json
+{
+  "mcpServers": {
+    "pharos": {
+      "command": "/absolute/path/to/pharos/burrito_out/pharos_linux_x64"
+    }
+  }
+}
+```
+
+The binary is self-contained (Erlang runtime included), produces only JSON-RPC frames on stdout, and routes logger output to stderr. M10 ships pre-built binaries via GitHub Releases; until then, build locally.
+
+**Dev wrapper (`bin/pharos-dev`).** Bash wrapper that compiles silently (all output to stderr) then boots Erlang directly. Useful while iterating on Gleam code because it picks up edits without a release rebuild:
 
 ```json
 {
@@ -86,7 +102,7 @@ Add this to your MCP host's config (e.g. `~/.claude.json`'s `mcpServers`):
 }
 ```
 
-Restart the host (or use its MCP reconnect command). Once registered, the LLM has tools named `mcp__pharos__<tool>` available. The dev wrapper goes away at Milestone 6 when the Burrito-built binary becomes the canonical command.
+Restart the host (or use its MCP reconnect command) after changing config. Once registered, the LLM has tools named `mcp__pharos__<tool>` available.
 
 **Naming convention recap.** The config key (`pharos`) is arbitrary but conventionally matches the BEAM identifier and repo directory. The binary's executable filename (`pharos`) and npm package name (`pharos`) use hyphens because their respective ecosystems require it (Unix CLI tradition; npm package-naming rule). Stay underscored on the BEAM side, hyphenated on the distribution-channel side.
 
@@ -95,6 +111,8 @@ For binary builds (requires Zig 0.15.2 + xz, see [Burrito's setup notes](https:/
 ```bash
 MIX_ENV=prod mix release                 # produces Burrito binaries in burrito_out/
 ```
+
+`MIX_ENV=prod mix release` produces multi-target binaries (`pharos_linux_x64`, `pharos_linux_arm64`, `pharos_darwin_x64`, `pharos_darwin_arm64`). Windows requires `7z`/`7zz` on PATH; without it that target is skipped (other targets still build).
 
 ### Build note: hpack_erl naming workaround
 

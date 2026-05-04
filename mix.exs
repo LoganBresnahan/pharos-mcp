@@ -21,10 +21,9 @@ defmodule Pharos.MixProject do
     ]
   end
 
-  # OTP application callback module is wired in Milestone 1, once the
-  # supervisor tree exists. For Milestone 0 the app boots empty.
   def application do
     [
+      mod: {:pharos_app_ffi, []},
       extra_applications: [:logger]
     ]
   end
