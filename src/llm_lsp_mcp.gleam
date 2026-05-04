@@ -1,21 +1,48 @@
 //// Library entry / facade for `llm_lsp_mcp`.
 ////
-//// `main/0` is the CLI entrypoint — invoked from Mix via the
-//// `start` alias defined in mix.exs (`mix start`). Reads NDJSON
-//// JSON-RPC messages from stdin one line at a time, dispatches via
-//// `mcp/server`, and writes replies to stdout.
+//// `main/0` is the CLI entrypoint — invoked from Mix via the `start`
+//// alias defined in mix.exs (`mix start`). Reads transport
+//// configuration from environment variables and brings up the
+//// requested transports, sharing one `Pool` across both:
 ////
-//// In Milestone 1 the stdio loop is plain recursive function — no
-//// OTP supervision yet. Supervised lifecycle arrives in Milestone 2
-//// when LSP clients are added (each LSP requires crash-recovery).
+////   - `LLM_LSP_MCP_TRANSPORT` — `stdio` | `http` | `both`
+////     (default: `stdio`).
+////   - `LLM_LSP_MCP_HTTP_PORT` — TCP port for the HTTP transport
+////     (default: 3535). Ignored unless transport includes `http`.
+////   - `LLM_LSP_MCP_HTTP_BIND` — interface to bind on (default:
+////     `127.0.0.1`). Localhost-only by default; binding to a
+////     non-loopback interface deliberately requires a config
+////     change.
+////
+//// CLI-flag parsing is deferred to M9 — env vars cover the M5 use
+//// cases and avoid taking a position on argv interpretation while
+//// the binary still runs under `mix start` rather than its eventual
+//// Burrito wrapper.
 
+import gleam/erlang/process
+import gleam/int
+import gleam/option.{None, Some}
+import gleam/string
+import llm_lsp_mcp/env
 import llm_lsp_mcp/log
 import llm_lsp_mcp/lsp/pool.{type Pool}
+import llm_lsp_mcp/mcp/http
 import llm_lsp_mcp/mcp/server
 import llm_lsp_mcp/mcp/stdio
 
+const default_http_port: Int = 3535
+
+const default_http_bind: String = "127.0.0.1"
+
+type Transport {
+  Stdio
+  Http
+  Both
+}
+
 pub fn main() -> Nil {
-  log.info("llm_lsp_mcp starting (stdio transport)")
+  let transport = read_transport()
+  log.info("llm_lsp_mcp starting (transport=" <> transport_label(transport) <> ")")
   case pool.start() {
     Error(_) -> {
       log.error("failed to start LSP pool; exiting")
@@ -23,12 +50,58 @@ pub fn main() -> Nil {
     }
     Ok(p) -> {
       log.info("LSP pool started")
-      loop(p)
+      run(p, transport)
     }
   }
 }
 
-fn loop(pool: Pool) -> Nil {
+fn run(pool: Pool, transport: Transport) -> Nil {
+  case transport {
+    Stdio -> stdio_loop(pool)
+
+    Http ->
+      case start_http(pool) {
+        Error(reason) -> {
+          log.error("HTTP transport failed to start: " <> reason)
+          pool.close_all(pool)
+          Nil
+        }
+        Ok(_) -> {
+          log.info("HTTP transport ready; idling main process")
+          process.sleep_forever()
+        }
+      }
+
+    Both ->
+      case start_http(pool) {
+        Error(reason) -> {
+          log.error(
+            "HTTP transport failed to start; falling back to stdio only: "
+            <> reason,
+          )
+          stdio_loop(pool)
+        }
+        Ok(_) -> {
+          log.info("HTTP transport ready; entering stdio loop")
+          stdio_loop(pool)
+        }
+      }
+  }
+}
+
+fn start_http(pool: Pool) -> Result(Nil, String) {
+  let port = read_http_port()
+  let bind = read_http_bind()
+  log.info(
+    "HTTP transport binding " <> bind <> ":" <> int.to_string(port),
+  )
+  case http.start(pool, port, bind) {
+    Error(http.ListenFailed(reason)) -> Error(reason)
+    Ok(_started) -> Ok(Nil)
+  }
+}
+
+fn stdio_loop(pool: Pool) -> Nil {
   case stdio.read_line() {
     stdio.StdinEof -> {
       log.info("stdin closed; shutting down LSP pool")
@@ -53,7 +126,69 @@ fn loop(pool: Pool) -> Nil {
             server.ProtocolError(json) -> stdio.write(json)
           }
       }
-      loop(pool)
+      stdio_loop(pool)
     }
+  }
+}
+
+// -- Configuration reading ----------------------------------------------
+
+fn read_transport() -> Transport {
+  case env.get("LLM_LSP_MCP_TRANSPORT") {
+    None -> Stdio
+    Some(raw) ->
+      case string.lowercase(string.trim(raw)) {
+        "stdio" -> Stdio
+        "http" -> Http
+        "both" -> Both
+        other -> {
+          log.warn(
+            "unrecognized LLM_LSP_MCP_TRANSPORT=\""
+            <> other
+            <> "\"; falling back to stdio",
+          )
+          Stdio
+        }
+      }
+  }
+}
+
+fn read_http_port() -> Int {
+  case env.get("LLM_LSP_MCP_HTTP_PORT") {
+    None -> default_http_port
+    Some(raw) ->
+      case int.parse(string.trim(raw)) {
+        Ok(port) -> port
+        Error(_) -> {
+          log.warn(
+            "LLM_LSP_MCP_HTTP_PORT=\""
+            <> raw
+            <> "\" is not a valid integer; using default "
+            <> int.to_string(default_http_port),
+          )
+          default_http_port
+        }
+      }
+  }
+}
+
+fn read_http_bind() -> String {
+  case env.get("LLM_LSP_MCP_HTTP_BIND") {
+    None -> default_http_bind
+    Some(raw) -> {
+      let trimmed = string.trim(raw)
+      case trimmed {
+        "" -> default_http_bind
+        bind -> bind
+      }
+    }
+  }
+}
+
+fn transport_label(transport: Transport) -> String {
+  case transport {
+    Stdio -> "stdio"
+    Http -> "http"
+    Both -> "both"
   }
 }

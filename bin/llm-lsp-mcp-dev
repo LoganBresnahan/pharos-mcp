@@ -30,12 +30,19 @@ fi
 
 # Compile if needed. All output goes to stderr — the host only watches
 # stdout.
-mix compile 1>&2
+#
+# `gleam build` is used directly rather than `mix compile` because the
+# Mix toolchain refuses to resolve `hpack_erl` (a transitive of `mist`)
+# whose hex-package name does not match its OTP application name.
+# `gleam build` resolves it correctly via the manifest. Burrito at M6
+# will still go through Mix release flow — that path is addressed
+# separately.
+gleam build 1>&2
 
 # Boot Erlang directly. -noshell keeps the line discipline simple;
 # `llm_lsp_mcp:main/0` is our recursive stdin loop and returns when EOF
 # closes stdin. halt(0) exits the BEAM cleanly afterward.
 exec erl \
-  -pa _build/dev/lib/*/ebin \
+  -pa build/dev/erlang/*/ebin \
   -noshell \
   -eval "llm_lsp_mcp:main(), halt(0)."
