@@ -20,6 +20,7 @@
 import gleam/dict.{type Dict}
 import gleam/json.{type Json}
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 
 /// How the server delivers diagnostics. Affects which transport
@@ -55,6 +56,14 @@ pub type LanguageConfig {
     initialization_options: Json,
     /// Diagnostics delivery mode for this server.
     diagnostics_mode: DiagnosticsMode,
+    /// Settings sent post-`initialized` via
+    /// `workspace/didChangeConfiguration`, AND used by the
+    /// `workspace/configuration` server-request handler to answer
+    /// pull-style config requests. Keyed by section name; each
+    /// section's value is the JSON the server wants for that scope.
+    /// `None` means the server gets no configuration push and the
+    /// server-pull request returns nulls. Per ADR-012 stage 0C.
+    workspace_configuration: Option(Dict(String, Json)),
   )
 }
 
@@ -116,6 +125,7 @@ fn rust() -> LanguageConfig {
       #("procMacro", json.object([#("enable", json.bool(True))])),
     ]),
     diagnostics_mode: Push,
+    workspace_configuration: None,
   )
 }
 
@@ -131,6 +141,7 @@ fn go() -> LanguageConfig {
       #("completeUnimported", json.bool(True)),
     ]),
     diagnostics_mode: Push,
+    workspace_configuration: None,
   )
 }
 
@@ -144,17 +155,23 @@ fn typescript() -> LanguageConfig {
     initialization_options: json.object([
       #("hostInfo", json.string("pharos")),
     ]),
-    // typescript-language-server does NOT implement
-    // `textDocument/diagnostic` (returns -32601 "Unhandled method")
-    // and does not push publishDiagnostics until a
-    // `workspace/didChangeConfiguration` notification with TS-server
-    // settings has been sent. Both routes are unimplemented as of
-    // M4 — get_diagnostics will return NoDiagnosticsObserved for
-    // .ts files until a follow-up milestone wires up the
-    // configuration sync. hover / goto_definition /
-    // find_references / document_symbols / workspace_symbols all
-    // work normally.
     diagnostics_mode: Push,
+    // typescript-language-server gates publishDiagnostics on
+    // `workspace/didChangeConfiguration` arriving post-`initialized`
+    // and on `workspace/configuration` server-pull requests being
+    // answered. Stage 0C wires both routes by attaching a per-language
+    // workspace_configuration here. The two top-level keys
+    // (`typescript`, `javascript`) match what the server requests in
+    // its `workspace/configuration` items[].section. Empty objects are
+    // sufficient to unlock diagnostics; richer settings (preferences,
+    // format, suggest) can be added incrementally if dogfood needs
+    // them.
+    workspace_configuration: Some(
+      dict.from_list([
+        #("typescript", json.object([])),
+        #("javascript", json.object([])),
+      ]),
+    ),
   )
 }
 
@@ -171,5 +188,6 @@ fn python() -> LanguageConfig {
     // pyright's main config is in pyrightconfig.json or pyproject.toml.
     initialization_options: json.object([]),
     diagnostics_mode: Push,
+    workspace_configuration: None,
   )
 }

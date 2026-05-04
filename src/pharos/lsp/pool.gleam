@@ -16,18 +16,33 @@ import gleam/bit_array
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/json
+import gleam/option
 import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
+import pharos/log
 import pharos/lsp/client.{type Client}
 import pharos/lsp/lifecycle
+import pharos/lsp/server_request_handlers
 
 pub opaque type Pool {
   Pool(subject: Subject(Msg))
 }
 
 pub type SpawnSpec {
-  SpawnSpec(command: String, args: List(String), init_params: json.Json)
+  SpawnSpec(
+    command: String,
+    args: List(String),
+    init_params: json.Json,
+    /// Optional `workspace/didChangeConfiguration` payload pushed
+    /// post-`initialized`. Also used to answer the server's pull-style
+    /// `workspace/configuration` requests via a per-language handler
+    /// override on the Client. Keyed by section name (e.g.
+    /// `"typescript"`, `"javascript"`); each section's value is the
+    /// JSON the server wants for that scope. `None` means the server
+    /// gets neither push nor per-language pull-handler. See ADR-012.
+    workspace_configuration: option.Option(dict.Dict(String, json.Json)),
+  )
 }
 
 pub type GetError {
@@ -324,5 +339,43 @@ fn spawn_and_initialize(
     |> result.map_error(HandshakeFailed),
   )
 
+  // Stage 0C: if the language declared workspace settings, install a
+  // per-language workspace/configuration handler (overrides the
+  // default null-array reply with real per-section values) and push
+  // them via `workspace/didChangeConfiguration`. Push failure is
+  // logged and swallowed per ADR-012 decision 4: most servers degrade
+  // gracefully without the config; full refusal would be too strict.
+  let lsp = case spec.workspace_configuration {
+    option.None -> lsp
+
+    option.Some(settings) -> {
+      let registry =
+        server_request_handlers.defaults()
+        |> server_request_handlers.insert(
+          "workspace/configuration",
+          server_request_handlers.workspace_configuration_handler(settings),
+        )
+
+      let lsp = client.with_handlers(lsp, registry)
+
+      case lifecycle.push_configuration(lsp, settings_to_json(settings)) {
+        Ok(Nil) -> lsp
+        Error(_err) -> {
+          log.warn(
+            "workspace/didChangeConfiguration push failed; "
+            <> "server may run with degraded settings",
+          )
+          lsp
+        }
+      }
+    }
+  }
+
   Ok(lsp)
+}
+
+fn settings_to_json(settings: Dict(String, json.Json)) -> json.Json {
+  settings
+  |> dict.to_list
+  |> json.object
 }

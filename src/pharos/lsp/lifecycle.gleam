@@ -141,6 +141,29 @@ fn send_initialized_notification(
   |> result.map_error(ClientFailure)
 }
 
+/// Push a `workspace/didChangeConfiguration` notification with the
+/// supplied settings as the `params.settings` payload. Per ADR-012
+/// stage 0C, this is sent after `initialized` when the LanguageConfig
+/// has a `workspace_configuration` populated. The notification has
+/// no response (LSP-spec: notifications never get one), so the caller
+/// continues immediately on success or surfaces a transport error.
+pub fn push_configuration(
+  client: Client,
+  settings: Json,
+) -> Result(Nil, RequestError) {
+  let body =
+    json.object([
+      #("jsonrpc", json.string("2.0")),
+      #("method", json.string("workspace/didChangeConfiguration")),
+      #("params", json.object([#("settings", settings)])),
+    ])
+    |> json.to_string
+    |> bit_array.from_string
+
+  client.send_body(client, body)
+  |> result.map_error(ClientFailure)
+}
+
 fn wait_for_response(
   client: Client,
   expected_id: Int,

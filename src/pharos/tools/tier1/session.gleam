@@ -103,6 +103,7 @@ fn get_lsp(
       command: config.command,
       args: config.args,
       init_params: build_initialize_params(workspace, config),
+      workspace_configuration: config.workspace_configuration,
     )
   pool.get(pool, config.id, workspace, spec)
   |> result.map_error(fn(err) {

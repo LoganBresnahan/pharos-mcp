@@ -139,3 +139,42 @@ fn default_workspace_configuration(_id: Int, params: Dynamic) -> HandlerResult {
 fn configuration_items_decoder() -> decode.Decoder(List(Dynamic)) {
   decode.field("items", decode.list(decode.dynamic), decode.success)
 }
+
+/// Build a `workspace/configuration` handler that answers each
+/// requested item by looking up its `section` in the supplied
+/// settings dict. Sections not present in the dict get `null`.
+/// Stage 0C uses this to override the no-op default with real
+/// per-language config (e.g. tsserver's `typescript` and `javascript`
+/// section payloads). Suitable for `Registry.insert` after
+/// `defaults/0` to keep the other defaults intact.
+pub fn workspace_configuration_handler(
+  settings: Dict(String, Json),
+) -> Handler {
+  fn(_id, params) -> HandlerResult {
+    let sections = case decode.run(params, configuration_sections_decoder()) {
+      Ok(s) -> s
+      Error(_) -> []
+    }
+
+    let values =
+      list.map(sections, fn(section) {
+        case dict.get(settings, section) {
+          Ok(value) -> value
+          Error(_) -> json.null()
+        }
+      })
+
+    Reply(json.preprocessed_array(values))
+  }
+}
+
+fn configuration_sections_decoder() -> decode.Decoder(List(String)) {
+  decode.field(
+    "items",
+    decode.list({
+      use section <- decode.optional_field("section", "", decode.string)
+      decode.success(section)
+    }),
+    decode.success,
+  )
+}
