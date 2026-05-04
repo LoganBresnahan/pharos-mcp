@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# Development entrypoint for the MCP host (Claude Code, Cursor, etc.) to
+# spawn `pharos` while iterating in this repo.
+#
+# Why a wrapper instead of `mix start`:
+#   `mix run` prints compilation progress to STDOUT, which corrupts the
+#   stdio JSON-RPC stream the MCP host expects. The host parses the first
+#   line as JSON-RPC, fails on `Compiling 28 files (.gleam)`, and closes
+#   the connection (MCP error -32000).
+#
+# What this script does:
+#   1. Compiles the project, sending all output to STDERR (host ignores).
+#   2. Boots Erlang directly (no Mix in the runtime path) so STDOUT stays
+#      reserved for the MCP protocol.
+#
+# Replaced by the Burrito-built binary at Milestone 6; until then, MCP
+# config points at this script.
+
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# Ensure asdf shims are reachable. Claude Code's spawned subprocess may
+# inherit a minimal PATH that omits ~/.asdf/shims; prepend it defensively.
+if [ -d "$HOME/.asdf/shims" ]; then
+  export PATH="$HOME/.asdf/shims:$PATH"
+fi
+
+# Compile if needed. All output goes to stderr — the host only watches
+# stdout.
+#
+# `gleam build` is used directly rather than `mix compile` because the
+# Mix toolchain refuses to resolve `hpack_erl` (a transitive of `mist`)
+# whose hex-package name does not match its OTP application name.
+# `gleam build` resolves it correctly via the manifest. Burrito at M6
+# will still go through Mix release flow — that path is addressed
+# separately.
+gleam build 1>&2
+
+# Boot Erlang directly. -noshell keeps the line discipline simple;
+# `pharos:main/0` is our recursive stdin loop and returns when EOF
+# closes stdin. halt(0) exits the BEAM cleanly afterward.
+exec erl \
+  -pa build/dev/erlang/*/ebin \
+  -noshell \
+  -eval "pharos:main(), halt(0)."

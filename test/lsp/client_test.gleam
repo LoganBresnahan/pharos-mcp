@@ -1,4 +1,4 @@
-//// Tests for `llm_lsp_mcp/lsp/client`.
+//// Tests for `pharos/lsp/client`.
 ////
 //// Round-trip framed messages through `cat` as a stand-in subprocess.
 //// `cat` echoes whatever bytes we write, so framed-in equals
@@ -7,7 +7,7 @@
 
 import gleam/bit_array
 import gleeunit/should
-import llm_lsp_mcp/lsp/client
+import pharos/lsp/client
 
 pub fn round_trip_one_body_through_cat_test() {
   let assert Ok(c) = client.start("/bin/cat", [], "/tmp")

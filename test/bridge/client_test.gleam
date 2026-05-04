@@ -1,4 +1,4 @@
-//// Tests for `llm_lsp_mcp/bridge/client`.
+//// Tests for `pharos/bridge/client`.
 ////
 //// Test strategy: spin up a tiny in-process HTTP server impersonating
 //// the extension; verify the client probes, succeeds, and falls back

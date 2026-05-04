@@ -1,7 +1,7 @@
-defmodule LlmLspMcp.MixProject do
+defmodule Pharos.MixProject do
   use Mix.Project
 
-  @app :llm_lsp_mcp
+  @app :pharos
   @version "0.0.1"
 
   def project do
@@ -46,7 +46,7 @@ defmodule LlmLspMcp.MixProject do
 
   defp releases do
     [
-      llm_lsp_mcp: [
+      pharos: [
         steps: [:assemble, &Burrito.wrap/1],
         burrito: [
           targets: [
@@ -64,7 +64,7 @@ defmodule LlmLspMcp.MixProject do
   defp aliases do
     [
       "deps.get": ["deps.get", "gleam.deps.get"],
-      start: ["run -e \":llm_lsp_mcp.main()\""],
+      start: ["run -e \":pharos.main()\""],
     ]
   end
 end

@@ -1,4 +1,4 @@
-# llm_lsp_mcp — Initial Plan
+# pharos — Initial Plan
 
 A Gleam-based MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) capabilities as MCP tools. Distributed as a single self-contained binary via Burrito, shipped through GitHub Releases and npm. Optionally augmented by a thin VSCode extension that provides unsaved-buffer state.
 
@@ -6,19 +6,19 @@ A Gleam-based MCP (Model Context Protocol) server that exposes LSP (Language Ser
 
 LLMs talk MCP. Editors talk LSP. Both speak JSON-RPC 2.0 over stdio. Nothing bridges them generically. This project is that bridge.
 
-A user configures `llm-lsp-mcp` as an MCP server in Claude Code / Claude Desktop / Cursor / any MCP-compatible client. The binary spawns one or more LSP servers (rust-analyzer, gopls, typescript-language-server, etc.) on demand and exposes a curated set of capabilities — diagnostics, hover, goto-definition, references, symbols, refactoring previews — as typed MCP tools. The LLM gains real semantic understanding of code without the editor needing custom integration.
+A user configures `pharos` as an MCP server in Claude Code / Claude Desktop / Cursor / any MCP-compatible client. The binary spawns one or more LSP servers (rust-analyzer, gopls, typescript-language-server, etc.) on demand and exposes a curated set of capabilities — diagnostics, hover, goto-definition, references, symbols, refactoring previews — as typed MCP tools. The LLM gains real semantic understanding of code without the editor needing custom integration.
 
 The same binary works for any MCP-compatible client and any LSP-compatible server. Generic by design.
 
-A separate, optional VSCode extension (`llm_lsp_mcp_ext`) augments the binary with unsaved-buffer state. When the extension is running, the binary calls into it over local HTTP to read current editor content, workspace folders, and active selection. Without the extension, the binary reads from disk. The extension is a booster, not a requirement.
+A separate, optional VSCode extension (`pharos_ext`) augments the binary with unsaved-buffer state. When the extension is running, the binary calls into it over local HTTP to read current editor content, workspace folders, and active selection. Without the extension, the binary reads from disk. The extension is a booster, not a requirement.
 
 ## Two repos
 
 This project ships as two independent repositories. The binary is the primary deliverable; the extension layers on optional value.
 
 ```
-github.com/<user>/llm_lsp_mcp        ← Gleam binary  (this repo)
-github.com/<user>/llm_lsp_mcp_ext    ← VSCode extension  (separate repo)
+github.com/<user>/pharos        ← Gleam binary  (this repo)
+github.com/<user>/pharos_ext    ← VSCode extension  (separate repo)
 ```
 
 **Why two repos:**
@@ -62,7 +62,7 @@ See [adr/007-two-repo-split.md](adr/007-two-repo-split.md).
                                       │  (or HTTP/SSE — same MCP spec)
                                       │
                     ┌─────────────────▼────────────────────────────┐
-                    │              llm_lsp_mcp binary               │
+                    │              pharos binary               │
                     │  ┌─────────────────────────────────────────┐  │
                     │  │ MCP Server                              │  │
                     │  │ - stdio + http transports               │  │
@@ -88,7 +88,7 @@ See [adr/007-two-repo-split.md](adr/007-two-repo-split.md).
             ┌─────────────┼─┐          │ (when extension running)
             │             │ │          │
        ┌────▼──┐    ┌─────▼─▼─┐  ┌─────▼─────────────────────┐
-       │ rust- │    │ gopls   │  │ llm_lsp_mcp_ext (VSCode)  │
+       │ rust- │    │ gopls   │  │ pharos_ext (VSCode)  │
        │ analy │    │  ...    │  │ - GET /buffer?uri=...     │
        │ -zer  │    │         │  │ - GET /workspace-roots    │
        └───────┘    └─────────┘  │ - GET /selection          │
@@ -129,7 +129,7 @@ The binary exposes no special API to the extension. Communication is one-way: bi
 | `GET /selection` | `{"uri": "...", "range": {...}}` or null | Active editor cursor / selection |
 | `POST /diagnostics-snapshot` body `{"uris": [...]}` | `{"uri": "...", "diagnostics": [...]}[]` | VSCode's current Problems-panel state (faster than spinning up our own LSP if the data already exists) |
 
-Detection: binary on startup tries `GET http://127.0.0.1:<configured-port>/healthz` (port discovered via `~/.config/llm-lsp-mcp/bridge-port` or env `LLM_LSP_MCP_BRIDGE_PORT`). On failure, falls back to disk-only mode silently.
+Detection: binary on startup tries `GET http://127.0.0.1:<configured-port>/healthz` (port discovered via `~/.config/pharos/bridge-port` or env `PHAROS_BRIDGE_PORT`). On failure, falls back to disk-only mode silently.
 
 Versioning: `X-Bridge-Protocol-Version: 1` header on every request. Mismatch = log warning, fall back to disk.
 
@@ -192,9 +192,9 @@ Both server-side and client-side filtering are supported.
 
 **Server-side** (smaller registered surface):
 ```bash
-llm-lsp-mcp --tools hover,goto_definition,find_references
+pharos --tools hover,goto_definition,find_references
 # or
-LLM_LSP_MCP_TOOLS=hover,goto_definition,find_references llm-lsp-mcp
+PHAROS_TOOLS=hover,goto_definition,find_references pharos
 # or in config file: tools = ["hover", "goto_definition", ...]
 # or by tier:        --tools tier1
 ```
@@ -226,7 +226,7 @@ See `adr/` for individual decisions with full context.
 ## Repository layout (binary repo)
 
 ```
-llm_lsp_mcp/
+pharos/
 ├── mix.exs                                  # Build config (Mix + mix_gleam + Burrito)
 ├── mix.lock
 ├── gleam.toml                               # Gleam-side config (deps, project meta)
@@ -238,8 +238,8 @@ llm_lsp_mcp/
 ├── LICENSE
 │
 ├── src/                                     # All Gleam source
-│   ├── llm_lsp_mcp.gleam                    # Library entry / facade
-│   ├── llm_lsp_mcp/
+│   ├── pharos.gleam                    # Library entry / facade
+│   ├── pharos/
 │   │   ├── application.gleam                # OTP application start/2
 │   │   ├── supervisor.gleam                 # Top-level supervisor tree
 │   │   ├── config.gleam                     # CLI args + env + file config parsing
@@ -281,7 +281,7 @@ llm_lsp_mcp/
 │   │   └── log.gleam                        # Structured logging to stderr (stdout reserved!)
 │
 ├── test/
-│   ├── llm_lsp_mcp_test.gleam
+│   ├── pharos_test.gleam
 │   ├── mcp/
 │   │   ├── stdio_test.gleam
 │   │   └── http_test.gleam
@@ -295,10 +295,10 @@ llm_lsp_mcp/
 │           └── diagnostics_test.gleam
 │
 ├── npm/                                     # npm publishing artifacts
-│   ├── meta/                                # Top-level "llm-lsp-mcp" package
+│   ├── meta/                                # Top-level "pharos" package
 │   │   ├── package.json
 │   │   ├── bin/
-│   │   │   └── llm-lsp-mcp.js               # Node shim that resolves & spawns platform binary
+│   │   │   └── pharos.js               # Node shim that resolves & spawns platform binary
 │   │   └── README.md
 │   └── platforms/                           # Per-platform sub-packages (template, filled by CI)
 │       └── README.md                        # Documents the optional-deps pattern
@@ -330,10 +330,10 @@ llm_lsp_mcp/
         └── 007-two-repo-split.md
 ```
 
-## Extension repo layout (sketch — lives at `llm_lsp_mcp_ext/`)
+## Extension repo layout (sketch — lives at `pharos_ext/`)
 
 ```
-llm_lsp_mcp_ext/
+pharos_ext/
 ├── package.json
 ├── tsconfig.json
 ├── esbuild.config.js
@@ -347,7 +347,7 @@ llm_lsp_mcp_ext/
 │   │   ├── workspaceRoots.ts
 │   │   ├── selection.ts
 │   │   └── diagnosticsSnapshot.ts
-│   └── port.ts                               # Writes ~/.config/llm-lsp-mcp/bridge-port for binary discovery
+│   └── port.ts                               # Writes ~/.config/pharos/bridge-port for binary discovery
 ├── test/
 └── .vscode/
 ```
@@ -359,8 +359,8 @@ The extension's job is small: bind a localhost HTTP server, expose the five endp
 Two channels from the same CI matrix. Each tag push produces:
 
 1. **GitHub Release** with five binaries attached (linux-x64, linux-arm64, darwin-x64, darwin-arm64, win-x64) plus checksums.
-2. **Five npm sub-packages** `@llm-lsp-mcp/<platform>-<arch>`, each containing one binary.
-3. **One npm meta package** `llm-lsp-mcp` with optional dependencies pointing at all five sub-packages, plus a tiny Node shim that finds and spawns the right binary.
+2. **Five npm sub-packages** `@pharos/<platform>-<arch>`, each containing one binary.
+3. **One npm meta package** `pharos` with optional dependencies pointing at all five sub-packages, plus a tiny Node shim that finds and spawns the right binary.
 
 ### npm install flow (user perspective)
 
@@ -368,22 +368,22 @@ Two channels from the same CI matrix. Each tag push produces:
 // .mcp.json or claude_desktop_config.json
 {
   "mcpServers": {
-    "llm-lsp-mcp": {
+    "pharos": {
       "command": "npx",
-      "args": ["-y", "llm-lsp-mcp"]
+      "args": ["-y", "pharos"]
     }
   }
 }
 ```
 
-`npx` fetches `llm-lsp-mcp`, npm resolves only the matching `@llm-lsp-mcp/<platform>-<arch>` (others marked `optional` and skipped), Node shim finds the binary inside the sub-package, spawns it with passed args, pipes stdio. Same UX as every other MCP server published on npm.
+`npx` fetches `pharos`, npm resolves only the matching `@pharos/<platform>-<arch>` (others marked `optional` and skipped), Node shim finds the binary inside the sub-package, spawns it with passed args, pipes stdio. Same UX as every other MCP server published on npm.
 
 ### Direct download flow
 
 ```bash
-curl -L https://github.com/<user>/llm-lsp-mcp/releases/latest/download/llm-lsp-mcp-linux-x64 \
-  -o ~/.local/bin/llm-lsp-mcp
-chmod +x ~/.local/bin/llm-lsp-mcp
+curl -L https://github.com/<user>/pharos/releases/latest/download/pharos-linux-x64 \
+  -o ~/.local/bin/pharos
+chmod +x ~/.local/bin/pharos
 ```
 
 Then point MCP config at the absolute path instead of `npx`.
@@ -439,7 +439,7 @@ Stages (parallel where independent, sequential where dependent):
 | Secret | Purpose |
 |--------|---------|
 | `GITHUB_TOKEN` | Auto-provided; used by `softprops/action-gh-release` |
-| `NPM_TOKEN` | npm publish; scoped to `@llm-lsp-mcp/*` and `llm-lsp-mcp` |
+| `NPM_TOKEN` | npm publish; scoped to `@pharos/*` and `pharos` |
 
 ### Versioning
 
@@ -493,7 +493,7 @@ Stages (parallel where independent, sequential where dependent):
 ### Milestone 7 — Bridge protocol + extension stub
 - Lock bridge protocol v1 in `doc/bridge-protocol.md`
 - Binary's `bridge/client.gleam` probes localhost and uses extension when available
-- Bootstrap `llm_lsp_mcp_ext` repo with healthz + buffer endpoints
+- Bootstrap `pharos_ext` repo with healthz + buffer endpoints
 - End-to-end test: edit unsaved file in VSCode, MCP `hover` returns info on unsaved content
 
 ### Milestone 8 — Tier 2 tools
@@ -527,7 +527,7 @@ Stages (parallel where independent, sequential where dependent):
 
 ## Open questions
 
-1. **Config file location and format.** XDG (`~/.config/llm-lsp-mcp/config.toml`)? Per-project (`.llm-lsp-mcp.toml`)? Both? TOML vs JSON?
+1. **Config file location and format.** XDG (`~/.config/pharos/config.toml`)? Per-project (`.pharos.toml`)? Both? TOML vs JSON?
 
 2. **Per-language defaults.** Bundle a default config for popular languages (rust-analyzer, gopls, tsserver, pyright, etc.)? Detection logic (check PATH on first use)?
 
@@ -541,7 +541,7 @@ Stages (parallel where independent, sequential where dependent):
 
 7. **Concurrency model.** Multiple in-flight tool calls in parallel? One LSP can have many pending requests; pending tracker must support that.
 
-8. **Bridge port discovery.** File at `~/.config/llm-lsp-mcp/bridge-port` vs env var vs both? Race conditions if two VSCode windows are open?
+8. **Bridge port discovery.** File at `~/.config/pharos/bridge-port` vs env var vs both? Race conditions if two VSCode windows are open?
 
 9. **WorkspaceEdit `documentChanges` vs `changes`.** Modern LSPs return either. Our content block format has to handle both. Renderer choice.
 

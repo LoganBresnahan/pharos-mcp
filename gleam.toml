@@ -4,7 +4,7 @@
 # recognize gleeunit and other dev deps as direct dependencies (Gleam
 # does not consult Mix's env-scoped deps when classifying imports).
 
-name = "llm_lsp_mcp"
+name = "pharos"
 version = "0.0.1"
 target = "erlang"
 description = "MCP server bridging LLMs to LSP servers."

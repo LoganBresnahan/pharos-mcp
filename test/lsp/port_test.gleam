@@ -1,4 +1,4 @@
-//// Tests for `llm_lsp_mcp/lsp/port`.
+//// Tests for `pharos/lsp/port`.
 ////
 //// The Port FFI wraps an Erlang `port()` connected to a subprocess.
 //// Verifying it requires actually spawning a subprocess; pure unit
@@ -13,7 +13,7 @@
 
 import gleam/bit_array
 import gleeunit/should
-import llm_lsp_mcp/lsp/port
+import pharos/lsp/port
 
 pub fn spawn_send_receive_close_roundtrip_test() {
   let assert Ok(p) = port.spawn("/bin/cat", [], "/tmp")

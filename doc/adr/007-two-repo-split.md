@@ -5,7 +5,7 @@
 
 ## Context
 
-ADR-003 established that the project ships as two artifacts: a Gleam binary (`llm_lsp_mcp`) that runs everywhere, and a thin VSCode extension (`llm_lsp_mcp_ext`) that exposes unsaved-buffer state via local HTTP for the binary to consume. The two are coupled by a small bridge protocol (~5 HTTP endpoints) but otherwise share nothing — different language, different runtime, different distribution channel.
+ADR-003 established that the project ships as two artifacts: a Gleam binary (`pharos`) that runs everywhere, and a thin VSCode extension (`pharos_ext`) that exposes unsaved-buffer state via local HTTP for the binary to consume. The two are coupled by a small bridge protocol (~5 HTTP endpoints) but otherwise share nothing — different language, different runtime, different distribution channel.
 
 The natural question: monorepo or two repos?
 
@@ -31,8 +31,8 @@ The user explicitly preferred two repos.
 
 Two independent repositories:
 
-- **`llm_lsp_mcp`** — this repo. Gleam binary. Distribution: GitHub Releases + npm. Contains the canonical bridge protocol specification at `doc/bridge-protocol.md`.
-- **`llm_lsp_mcp_ext`** — separate repo. VSCode extension. Distribution: VSCode Marketplace + Open VSX. References the bridge protocol spec by version (e.g., "implements bridge protocol v1.0") in its README and runtime handshake.
+- **`pharos`** — this repo. Gleam binary. Distribution: GitHub Releases + npm. Contains the canonical bridge protocol specification at `doc/bridge-protocol.md`.
+- **`pharos_ext`** — separate repo. VSCode extension. Distribution: VSCode Marketplace + Open VSX. References the bridge protocol spec by version (e.g., "implements bridge protocol v1.0") in its README and runtime handshake.
 
 The bridge protocol spec lives in the binary repo because the binary is the spec's primary consumer and the protocol exists to serve the binary's needs. The extension is one implementation of the spec; future implementations (JetBrains plugin, Helix sidecar, etc.) would similarly consume the spec from the binary repo.
 

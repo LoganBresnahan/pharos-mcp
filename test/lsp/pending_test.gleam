@@ -1,4 +1,4 @@
-//// Tests for `llm_lsp_mcp/lsp/pending`.
+//// Tests for `pharos/lsp/pending`.
 ////
 //// Pure data structure — no processes spawned in tests. Subjects are
 //// constructed via `process.new_subject/0` because the tracker holds
@@ -8,7 +8,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleeunit/should
-import llm_lsp_mcp/lsp/pending
+import pharos/lsp/pending
 
 pub fn new_is_empty_test() {
   pending.new()

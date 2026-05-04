@@ -1,13 +1,13 @@
 //// Tests for the milestone-1 stdio MCP server.
 ////
-//// Scope: dispatch behavior of `llm_lsp_mcp/mcp/server.handle_line`,
+//// Scope: dispatch behavior of `pharos/mcp/server.handle_line`,
 //// since it is pure and easy to assert on. The actual stdin reader
 //// is exercised by the smoke-test pipeline documented in the README.
 
 import gleam/string
 import gleeunit/should
-import llm_lsp_mcp/lsp/pool.{type Pool}
-import llm_lsp_mcp/mcp/server
+import pharos/lsp/pool.{type Pool}
+import pharos/mcp/server
 
 fn contains(haystack: String, needle: String) -> Nil {
   string.contains(haystack, needle) |> should.be_true

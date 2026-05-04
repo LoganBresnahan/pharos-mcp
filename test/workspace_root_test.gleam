@@ -1,18 +1,18 @@
-//// Tests for `llm_lsp_mcp/workspace_root`.
+//// Tests for `pharos/workspace_root`.
 ////
 //// Filesystem-backed: tests construct a temp directory layout and
 //// run discovery against it. Layout is cleaned up afterward.
 
 import gleam/string
 import gleeunit/should
-import llm_lsp_mcp/workspace_root
+import pharos/workspace_root
 
-@external(erlang, "llm_lsp_mcp_fs_ffi", "shell")
+@external(erlang, "pharos_fs_ffi", "shell")
 fn shell(cmd: String) -> String
 
 fn temp_dir() -> String {
   // Tests rm -rf first, so a stable suffix is fine.
-  "/tmp/llm_lsp_mcp_workspace_root_test"
+  "/tmp/pharos_workspace_root_test"
 }
 
 fn setup() -> String {

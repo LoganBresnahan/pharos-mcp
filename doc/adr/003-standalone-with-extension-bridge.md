@@ -22,7 +22,7 @@ Binary spawns LSPs itself, manages their lifecycle, reads files from disk. Works
 Extension uses VSCode's `vscode.languages.*` APIs (which already see unsaved buffers via VSCode's own LSP integration). Solves unsaved buffers natively. Locks the project to VSCode (and forks: Cursor, Windsurf). Loses reach to Claude Desktop, headless agents, CI use cases. Drops Gleam (extensions are TypeScript), invalidating ADR-001's typed-language goals.
 
 **Path Z — Hybrid: standalone binary + optional extension as buffer oracle.**
-Binary is the primary deliverable, runs everywhere as in Path X. A separate, thin VSCode extension (`llm_lsp_mcp_ext`) binds a localhost HTTP server when active and exposes endpoints (`/buffer`, `/workspace-roots`, `/selection`, `/diagnostics-snapshot`). The binary probes for the extension at startup; if found, it asks the extension for current buffer state before forwarding `didChange` to LSPs. If not found, it falls back to disk-only. Best of both: full reach when used standalone, full fidelity when extension is installed.
+Binary is the primary deliverable, runs everywhere as in Path X. A separate, thin VSCode extension (`pharos_ext`) binds a localhost HTTP server when active and exposes endpoints (`/buffer`, `/workspace-roots`, `/selection`, `/diagnostics-snapshot`). The binary probes for the extension at startup; if found, it asks the extension for current buffer state before forwarding `didChange` to LSPs. If not found, it falls back to disk-only. Best of both: full reach when used standalone, full fidelity when extension is installed.
 
 ## Decision
 
@@ -31,7 +31,7 @@ Implement **Path Z**.
 The binary always works standalone. The VSCode extension is an optional booster that ships from a separate repo (see ADR-007).
 
 The binary's bridge module probes for the extension on startup:
-1. Look up bridge port from `~/.config/llm-lsp-mcp/bridge-port` file or `LLM_LSP_MCP_BRIDGE_PORT` env var.
+1. Look up bridge port from `~/.config/pharos/bridge-port` file or `PHAROS_BRIDGE_PORT` env var.
 2. `GET http://127.0.0.1:<port>/healthz`. If 200 with matching protocol version, mark extension available.
 3. If probe fails or version mismatches, fall back silently to disk reads.
 

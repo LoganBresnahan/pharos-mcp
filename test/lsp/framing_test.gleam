@@ -1,4 +1,4 @@
-//// Tests for `llm_lsp_mcp/lsp/framing` — the Content-Length parser.
+//// Tests for `pharos/lsp/framing` — the Content-Length parser.
 ////
 //// The parser is the most error-prone module in the codebase. Bytes
 //// arrive in arbitrary chunks from the LSP's stdout; the parser has
@@ -19,7 +19,7 @@ import gleam/bit_array
 import gleam/list
 import gleam/string
 import gleeunit/should
-import llm_lsp_mcp/lsp/framing
+import pharos/lsp/framing
 import qcheck
 
 // -- Roundtrip basics ----------------------------------------------------

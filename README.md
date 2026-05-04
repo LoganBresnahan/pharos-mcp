@@ -1,4 +1,4 @@
-# llm_lsp_mcp
+# pharos
 
 MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) capabilities as MCP tools, so an LLM can ask "what's the type of this expression?", "where is this defined?", "find all references", etc., backed by real language server analysis.
 
@@ -16,18 +16,18 @@ Distributed as a single self-contained binary via [Burrito](https://github.com/b
 // .mcp.json or claude_desktop_config.json
 {
   "mcpServers": {
-    "llm_lsp_mcp": {              // config key — arbitrary, but using
+    "pharos": {              // config key — arbitrary, but using
                                    // underscores keeps it aligned with the
                                    // BEAM identifier and the repo directory;
-                                   // tools register as mcp__llm_lsp_mcp__*
+                                   // tools register as mcp__pharos__*
       "command": "npx",
-      "args": ["-y", "llm-lsp-mcp"]   // npm package name MUST use hyphens
+      "args": ["-y", "pharos"]   // npm package name MUST use hyphens
     }
   }
 }
 ```
 
-Or download a binary directly from [Releases](https://github.com/LoganBresnahan/llm_lsp_mcp/releases).
+Or download a binary directly from [Releases](https://github.com/LoganBresnahan/pharos/releases).
 
 ## Why?
 
@@ -72,23 +72,23 @@ Expected: three JSON-RPC responses on stdout (initialize → tools/list → tool
 
 `mix start` is fine for the smoke test above (where stdout is captured into a variable), but it cannot be used directly as an MCP server `command` because Mix prints compile progress to stdout, corrupting the JSON-RPC stream.
 
-The repo ships [`bin/llm-lsp-mcp-dev`](bin/llm-lsp-mcp-dev) — a small bash wrapper that compiles silently (output to stderr) then boots Erlang directly so stdout stays reserved for the MCP protocol.
+The repo ships [`bin/pharos-dev`](bin/pharos-dev) — a small bash wrapper that compiles silently (output to stderr) then boots Erlang directly so stdout stays reserved for the MCP protocol.
 
 Add this to your MCP host's config (e.g. `~/.claude.json`'s `mcpServers`):
 
 ```json
 {
   "mcpServers": {
-    "llm_lsp_mcp": {
-      "command": "/absolute/path/to/llm_lsp_mcp/bin/llm-lsp-mcp-dev"
+    "pharos": {
+      "command": "/absolute/path/to/pharos/bin/pharos-dev"
     }
   }
 }
 ```
 
-Restart the host (or use its MCP reconnect command). Once registered, the LLM has tools named `mcp__llm_lsp_mcp__<tool>` available. The dev wrapper goes away at Milestone 6 when the Burrito-built binary becomes the canonical command.
+Restart the host (or use its MCP reconnect command). Once registered, the LLM has tools named `mcp__pharos__<tool>` available. The dev wrapper goes away at Milestone 6 when the Burrito-built binary becomes the canonical command.
 
-**Naming convention recap.** The config key (`llm_lsp_mcp`) is arbitrary but conventionally matches the BEAM identifier and repo directory. The binary's executable filename (`llm-lsp-mcp`) and npm package name (`llm-lsp-mcp`) use hyphens because their respective ecosystems require it (Unix CLI tradition; npm package-naming rule). Stay underscored on the BEAM side, hyphenated on the distribution-channel side.
+**Naming convention recap.** The config key (`pharos`) is arbitrary but conventionally matches the BEAM identifier and repo directory. The binary's executable filename (`pharos`) and npm package name (`pharos`) use hyphens because their respective ecosystems require it (Unix CLI tradition; npm package-naming rule). Stay underscored on the BEAM side, hyphenated on the distribution-channel side.
 
 For binary builds (requires Zig 0.15.2 + xz, see [Burrito's setup notes](https://github.com/burrito-elixir/burrito#preparation-and-requirements)):
 
@@ -98,7 +98,7 @@ MIX_ENV=prod mix release                 # produces Burrito binaries in burrito_
 
 ## Companion repos
 
-- [llm_lsp_mcp_ext](https://github.com/LoganBresnahan/llm_lsp_mcp_ext) — optional VSCode extension (bootstrapped separately)
+- [pharos_ext](https://github.com/LoganBresnahan/pharos_ext) — optional VSCode extension (bootstrapped separately)
 
 ## License
 

@@ -28,7 +28,7 @@ Use **Path B**: Mix project with `mix_gleam` archive providing the Gleam compile
 - `compilers: [:gleam | Mix.compilers()]`
 - `erlc_paths: ["build/dev/erlang/#{@app}/_gleam_artefacts"]`
 - `prune_code_paths: false`
-- An OTP application module: `mod: {:llm_lsp_mcp@application, []}` (the Gleam module `llm_lsp_mcp/application.gleam` becomes Erlang module `llm_lsp_mcp@application`)
+- An OTP application module: `mod: {:pharos@application, []}` (the Gleam module `pharos/application.gleam` becomes Erlang module `pharos@application`)
 - Burrito as a `runtime: false` dep
 - Mix release with `steps: [:assemble, &Burrito.wrap/1]` and per-platform target list
 
