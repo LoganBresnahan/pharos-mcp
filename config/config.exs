@@ -9,7 +9,16 @@ import Config
 # (runtime.exs), because :kernel is already loaded by the time runtime
 # config providers fire — Mix release prints `ERROR! Cannot configure
 # :kernel because ... :kernel has already been loaded` and crashes.
-config :kernel, :logger, [
-  {:handler, :default, :logger_std_h,
-   %{config: %{type: :standard_error}}}
-]
+#
+# Guarded on Mix.env() because in plain `mix start` / `mix run` (dev
+# env) the :kernel application is already started before config files
+# load and Mix prints "Cannot configure base applications: [:kernel]"
+# warnings. The warning is harmless but pollutes stderr; for release
+# builds the config is consulted before :kernel boots, so the
+# assignment takes.
+if Mix.env() == :prod do
+  config :kernel, :logger, [
+    {:handler, :default, :logger_std_h,
+     %{config: %{type: :standard_error}}}
+  ]
+end
