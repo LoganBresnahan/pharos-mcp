@@ -122,9 +122,39 @@ defmodule Pharos.MixProject do
         )
 
         write_wrapper_app(actual, expected, dep_name, otp_name)
+        mirror_dep_dir_under_otp_name(ebin, dep_name, otp_name)
 
       _ ->
         :ok
+    end
+  end
+
+  # `mix release` walks the application graph and resolves each dep by
+  # its OTP application name, expecting `_build/<env>/lib/<otp_name>/ebin/
+  # <otp_name>.app`. The wrapper above only patches the hex-named ebin
+  # dir; release still fails with "Could not find application :<otp_name>"
+  # because no `_build/.../<otp_name>/` directory exists. Mirror the dep's
+  # build directory under the OTP name as a symlink (or copy on Windows)
+  # so release-time path resolution succeeds. The mirror points at the
+  # same beam files, so updates to one are visible through the other.
+  defp mirror_dep_dir_under_otp_name(ebin, dep_name, otp_name) do
+    if dep_name != otp_name do
+      build_lib = Path.dirname(Path.dirname(ebin))
+      otp_dir = Path.join(build_lib, otp_name)
+
+      unless File.exists?(otp_dir) do
+        if File.ln_s(dep_name, otp_dir) != :ok do
+          File.cp_r!(Path.join(build_lib, dep_name), otp_dir)
+        end
+      end
+
+      # Ensure the mirror dir is on the running VM's code path so
+      # `:code.lib_dir/1` (used by `mix release` to resolve apps) finds
+      # it. Without this step, the symlink is in place on disk but the
+      # application controller never sees it because Mix only adds
+      # paths for known deps and `<otp_name>` is not a declared dep.
+      otp_ebin = Path.join(otp_dir, "ebin") |> String.to_charlist()
+      :code.add_pathz(otp_ebin)
     end
   end
 

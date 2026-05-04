@@ -40,13 +40,15 @@ Adopt **Option C**: ship a Mix.Task at `lib/mix/tasks/pharos/fix_app_names.ex` t
 
 ### Mechanism
 
-1. The task walks `_build/<env>/lib/`.
-2. For each subdirectory `<dep>/`, it checks `<dep>/ebin/<dep>.app`.
-3. If that file exists, no action.
-4. If it does not exist and exactly one `*.app` file is present in `<dep>/ebin/`, the task copies that file to `<dep>.app`. Both names then exist in the directory pointing at identical contents.
-5. If zero or multiple `*.app` files are present, no action — the situation is either not-yet-compiled or genuinely ambiguous, neither of which the workaround should touch.
+The hook runs in three steps for each `<dep>/ebin/` whose dep name does not match its `.app` file's OTP application name:
 
-Copy rather than symlink: cross-platform safe (Windows symlinks require admin or developer mode), and Burrito's tar packaging follows files, not symlinks, in some configurations. The duplicate file is sub-1KB and lives only in `_build/`; it is not committed.
+1. **Wrapper `.app` file.** Walks `_build/<env>/lib/`. For each subdirectory `<dep>/`, checks `<dep>/ebin/<dep>.app`. If absent and exactly one `*.app` file is present in `<dep>/ebin/`, writes a wrapper file at `<dep>.app` declaring an empty application named after the hex package that depends on the real OTP application. This satisfies Mix's `validate_app/1` filename check during `mix compile`. If zero or multiple `*.app` files are present, no action — the situation is either not-yet-compiled or genuinely ambiguous.
+
+2. **Mirror directory under the OTP name.** Creates `_build/<env>/lib/<otp_name>/` as a symlink to `<dep>/` (Windows fallback: full copy via `File.cp_r/2`). `mix release` walks the application graph, resolving each dependency by its OTP application name through `:code.lib_dir/1`, which expects a directory whose parent is named `<otp_name>` containing an `ebin/<otp_name>.app` file. Without the mirror, release fails with `** (Mix) Could not find application :<otp_name>` even though the `.app` file exists under the hex-named directory. The mirror points at the same beam files; updates to one are visible through the other.
+
+3. **Code-path registration.** Calls `:code.add_pathz('<otp_name>/ebin')` so the running mix VM's code server sees the mirror directory. Mix only adds paths for declared deps when the project starts, so without this step the symlink is in place on disk but `:code.lib_dir(:<otp_name>)` returns `{:error, :bad_name}` — the application controller never sees the mirror because `<otp_name>` is not a Mix-declared dep. `add_pathz` (append, not prepend) is used so it does not shadow legitimate apps with the same name should one ever exist.
+
+Symlink rather than copy in step 2: avoids drift between the two directories and keeps disk usage flat. Copy is the Windows fallback because Windows symlinks require admin or developer mode. The duplicate paths live only in `_build/`; nothing is committed.
 
 ### Wiring
 
@@ -79,8 +81,8 @@ The dynamic detection means the workaround is harmless even if removed premature
 
 **Easier:**
 
-- M6 unblocks immediately. `mix compile`, `mix test`, `mix release` all succeed without manual intervention.
-- The runtime binary is unaffected. Erlang's application controller uses application names declared inside `.app` files, not filenames, so the alias file is invisible to startup.
+- M6 unblocks immediately. `mix compile`, `mix gleam.test`, and `mix release` (up to Burrito's external `zig`/`xz` requirement) all succeed without manual intervention.
+- The runtime binary is unaffected. Erlang's application controller uses application names declared inside `.app` files, not filenames, so the wrapper file is invisible to startup. Application boot proceeds via the real OTP-named application as the wrapper's `applications` list cascades into it.
 - Detection is dynamic. Any future Erlang dep with a hex/app name mismatch is auto-fixed without touching this code.
 - The fix is local, self-contained, and reversible. A single PR removes it cleanly when upstream catches up.
 

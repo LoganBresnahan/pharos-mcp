@@ -484,17 +484,19 @@ Stages (parallel where independent, sequential where dependent):
 - Add `mist`-based HTTP/SSE transport alongside stdio
 - Both transports usable in same binary via flags
 
-### Milestone 6 — Distribution
-- Burrito builds locally
-- GitHub Actions release workflow green
-- First npm publish with optional-deps pattern
-- README install instructions verified end-to-end
+### Milestone 6 — Dogfood binary (local-only, not published)
+- Patch `mix_gleam` fork to env-gate `test/` compilation so `MIX_ENV=prod mix release` succeeds (gleeunit `should` module is dev-only)
+- Burrito wraps a single host-target binary locally (e.g. `linux_x64`)
+- MCP host config (`~/.claude.json`) points at the Burrito-built binary instead of `bin/pharos-dev`
+- Smoke-tested end-to-end: `initialize` → `tools/list` → `tools/call` against a real workspace
+- Multi-target matrix, GH Actions, and npm publishing are explicitly out of scope here — they live in M10. M6 is about validating the wrapped binary works as a daily-driver MCP server, not shipping it to anyone else.
 
-### Milestone 7 — Bridge protocol + extension stub
-- Lock bridge protocol v1 in `doc/bridge-protocol.md`
-- Binary's `bridge/client.gleam` probes localhost and uses extension when available
-- Bootstrap `pharos_ext` repo with healthz + buffer endpoints
+### Milestone 7 — Bridge protocol + reference editor implementation
+- Lock bridge protocol v1 in `doc/bridge-protocol.md` as an **editor-neutral** spec (HTTP localhost, version handshake, port discovery, endpoints `/healthz`, `/buffer`, `/workspace-roots`, `/selection`, `/diagnostics-snapshot`). Any editor with HTTP server support can implement it. VSCode is the first concrete consumer, not the only intended one.
+- Binary's `bridge/client.gleam` probes localhost and uses whichever editor implementation is bound, agnostic to which editor it is
+- Bootstrap `pharos_ext` repo as the **VSCode reference implementation** of the spec
 - End-to-end test: edit unsaved file in VSCode, MCP `hover` returns info on unsaved content
+- Open design questions captured in the spec doc itself: port discovery mechanism (extends open question 8), multi-editor conflict resolution when two editor windows bind the same workspace, auth model (token vs localhost-only trust), push-vs-pull (does the editor get to *push* file-saved / buffer-changed events, or stay pure-pull from the binary?)
 
 ### Milestone 8 — Tier 2 tools
 
@@ -517,6 +519,14 @@ Stages (parallel where independent, sequential where dependent):
 - Sensible defaults bundled (rust-analyzer, gopls, etc. auto-detected if on PATH)
 - Structured logging with verbosity levels
 - Telemetry events (opt-in)
+
+### Milestone 10 — Public distribution
+- Multi-target Burrito matrix (linux_x64, linux_arm64, darwin_x64, darwin_arm64, win_x64)
+- GitHub Actions release workflow green on tag push
+- First npm publish with optional-deps pattern
+- README install instructions verified end-to-end against a clean machine
+- Versioning policy locked (semver, pre-1.0 minor-bump-on-breaking)
+- Gated on the upstream Gleam publish fix landing and `mist` republishing — otherwise the ADR-011 workaround leaks into the public install story
 
 ### Future / maybe
 - `apply_workspace_edit` tool for auto-apply use cases
