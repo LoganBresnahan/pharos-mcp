@@ -24,7 +24,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import pharos/lsp/client.{type Client}
 import pharos/lsp/port
-import pharos/lsp/server_request_handlers.{ErrorReply, Reply}
+import pharos/lsp/server_request_handlers.{type Handler, ErrorReply, Reply}
 
 pub type RequestError {
   ClientFailure(client.Error)
@@ -247,6 +247,45 @@ fn progress_token_and_kind_decoder() -> decode.Decoder(#(String, String)) {
   use token <- decode.field("token", decode.string)
   use kind <- decode.subfield(["value", "kind"], decode.string)
   decode.success(#(token, kind))
+}
+
+/// Run `body` with `handler` installed for `method` in the Client's
+/// server-request registry, then return whatever `body` produced.
+/// Per ADR-012 decision 5 the override is scoped to the closure
+/// body — Gleam's immutability does the popping automatically: the
+/// `client` parameter visible to the caller still has its original
+/// registry, and the `Client` value the body operated on is the
+/// only one that carries the override.
+///
+/// Used by Tier 2 tools (e.g. `rename_preview`) to install a
+/// capture handler for `workspace/applyEdit` while the
+/// `textDocument/rename` LSP request is in flight, without polluting
+/// the Client's persistent default registry.
+///
+/// Example:
+///
+/// ```gleam
+/// let captured = process.new_subject()
+/// let capture = fn(_id, params) {
+///   process.send(captured, params)
+///   server_request_handlers.Reply(applied_response_json())
+/// }
+///
+/// lifecycle.with_handler(client, "workspace/applyEdit", capture, fn(c) {
+///   lifecycle.request(c, "textDocument/rename", params, id, timeout)
+/// })
+/// ```
+pub fn with_handler(
+  client: Client,
+  method: String,
+  handler: Handler,
+  body: fn(Client) -> a,
+) -> a {
+  let extended =
+    client.handlers(client)
+    |> server_request_handlers.insert(method, handler)
+
+  body(client.with_handlers(client, extended))
 }
 
 /// Push a `workspace/didChangeConfiguration` notification with the
