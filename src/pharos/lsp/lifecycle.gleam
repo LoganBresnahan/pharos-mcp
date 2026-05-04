@@ -23,6 +23,7 @@ import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import pharos/lsp/client.{type Client}
+import pharos/lsp/port
 import pharos/lsp/server_request_handlers.{ErrorReply, Reply}
 
 pub type RequestError {
@@ -196,13 +197,19 @@ fn drain_until_ready(
     _, True -> Ok(client)
     _, False ->
       case client.next_message(client, idle_iter_ms) {
-        Error(_) ->
+        Error(client.PortReceiveError(port.Timeout)) ->
           drain_until_ready(
             client,
             token,
             iterations_left - 1,
             consecutive_idle + 1,
           )
+
+        Error(other) ->
+          // Port closed or some other fatal transport error. Surface
+          // it so the caller can give up cleanly instead of looping
+          // through the whole timeout budget.
+          Error(ClientFailure(other))
 
         Ok(#(body, client)) ->
           case classify(body) {
@@ -288,19 +295,15 @@ fn wait_for_response(
       wait_for_response(client, expected_id, timeout_ms)
 
     ServerRequest(id: id, method: method, params: params) -> {
-      // Server-initiated request. Look up a handler in the Client's
-      // registry; if found, send its reply. If not, reply with the
-      // spec-default `-32601 Method not found` so the server proceeds
-      // (degraded but not hung). Either way, continue waiting for the
-      // response we were originally after.
       let _ = dispatch_server_request(client, id, method, params)
       wait_for_response(client, expected_id, timeout_ms)
     }
 
     Notification(method: _, params: _) ->
       // Server-side notification (progress, log, $/showMessage,
-      // publishDiagnostics, etc.). Stage 0F starts tracking $/progress
-      // tokens here. For now: drain and keep looking.
+      // publishDiagnostics, etc.). Drain and keep looking. Stage 0F's
+      // wait_for_ready/3 is the place to consume $/progress
+      // selectively when a tool needs to wait for indexing.
       wait_for_response(client, expected_id, timeout_ms)
 
     DecodeFailure(reason) -> Error(ResponseDecodeError(reason))
