@@ -23,8 +23,11 @@ import pharos/tools/tier1/goto_definition
 import pharos/tools/tier1/hover
 import pharos/tools/tier1/workspace_symbols
 import pharos/tools/tier2/call_hierarchy
+import pharos/tools/tier2/code_actions
+import pharos/tools/tier2/format_document
 import pharos/tools/tier2/goto_implementation
 import pharos/tools/tier2/goto_type_definition
+import pharos/tools/tier2/rename_preview
 import pharos/tools/tier2/signature_help
 
 const protocol_version: String = "2024-11-05"
@@ -145,6 +148,9 @@ fn tools_list_response(id: Id) -> String {
             goto_implementation_tool_definition(),
             signature_help_tool_definition(),
             call_hierarchy_prepare_tool_definition(),
+            rename_preview_tool_definition(),
+            format_document_tool_definition(),
+            code_actions_tool_definition(),
           ],
           of: fn(t) { t },
         ),
@@ -532,6 +538,15 @@ fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
     Ok(#("call_hierarchy_prepare", arguments)) ->
       handle_call_hierarchy_prepare(pool, id, arguments)
 
+    Ok(#("rename_preview", arguments)) ->
+      handle_rename_preview(pool, id, arguments)
+
+    Ok(#("format_document", arguments)) ->
+      handle_format_document(pool, id, arguments)
+
+    Ok(#("code_actions", arguments)) ->
+      handle_code_actions(pool, id, arguments)
+
     Ok(#(name, _)) ->
       error_response(Some(id), -32_602, "Unknown tool: " <> name)
 
@@ -811,6 +826,82 @@ fn handle_call_hierarchy_prepare(
   }
 }
 
+fn handle_rename_preview(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_rename_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid rename_preview params: " <> reason,
+      )
+    Ok(#(uri, line, character, new_name)) ->
+      case rename_preview.handle(pool, uri, line, character, new_name) {
+        Ok(rendered) ->
+          success_response(id, fn() { tool_text_result(rendered, False) })
+        Error(rename_preview.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(rename_preview.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(rename_preview.RenderFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_format_document(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_uri_only_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid format_document params: " <> reason,
+      )
+    Ok(uri) ->
+      case format_document.handle(pool, uri) {
+        Ok(rendered) ->
+          success_response(id, fn() { tool_text_result(rendered, False) })
+        Error(format_document.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(format_document.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(format_document.RenderFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_code_actions(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_code_actions_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid code_actions params: " <> reason,
+      )
+    Ok(#(uri, sl, sc, el, ec)) ->
+      case code_actions.handle(pool, uri, sl, sc, el, ec) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(code_actions.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(code_actions.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
 // -- Tier 2 tool definitions --------------------------------------------
 
 fn goto_type_definition_tool_definition() -> Json {
@@ -884,6 +975,192 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
   ])
 }
 
+fn rename_preview_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("rename_preview")),
+    #(
+      "description",
+      json.string(
+        "Preview a rename refactor across the workspace. Wraps LSP "
+          <> "`textDocument/rename`. Returns a human-readable summary "
+          <> "of the proposed `WorkspaceEdit` listing every file and "
+          <> "every changed range. Pharos NEVER writes the changes — "
+          <> "review the summary, then apply with your own Edit tool "
+          <> "(or, future, `apply_workspace_edit`).",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of the source file containing the "
+                    <> "symbol to rename.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "line",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string("Zero-based line, per LSP spec."),
+                ),
+              ]),
+            ),
+            #(
+              "character",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string("Zero-based UTF-16 offset, per LSP spec."),
+                ),
+              ]),
+            ),
+            #(
+              "new_name",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string("New name to substitute at every site."),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.preprocessed_array([
+            json.string("uri"),
+            json.string("line"),
+            json.string("character"),
+            json.string("new_name"),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn format_document_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("format_document")),
+    #(
+      "description",
+      json.string(
+        "Run the LSP formatter against a single file. Wraps LSP "
+          <> "`textDocument/formatting`. Returns a summary of the "
+          <> "formatter's proposed edits. Pharos does not write the "
+          <> "changes — review and apply with your own Edit tool. "
+          <> "Formatting options use LSP defaults (tabSize=4, "
+          <> "insertSpaces=true); per-language overrides land in M9.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of the source file to format.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #("required", json.preprocessed_array([json.string("uri")])),
+      ]),
+    ),
+  ])
+}
+
+fn code_actions_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("code_actions")),
+    #(
+      "description",
+      json.string(
+        "List the LSP code actions (quick fixes, refactors, source "
+          <> "actions) available for a range. Wraps LSP "
+          <> "`textDocument/codeAction`. Returns the verbatim list of "
+          <> "`Command | CodeAction`. Each action's `title` describes "
+          <> "what it would do; CodeAction entries may carry an `edit` "
+          <> "(WorkspaceEdit) and/or a `command`. Pharos does not "
+          <> "execute commands or apply edits automatically.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string("file:// URI of the source file."),
+                ),
+              ]),
+            ),
+            #(
+              "start_line",
+              json.object([#("type", json.string("integer"))]),
+            ),
+            #(
+              "start_character",
+              json.object([#("type", json.string("integer"))]),
+            ),
+            #(
+              "end_line",
+              json.object([#("type", json.string("integer"))]),
+            ),
+            #(
+              "end_character",
+              json.object([#("type", json.string("integer"))]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.preprocessed_array([
+            json.string("uri"),
+            json.string("start_line"),
+            json.string("start_character"),
+            json.string("end_line"),
+            json.string("end_character"),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
 // -- Argument decoders --------------------------------------------------
 
 fn decode_position_arguments(
@@ -934,6 +1211,43 @@ fn decode_uri_only_arguments(
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) { "expected `uri: string`" })
+}
+
+fn decode_rename_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int, Int, String), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use line <- decode.field("line", decode.int)
+    use character <- decode.field("character", decode.int)
+    use new_name <- decode.field("new_name", decode.string)
+    decode.success(#(uri, line, character, new_name))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, `line: int`, `character: int`, "
+    <> "`new_name: string`"
+  })
+}
+
+fn decode_code_actions_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int, Int, Int, Int), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use sl <- decode.field("start_line", decode.int)
+    use sc <- decode.field("start_character", decode.int)
+    use el <- decode.field("end_line", decode.int)
+    use ec <- decode.field("end_character", decode.int)
+    decode.success(#(uri, sl, sc, el, ec))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, `start_line/start_character: int`, "
+    <> "`end_line/end_character: int`"
+  })
 }
 
 fn decode_workspace_symbols_arguments(

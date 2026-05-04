@@ -1,0 +1,111 @@
+//// MCP tool: `format_document`.
+////
+//// Wraps LSP `textDocument/formatting`. Returns the formatter's
+//// proposed edits as a rendered summary via
+//// `pharos/tools/workspace_edit`. Never writes to disk; the LLM
+//// reviews the edit and applies via its own Edit tool (or, in a
+//// future milestone, an `apply_workspace_edit` MCP tool).
+////
+//// Formatting options are LSP-spec defaults: `tabSize: 4`,
+//// `insertSpaces: true`. Per-language overrides land alongside
+//// the language-config polish in M9.
+
+import gleam/dynamic.{type Dynamic}
+import gleam/json
+import pharos/lsp/lifecycle
+import pharos/lsp/pool.{type Pool}
+import pharos/tools/tier1/session
+import pharos/tools/tier1/tool_helpers
+import pharos/tools/workspace_edit
+
+const default_timeout_ms: Int = 10_000
+
+pub type FormatDocumentError {
+  SessionFailed(reason: String)
+  RequestFailed(reason: String)
+  RenderFailed(reason: String)
+}
+
+pub fn handle(
+  pool: Pool,
+  file_uri: String,
+) -> Result(String, FormatDocumentError) {
+  case session.prepare(pool, file_uri) {
+    Error(err) -> Error(SessionFailed(describe_session_error(err)))
+    Ok(lsp) -> {
+      let params =
+        json.object([
+          #("textDocument", json.object([#("uri", json.string(file_uri))])),
+          #(
+            "options",
+            json.object([
+              #("tabSize", json.int(4)),
+              #("insertSpaces", json.bool(True)),
+            ]),
+          ),
+        ])
+
+      case
+        lifecycle.request(
+          lsp,
+          "textDocument/formatting",
+          params,
+          tool_helpers.next_id(),
+          default_timeout_ms,
+        )
+      {
+        Error(err) ->
+          Error(RequestFailed(tool_helpers.describe_request_error(err)))
+        Ok(#(_lsp, result_value)) -> render(file_uri, result_value)
+      }
+    }
+  }
+}
+
+/// Wrap the LSP-returned `TextEdit[]` (single-file edits) into a
+/// synthetic WorkspaceEdit `{changes: {<uri>: [...]}}` and render
+/// via the shared workspace_edit summary renderer.
+fn render(
+  file_uri: String,
+  edits_value: Dynamic,
+) -> Result(String, FormatDocumentError) {
+  let edits_text = tool_helpers.json_encode(edits_value)
+  let synthetic =
+    "{\"changes\":{\""
+    <> file_uri
+    <> "\":"
+    <> edits_text
+    <> "}}"
+
+  case json_parse_dynamic(synthetic) {
+    Error(reason) -> Error(RenderFailed(reason))
+    Ok(parsed) ->
+      case workspace_edit.render(parsed) {
+        Ok(rendered) -> Ok(rendered)
+        Error(workspace_edit.DecodeError(reason)) ->
+          Error(RenderFailed(reason))
+      }
+  }
+}
+
+@external(erlang, "json", "decode")
+fn raw_json_decode(text: BitArray) -> Dynamic
+
+fn json_parse_dynamic(text: String) -> Result(Dynamic, String) {
+  // Erlang's OTP 27+ `json` module exposes a decode/1 that yields a
+  // term we can hand back to Gleam as Dynamic. Wrapped so the rest
+  // of pharos stays on `gleam/json` for the typed encode path.
+  Ok(raw_json_decode(<<text:utf8>>))
+}
+
+fn describe_session_error(err: session.SessionError) -> String {
+  case err {
+    session.NotAFileUri(uri) -> "not a file:// URI: " <> uri
+    session.WorkspaceNotFound(uri) ->
+      "no workspace root marker found ascending from " <> uri
+    session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri
+    session.SpawnFailed(reason) -> "LSP spawn failed: " <> reason
+    session.HandshakeFailed(reason) ->
+      "LSP initialize handshake failed: " <> reason
+  }
+}
