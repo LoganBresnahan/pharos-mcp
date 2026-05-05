@@ -526,7 +526,14 @@ Stages (parallel where independent, sequential where dependent):
 - **`call_hierarchy` incoming/outgoing reachable only via `lsp_request_raw`.** Direct typed wrappers were deferred because pharos's `lifecycle.request` initially demanded typed `Json` params, with no clean passthrough for an arbitrary `Dynamic`. Stage 1C's `request_raw_params/5` removes that constraint; a thin typed wrapper around it for incoming/outgoing is now trivial — left for Stage 2.
 - **Tool errors logged to stderr globally** via `mcp/server.tool_text_result/2`. Any new failure mode added during Stage 0D / 0E / 1.x lands in this log automatically. Stage 2 reviews the log and decides which entries graduate to fixes vs documented limitations.
 
-### Milestone 9 — Polish
+### Milestone 9 — Polish + BEAM fault tolerance
+- Real supervisor tree (`pharos@supervisor` + `pharos/lsp/supervisor`); root one_for_one over pool subtree, sessions actor, transport subtree. See ADR-013 (forthcoming).
+- `lsp_proc` per-LSP worker module: owns the Erlang Port, hosts request id correlation, server-request handler dispatch, `$/progress` tracking, restart under `lsp_dyn_sup`.
+- Pool monitors each `lsp_proc` via `process.monitor`; auto-evicts cache on DOWN. Belt-and-suspenders with the supervisor's own restart policy.
+- Transparent retry-on-transport-error wrapper at the tool layer. Transient LSP crashes become invisible after one restart.
+- `$/cancelRequest` propagation: when the MCP client cancels (`notifications/cancelled`), forward to the LSP.
+- `PHAROS_HTTP_PORT=0` auto-assign — let the OS pick a free TCP port. Pharos logs the bound port to stderr via mist's `after_start` hook so headless callers can discover it without coordination.
+- Multi-root rust-analyzer workspace support (open question 5) — supply multiple `rootUri` to one server when files from sibling crates participate.
 - Config file format (TOML) for language registry
 - Sensible defaults bundled (rust-analyzer, gopls, etc. auto-detected if on PATH)
 - Structured logging with verbosity levels
