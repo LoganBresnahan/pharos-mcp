@@ -189,7 +189,14 @@ fn open_sse_stream(
 }
 
 type SseState {
-  SseState(sessions: Sessions, session_id: String)
+  SseState(
+    sessions: Sessions,
+    session_id: String,
+    /// The SSE actor's own Subject. mist hands it to us in `init`;
+    /// we hold it so the loop can re-arm the heartbeat timer after
+    /// each message via `process.send_after`.
+    self: process.Subject(sessions.SseMsg),
+  )
 }
 
 fn sse_init(
@@ -200,7 +207,7 @@ fn sse_init(
   let _ = sessions.attach_sse(sessions, session_id, self)
   log.info("SSE attached for session " <> session_id)
   schedule_heartbeat(self)
-  SseState(sessions: sessions, session_id: session_id)
+  SseState(sessions: sessions, session_id: session_id, self: self)
 }
 
 fn sse_loop(
@@ -263,14 +270,12 @@ fn schedule_heartbeat(self: process.Subject(sessions.SseMsg)) -> Nil {
   Nil
 }
 
-fn schedule_heartbeat_self(_state: SseState) -> Nil {
-  // No-op placeholder: the SSE actor's Subject is captured in init
-  // and reused via the next message arriving. Re-arming a heartbeat
-  // requires the Subject; a future refactor stores it in SseState.
-  // For now the initial heartbeat schedule is the only one — long-
-  // running clients will see only one heartbeat. Acceptable for
-  // dogfood; revisit alongside Stage 2 reliability sweep.
-  Nil
+fn schedule_heartbeat_self(state: SseState) -> Nil {
+  // Stage 2 #7. SseState.self is the SSE actor's own Subject; use it
+  // to schedule the next heartbeat one window from now. Each message
+  // (Push, Heartbeat, …) ends by calling this so heartbeats keep
+  // firing as long as the connection is alive.
+  schedule_heartbeat(state.self)
 }
 
 // Lift a bytes_tree to a string_tree because mist.event takes the
