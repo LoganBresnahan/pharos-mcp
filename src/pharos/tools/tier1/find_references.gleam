@@ -23,6 +23,7 @@
 //// past wait_for_ready's idle-bail threshold). Keep it available for
 //// future use; rely on the retry path here.
 
+import gleam/dynamic
 import gleam/erlang/process
 import gleam/json
 import pharos/lsp/proc.{type Proc}
@@ -50,12 +51,17 @@ pub fn handle(
   include_declaration: Bool,
   timeout_ms: Int,
 ) -> Result(String, FindReferencesError) {
-  case session.prepare(pool, file_uri) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params = build_params(file_uri, line, character, include_declaration)
+  let params = build_params(file_uri, line, character, include_declaration)
+  case
+    session.with_session_and_retry(pool, file_uri, fn(lsp) {
       attempt(lsp, params, timeout_ms, retries_left: 1)
-    }
+    })
+  {
+    Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 
@@ -91,9 +97,9 @@ fn attempt(
   params: json.Json,
   timeout_ms: Int,
   retries_left retries_left: Int,
-) -> Result(String, FindReferencesError) {
+) -> Result(dynamic.Dynamic, lifecycle.RequestError) {
   case proc.request(lsp, "textDocument/references", params, timeout_ms) {
-    Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
+    Ok(result_value) -> Ok(result_value)
 
     Error(lifecycle.ServerError(code, _message))
       if code == content_modified_code && retries_left > 0
@@ -105,8 +111,7 @@ fn attempt(
       attempt(lsp, params, timeout_ms, retries_left: retries_left - 1)
     }
 
-    Error(err) ->
-      Error(RequestFailed(tool_helpers.describe_request_error(err)))
+    Error(err) -> Error(err)
   }
 }
 

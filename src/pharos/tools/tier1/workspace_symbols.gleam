@@ -32,31 +32,32 @@ pub fn handle(
   query: String,
   limit: Int,
 ) -> Result(String, WorkspaceSymbolsError) {
-  case session.prepare_workspace(pool, workspace_uri_hint) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params = json.object([#("query", json.string(query))])
+  let params = json.object([#("query", json.string(query))])
 
-      case proc.request(lsp, "workspace/symbol", params, default_timeout_ms) {
-        Error(err) ->
-          Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(result_value) -> {
-          let clipped = clip.clip_array(result_value, limit)
-          case clipped.truncated_by {
-            0 -> Ok(clipped.json_text)
-            n ->
-              Ok(
-                clipped.json_text
-                <> "\n\n(truncated "
-                <> int.to_string(n)
-                <> " more symbol(s); pass `limit` to raise. gopls "
-                <> "in particular fuzzy-matches across the Go stdlib "
-                <> "and can flood the result.)",
-              )
-          }
-        }
+  case
+    session.with_workspace_session_and_retry(pool, workspace_uri_hint, fn(lsp) {
+      proc.request(lsp, "workspace/symbol", params, default_timeout_ms)
+    })
+  {
+    Ok(result_value) -> {
+      let clipped = clip.clip_array(result_value, limit)
+      case clipped.truncated_by {
+        0 -> Ok(clipped.json_text)
+        n ->
+          Ok(
+            clipped.json_text
+            <> "\n\n(truncated "
+            <> int.to_string(n)
+            <> " more symbol(s); pass `limit` to raise. gopls "
+            <> "in particular fuzzy-matches across the Go stdlib "
+            <> "and can flood the result.)",
+          )
       }
     }
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 

@@ -44,56 +44,50 @@ pub fn handle(
   character: Int,
   new_name: String,
 ) -> Result(String, RenamePreviewError) {
-  case session.prepare(pool, file_uri) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params =
+  let params =
+    json.object([
+      #("textDocument", json.object([#("uri", json.string(file_uri))])),
+      #(
+        "position",
         json.object([
-          #("textDocument", json.object([#("uri", json.string(file_uri))])),
-          #(
-            "position",
-            json.object([
-              #("line", json.int(line)),
-              #("character", json.int(character)),
-            ]),
-          ),
-          #("newName", json.string(new_name)),
-        ])
+          #("line", json.int(line)),
+          #("character", json.int(character)),
+        ]),
+      ),
+      #("newName", json.string(new_name)),
+    ])
 
-      let captured = process.new_subject()
-      let capture_handler = fn(_id, applied_params) {
-        process.send(captured, applied_params)
-        server_request_handlers.Reply(applied_ok_json())
+  let captured = process.new_subject()
+  let capture_handler = fn(_id, applied_params) {
+    process.send(captured, applied_params)
+    server_request_handlers.Reply(applied_ok_json())
+  }
+
+  let request_result =
+    session.with_session_and_retry(pool, file_uri, fn(lsp) {
+      proc.with_handler(
+        lsp,
+        "workspace/applyEdit",
+        capture_handler,
+        fn() {
+          proc.request(lsp, "textDocument/rename", params, default_timeout_ms)
+        },
+      )
+    })
+
+  // Prefer the applyEdit-captured edit over the request result.
+  // If neither route produced anything decodable, surface the
+  // request error or an empty-edit summary.
+  case process.receive(captured, 0) {
+    Ok(applied_params) -> render_apply_edit_params(applied_params)
+    Error(_) ->
+      case request_result {
+        Ok(result_value) -> render_workspace_edit(result_value)
+        Error(session.RetrySessionError(err)) ->
+          Error(SessionFailed(describe_session_error(err)))
+        Error(session.RetryRequestError(err)) ->
+          Error(RequestFailed(tool_helpers.describe_request_error(err)))
       }
-
-      let request_result =
-        proc.with_handler(
-          lsp,
-          "workspace/applyEdit",
-          capture_handler,
-          fn() {
-            proc.request(
-              lsp,
-              "textDocument/rename",
-              params,
-              default_timeout_ms,
-            )
-          },
-        )
-
-      // Prefer the applyEdit-captured edit over the request result.
-      // If neither route produced anything decodable, surface the
-      // request error or an empty-edit summary.
-      case process.receive(captured, 0) {
-        Ok(applied_params) -> render_apply_edit_params(applied_params)
-        Error(_) ->
-          case request_result {
-            Error(err) ->
-              Error(RequestFailed(tool_helpers.describe_request_error(err)))
-            Ok(result_value) -> render_workspace_edit(result_value)
-          }
-      }
-    }
   }
 }
 

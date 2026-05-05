@@ -31,29 +31,28 @@ pub fn handle(
   file_uri: String,
   timeout_ms: Int,
 ) -> Result(String, FormatDocumentError) {
-  case session.prepare(pool, file_uri) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params =
+  let params =
+    json.object([
+      #("textDocument", json.object([#("uri", json.string(file_uri))])),
+      #(
+        "options",
         json.object([
-          #("textDocument", json.object([#("uri", json.string(file_uri))])),
-          #(
-            "options",
-            json.object([
-              #("tabSize", json.int(4)),
-              #("insertSpaces", json.bool(True)),
-            ]),
-          ),
-        ])
+          #("tabSize", json.int(4)),
+          #("insertSpaces", json.bool(True)),
+        ]),
+      ),
+    ])
 
-      case
-        proc.request(lsp, "textDocument/formatting", params, timeout_ms)
-      {
-        Error(err) ->
-          Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(result_value) -> render(file_uri, result_value)
-      }
-    }
+  case
+    session.with_session_and_retry(pool, file_uri, fn(lsp) {
+      proc.request(lsp, "textDocument/formatting", params, timeout_ms)
+    })
+  {
+    Ok(result_value) -> render(file_uri, result_value)
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 

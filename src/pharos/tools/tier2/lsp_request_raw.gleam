@@ -37,17 +37,18 @@ pub fn handle(
   method: String,
   params: Dynamic,
 ) -> Result(String, LspRequestRawError) {
-  case session.prepare(pool, file_uri) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params_json = tool_helpers.json_encode(params)
+  let params_json = tool_helpers.json_encode(params)
 
-      case proc.request_raw(lsp, method, params_json, default_timeout_ms) {
-        Error(err) ->
-          Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
-      }
-    }
+  case
+    session.with_session_and_retry(pool, file_uri, fn(lsp) {
+      proc.request_raw(lsp, method, params_json, default_timeout_ms)
+    })
+  {
+    Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 

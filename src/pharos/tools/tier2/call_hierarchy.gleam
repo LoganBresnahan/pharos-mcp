@@ -37,34 +37,33 @@ pub fn prepare(
   line: Int,
   character: Int,
 ) -> Result(String, CallHierarchyError) {
-  case session.prepare(pool, file_uri) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params =
+  let params =
+    json.object([
+      #("textDocument", json.object([#("uri", json.string(file_uri))])),
+      #(
+        "position",
         json.object([
-          #("textDocument", json.object([#("uri", json.string(file_uri))])),
-          #(
-            "position",
-            json.object([
-              #("line", json.int(line)),
-              #("character", json.int(character)),
-            ]),
-          ),
-        ])
+          #("line", json.int(line)),
+          #("character", json.int(character)),
+        ]),
+      ),
+    ])
 
-      case
-        proc.request(
-          lsp,
-          "textDocument/prepareCallHierarchy",
-          params,
-          default_timeout_ms,
-        )
-      {
-        Error(err) ->
-          Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
-      }
-    }
+  case
+    session.with_session_and_retry(pool, file_uri, fn(lsp) {
+      proc.request(
+        lsp,
+        "textDocument/prepareCallHierarchy",
+        params,
+        default_timeout_ms,
+      )
+    })
+  {
+    Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 
@@ -93,22 +92,24 @@ fn call_with_item(
         "call hierarchy item missing or non-string `uri` field",
       ))
 
-    Ok(file_uri) ->
-      case session.prepare(pool, file_uri) {
-        Error(err) -> Error(SessionFailed(describe_session_error(err)))
-        Ok(lsp) -> {
-          // Build params text manually: {"item": <verbatim item>}.
-          // tool_helpers.json_encode round-trips the Dynamic to JSON.
-          let params_text =
-            "{\"item\":" <> tool_helpers.json_encode(item) <> "}"
+    Ok(file_uri) -> {
+      // Build params text manually: {"item": <verbatim item>}.
+      // tool_helpers.json_encode round-trips the Dynamic to JSON.
+      let params_text =
+        "{\"item\":" <> tool_helpers.json_encode(item) <> "}"
 
-          case proc.request_raw(lsp, method, params_text, default_timeout_ms) {
-            Error(err) ->
-              Error(RequestFailed(tool_helpers.describe_request_error(err)))
-            Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
-          }
-        }
+      case
+        session.with_session_and_retry(pool, file_uri, fn(lsp) {
+          proc.request_raw(lsp, method, params_text, default_timeout_ms)
+        })
+      {
+        Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
+        Error(session.RetrySessionError(err)) ->
+          Error(SessionFailed(describe_session_error(err)))
+        Error(session.RetryRequestError(err)) ->
+          Error(RequestFailed(tool_helpers.describe_request_error(err)))
       }
+    }
   }
 }
 

@@ -23,25 +23,21 @@ pub fn handle(
   pool: Pool,
   file_uri: String,
 ) -> Result(String, DocumentSymbolsError) {
-  case session.prepare(pool, file_uri) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params =
-        json.object([
-          #(
-            "textDocument",
-            json.object([#("uri", json.string(file_uri))]),
-          ),
-        ])
+  let params =
+    json.object([
+      #("textDocument", json.object([#("uri", json.string(file_uri))])),
+    ])
 
-      case
-        proc.request(lsp, "textDocument/documentSymbol", params, default_timeout_ms)
-      {
-        Error(err) ->
-          Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
-      }
-    }
+  case
+    session.with_session_and_retry(pool, file_uri, fn(lsp) {
+      proc.request(lsp, "textDocument/documentSymbol", params, default_timeout_ms)
+    })
+  {
+    Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 

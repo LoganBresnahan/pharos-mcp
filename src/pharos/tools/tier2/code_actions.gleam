@@ -37,50 +37,49 @@ pub fn handle(
   end_line: Int,
   end_character: Int,
 ) -> Result(String, CodeActionsError) {
-  case session.prepare(pool, file_uri) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params =
+  let params =
+    json.object([
+      #("textDocument", json.object([#("uri", json.string(file_uri))])),
+      #(
+        "range",
         json.object([
-          #("textDocument", json.object([#("uri", json.string(file_uri))])),
           #(
-            "range",
+            "start",
             json.object([
-              #(
-                "start",
-                json.object([
-                  #("line", json.int(start_line)),
-                  #("character", json.int(start_character)),
-                ]),
-              ),
-              #(
-                "end",
-                json.object([
-                  #("line", json.int(end_line)),
-                  #("character", json.int(end_character)),
-                ]),
-              ),
+              #("line", json.int(start_line)),
+              #("character", json.int(start_character)),
             ]),
           ),
-          // Empty `context.diagnostics` is the safe default — servers
-          // return all available actions for the range. Tools that
-          // want quick-fix-only behavior can pass diagnostics later.
           #(
-            "context",
+            "end",
             json.object([
-              #("diagnostics", json.preprocessed_array([])),
+              #("line", json.int(end_line)),
+              #("character", json.int(end_character)),
             ]),
           ),
-        ])
+        ]),
+      ),
+      // Empty `context.diagnostics` is the safe default — servers
+      // return all available actions for the range. Tools that
+      // want quick-fix-only behavior can pass diagnostics later.
+      #(
+        "context",
+        json.object([
+          #("diagnostics", json.preprocessed_array([])),
+        ]),
+      ),
+    ])
 
-      case
-        proc.request(lsp, "textDocument/codeAction", params, default_timeout_ms)
-      {
-        Error(err) ->
-          Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
-      }
-    }
+  case
+    session.with_session_and_retry(pool, file_uri, fn(lsp) {
+      proc.request(lsp, "textDocument/codeAction", params, default_timeout_ms)
+    })
+  {
+    Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 

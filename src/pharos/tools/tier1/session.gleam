@@ -18,7 +18,9 @@
 import gleam/bit_array
 import gleam/json
 import gleam/result
+import pharos/log
 import pharos/lsp/languages.{type LanguageConfig}
+import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc.{type Proc}
 import pharos/workspace_root
@@ -29,6 +31,135 @@ pub type SessionError {
   UnsupportedFileType(uri: String)
   SpawnFailed(reason: String)
   HandshakeFailed(reason: String)
+}
+
+pub type RetryError {
+  RetrySessionError(SessionError)
+  RetryRequestError(lifecycle.RequestError)
+}
+
+/// Run `body` against a freshly-prepared Proc, and on a transport-
+/// error result evict the pool cache entry and retry once with a
+/// brand-new Proc. Other error shapes (session prep failure,
+/// server-error response, decode failure) propagate immediately.
+///
+/// This is the M9 transparent-retry surface: a transient LSP crash
+/// that surfaces as `lifecycle.ClientFailure` (Port closed, send
+/// failed) becomes invisible to the LLM after one auto-respawn.
+/// Repeated transport errors after retry surface so the LLM can
+/// route around the broken language.
+pub fn with_session_and_retry(
+  pool: Pool,
+  file_uri: String,
+  body: fn(Proc) -> Result(a, lifecycle.RequestError),
+) -> Result(a, RetryError) {
+  case prepare(pool, file_uri) {
+    Error(err) -> Error(RetrySessionError(err))
+    Ok(lsp) ->
+      case body(lsp) {
+        Ok(value) -> Ok(value)
+        Error(lifecycle.ClientFailure(reason)) -> {
+          log.warn_at(
+            "pharos/tools/tier1/session",
+            "transport error; evicting and retrying once",
+          )
+          let _ = reason
+          retry_after_evict(pool, file_uri, body)
+        }
+        Error(other) -> Error(RetryRequestError(other))
+      }
+  }
+}
+
+fn retry_after_evict(
+  pool: Pool,
+  file_uri: String,
+  body: fn(Proc) -> Result(a, lifecycle.RequestError),
+) -> Result(a, RetryError) {
+  case lookup_config(file_uri) {
+    Error(err) -> Error(RetrySessionError(err))
+    Ok(config) ->
+      case discover_workspace(file_uri, config.root_markers) {
+        Error(err) -> Error(RetrySessionError(err))
+        Ok(workspace) -> {
+          pool.evict(pool, config.id, workspace)
+          case prepare(pool, file_uri) {
+            Error(err) -> Error(RetrySessionError(err))
+            Ok(lsp) ->
+              case body(lsp) {
+                Ok(value) -> Ok(value)
+                Error(other) -> Error(RetryRequestError(other))
+              }
+          }
+        }
+      }
+  }
+}
+
+/// Render a `RetryError` as a string the tool layer can pass to
+/// `tool_text_result(_, isError=True)`. Callers that need the
+/// underlying variants (e.g. to fold into their own error enum)
+/// can pattern-match the `RetryError` directly.
+pub fn describe_retry_error(
+  err: RetryError,
+  describe_session: fn(SessionError) -> String,
+  describe_request: fn(lifecycle.RequestError) -> String,
+) -> String {
+  case err {
+    RetrySessionError(s) -> describe_session(s)
+    RetryRequestError(r) -> describe_request(r)
+  }
+}
+
+/// Workspace-wide variant of `with_session_and_retry`: uses
+/// `prepare_workspace` instead of `prepare` (no didOpen state) and
+/// otherwise behaves identically — one transparent retry on
+/// `lifecycle.ClientFailure`.
+pub fn with_workspace_session_and_retry(
+  pool: Pool,
+  workspace_uri_hint: String,
+  body: fn(Proc) -> Result(a, lifecycle.RequestError),
+) -> Result(a, RetryError) {
+  case prepare_workspace(pool, workspace_uri_hint) {
+    Error(err) -> Error(RetrySessionError(err))
+    Ok(lsp) ->
+      case body(lsp) {
+        Ok(value) -> Ok(value)
+        Error(lifecycle.ClientFailure(_)) -> {
+          log.warn_at(
+            "pharos/tools/tier1/session",
+            "workspace transport error; evicting and retrying once",
+          )
+          retry_workspace_after_evict(pool, workspace_uri_hint, body)
+        }
+        Error(other) -> Error(RetryRequestError(other))
+      }
+  }
+}
+
+fn retry_workspace_after_evict(
+  pool: Pool,
+  workspace_uri_hint: String,
+  body: fn(Proc) -> Result(a, lifecycle.RequestError),
+) -> Result(a, RetryError) {
+  case lookup_config(workspace_uri_hint) {
+    Error(err) -> Error(RetrySessionError(err))
+    Ok(config) ->
+      case discover_workspace(workspace_uri_hint, config.root_markers) {
+        Error(err) -> Error(RetrySessionError(err))
+        Ok(workspace) -> {
+          pool.evict(pool, config.id, workspace)
+          case prepare_workspace(pool, workspace_uri_hint) {
+            Error(err) -> Error(RetrySessionError(err))
+            Ok(lsp) ->
+              case body(lsp) {
+                Ok(value) -> Ok(value)
+                Error(other) -> Error(RetryRequestError(other))
+              }
+          }
+        }
+      }
+  }
 }
 
 /// Prepare a Proc for tools that operate on a single file. Looks

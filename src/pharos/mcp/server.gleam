@@ -109,7 +109,10 @@ fn dispatch(pool: Pool, message: Message) -> DispatchResult {
     }
 
     NotificationMessage("initialized", _) -> NoReply
-    NotificationMessage("notifications/cancelled", _) -> NoReply
+    NotificationMessage("notifications/cancelled", params) -> {
+      log_cancel_notification(params)
+      NoReply
+    }
     NotificationMessage(_, _) -> NoReply
   }
 }
@@ -119,6 +122,53 @@ fn id_to_text(id: Id) -> String {
     IntId(n) -> int.to_string(n)
     StringId(s) -> s
   }
+}
+
+/// Log MCP-host-initiated cancellations for visibility. Full
+/// in-flight propagation (route to the matching proc, send
+/// `$/cancelRequest`) requires async dispatch — currently each
+/// `tools/call` blocks the stdio reader until the LSP responds, so
+/// a `notifications/cancelled` arriving on the same stream cannot
+/// be acted on until after the request it cancels is already done.
+/// HTTP transport handles requests on per-connection processes so
+/// the cancellation can be acted on; that wiring lands alongside
+/// the in-flight tracking table in a follow-up. For now the log
+/// line surfaces the intent so dogfood can spot whether clients
+/// actually use it.
+fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
+  let id_text = case params {
+    None -> "<no params>"
+    Some(raw) ->
+      case decode.run(raw, cancel_id_decoder()) {
+        Ok(text) -> text
+        Error(_) -> "<unparseable>"
+      }
+  }
+  log.info_at(
+    "pharos/mcp/server",
+    "notifications/cancelled received for id=" <> id_text
+      <> " (best-effort; full propagation pending async dispatch)",
+  )
+}
+
+fn cancel_id_decoder() -> decode.Decoder(String) {
+  let int_request = {
+    use n <- decode.field("requestId", decode.int)
+    decode.success(int.to_string(n))
+  }
+  let string_request = {
+    use s <- decode.field("requestId", decode.string)
+    decode.success(s)
+  }
+  let int_id = {
+    use n <- decode.field("id", decode.int)
+    decode.success(int.to_string(n))
+  }
+  let string_id = {
+    use s <- decode.field("id", decode.string)
+    decode.success(s)
+  }
+  decode.one_of(int_request, [string_request, int_id, string_id])
 }
 
 // -- initialize ----------------------------------------------------------

@@ -29,12 +29,21 @@
     trace_calls/4,
     trace_calls_clear/0,
     wildcard/0,
-    int_to_dynamic/1
+    int_to_dynamic/1,
+    as_dynamic/1
 ]).
 
 %% Identity for an integer — used by Gleam's tier4 module to pass
 %% integer arity through `Dynamic` typed parameters into recon.
 int_to_dynamic(N) when is_integer(N) -> N.
+
+%% Type-erasing identity. Returns the term verbatim so Gleam can
+%% widen any value to `Dynamic` without copy or coercion. Used by
+%% pool's monitor selector which must hand an `ExitReason` (opaque
+%% enum) into a `dynamic.Dynamic` field. `int_to_dynamic` was the
+%% original target but its `is_integer` guard made it crash for
+%% non-integer values.
+as_dynamic(Term) -> Term.
 
 %% Atom `'_'` as a Dynamic, for use in trace patterns. Cheaper than
 %% threading the literal through Gleam's Dynamic constructors.

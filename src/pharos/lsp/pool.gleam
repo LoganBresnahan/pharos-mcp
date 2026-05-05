@@ -115,12 +115,52 @@ const default_call_timeout_ms: Int = 60_000
 
 /// Spawn the pool. Returns a handle the rest of the program shares
 /// for `get/4`, `evict/3`, and `close_all/1`.
+///
+/// The actor is built via `new_with_initialiser` so the selector
+/// can be extended with `select_monitors`, routing Erlang `DOWN`
+/// messages from `process.monitor/1` (set in `handle_get` for each
+/// spawned proc) into the `ProcDown` variant. Without this hook
+/// gleam_otp's outer loop discards DOWN messages as "unexpected"
+/// and the cache never auto-evicts.
 pub fn start() -> Result(Pool, StartError) {
-  actor.new(State(cache: dict.new(), monitors: dict.new(), opened: set.new()))
+  let initialise = fn(self) {
+    let selector =
+      process.new_selector()
+      |> process.select(self)
+      |> process.select_monitors(fn(down) {
+        case down {
+          process.ProcessDown(monitor: m, reason: r, ..) ->
+            ProcDown(monitor_ref: m, reason: process_reason_as_dynamic(r))
+          process.PortDown(monitor: m, reason: r, ..) ->
+            ProcDown(monitor_ref: m, reason: process_reason_as_dynamic(r))
+        }
+      })
+    Ok(
+      actor.initialised(State(
+        cache: dict.new(),
+        monitors: dict.new(),
+        opened: set.new(),
+      ))
+      |> actor.selecting(selector)
+      |> actor.returning(self),
+    )
+  }
+
+  actor.new_with_initialiser(default_call_timeout_ms, initialise)
   |> actor.on_message(handle_message)
   |> actor.start()
   |> result.map(fn(started) { Pool(subject: started.data) })
   |> result.map_error(StartFailedActor)
+}
+
+@external(erlang, "pharos_runtime_ffi", "as_dynamic")
+fn coerce_to_dynamic(x: a) -> dynamic.Dynamic
+
+fn process_reason_as_dynamic(reason: process.ExitReason) -> dynamic.Dynamic {
+  // ExitReason is an opaque enum; coerce its term verbatim into
+  // Dynamic so the existing ProcDown logging path can format it
+  // without caring about the variant shape.
+  coerce_to_dynamic(reason)
 }
 
 /// Fetch a `Proc` for the given language and workspace, spawning a

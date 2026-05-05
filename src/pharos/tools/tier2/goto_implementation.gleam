@@ -31,41 +31,40 @@ pub fn handle(
   character: Int,
   limit: Int,
 ) -> Result(String, GotoImplementationError) {
-  case session.prepare(pool, file_uri) {
-    Error(err) -> Error(SessionFailed(describe_session_error(err)))
-    Ok(lsp) -> {
-      let params =
+  let params =
+    json.object([
+      #("textDocument", json.object([#("uri", json.string(file_uri))])),
+      #(
+        "position",
         json.object([
-          #("textDocument", json.object([#("uri", json.string(file_uri))])),
-          #(
-            "position",
-            json.object([
-              #("line", json.int(line)),
-              #("character", json.int(character)),
-            ]),
-          ),
-        ])
+          #("line", json.int(line)),
+          #("character", json.int(character)),
+        ]),
+      ),
+    ])
 
-      case
-        proc.request(lsp, "textDocument/implementation", params, default_timeout_ms)
-      {
-        Error(err) ->
-          Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(result_value) -> {
-          let clipped = clip.clip_array(result_value, limit)
-          case clipped.truncated_by {
-            0 -> Ok(clipped.json_text)
-            n ->
-              Ok(
-                clipped.json_text
-                <> "\n\n(truncated "
-                <> int.to_string(n)
-                <> " more implementation site(s); pass `limit` to raise)",
-              )
-          }
-        }
+  case
+    session.with_session_and_retry(pool, file_uri, fn(lsp) {
+      proc.request(lsp, "textDocument/implementation", params, default_timeout_ms)
+    })
+  {
+    Ok(result_value) -> {
+      let clipped = clip.clip_array(result_value, limit)
+      case clipped.truncated_by {
+        0 -> Ok(clipped.json_text)
+        n ->
+          Ok(
+            clipped.json_text
+            <> "\n\n(truncated "
+            <> int.to_string(n)
+            <> " more implementation site(s); pass `limit` to raise)",
+          )
       }
     }
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 
