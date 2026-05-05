@@ -550,9 +550,42 @@ Tool errors continue to log to stderr globally via `mcp/server.tool_text_result/
 - Structured logging with verbosity levels
 - Telemetry events (opt-in)
 
-### Milestone 9.5 — BEAM runtime introspection tools (Tier 4)
+### Milestone 9.5 — BEAM runtime introspection + structured logging/tracing
 
-Expose BEAM observer-equivalent state as MCP tools so the LLM can debug pharos itself without leaving the chat surface. Pattern matches existing tools: typed Gleam wrappers over `:erlang.*` / `:ets.*` BIFs, registered-name-first to avoid raw-pid leak across restarts, output clipped via the existing `pharos/tools/clip` helper.
+Two related layers landing together because the runtime introspection tools depend on the logging layer's ring buffer for `runtime_log_tail`.
+
+#### Part A — Structured logging + sinks
+
+Replace `pharos/log.gleam`'s `io.println_error` wrappers with a real logger:
+
+- `Level = Debug | Info | Warn | Error`
+- `log(level, msg, fields: List(#(String, String)))` — `fields` are key=value pairs for filtering and human reading
+- Per-tool-call **correlation id** (the MCP request id) threaded through every log line emitted during that call's flow, so `runtime_log_tail` filtered by id reconstructs one tool's conversation
+- `RUST_LOG`-style env-var filter: `PHAROS_LOG=info,pharos/lsp/proc=debug,pharos/lsp/trace=off`. Default `info`.
+
+Sinks (configurable, fan-out via one ETS-backed broadcaster):
+
+- `:stderr` (default; what we have today)
+- `:ring_buffer` — bounded in-memory deque (default 1000 lines, ~256kb cap) feeding `runtime_log_tail`
+- `:file` — rotating file at `~/.cache/pharos/log/pharos-<date>.log`, size-rotated at 10MB, kept for 7 days
+- `:both` — fan out to multiple sinks
+
+Implementation: one Gleam log-writer actor receives `LogEntry` messages and forwards to each registered sink. Existing `log.info / log.warn / log.error` calls keep their shapes (back-compat); new `log.with_fields(level, msg, fields)` for richer entries.
+
+#### Part B — LSP traffic tracer
+
+`pharos/lsp/trace.gleam` wraps `port.send` and `port.receive_data` with a debug-level log line per direction:
+
+- `direction=out|in`, `bytes=N`, `body=<full|truncated>`
+- Off by default (filter excludes `pharos/lsp/trace`)
+- Toggle on via `PHAROS_TRACE_LSP=1` env var globally, OR per-language via a `trace: Bool` field in `LanguageConfig`, OR runtime via `runtime_trace_lsp` MCP tool (Part C below)
+- Sensitive-data caveat: traces capture file content of in-buffer documents; redaction is hard, document expectation that traces are dev-only
+
+This is the layer landing first to diagnose the M9 Phase B gopls regression — see exactly what bytes flow each direction during the failing handshake/request.
+
+#### Part C — MCP tools exposing all of the above (Tier 4)
+
+BEAM observer-equivalent state as MCP tools so the LLM can debug pharos itself without leaving the chat surface. Pattern matches existing tools: typed Gleam wrappers over `:erlang.*` / `:ets.*` BIFs, registered-name-first to avoid raw-pid leak across restarts, output clipped via the existing `pharos/tools/clip` helper.
 
 Read-only first batch:
 - `runtime_processes` — `[{pid, registered_name, current_function, message_queue_len, memory}]` clipped to N
@@ -562,7 +595,12 @@ Read-only first batch:
 - `runtime_applications` — `application:which_applications()`
 - `runtime_scheduler_util` — `scheduler:utilization(1)` snapshot
 - `runtime_pid_info(pid_text)` — full `process_info/1` for a single pid
-- `runtime_log_tail(n)` — last N stderr lines (needs a ring-buffer hook in `pharos/log`)
+
+Logging + tracing tools (depend on Part A's ring buffer + Part B's tracer):
+- `runtime_log_tail(n, filter?)` — read last N lines from the ring buffer, optional substring filter
+- `runtime_log_clear` — reset ring buffer
+- `runtime_log_level(target, level)` — runtime-adjust verbosity (e.g. crank `pharos/lsp/proc` to debug for the duration of a debugging session)
+- `runtime_trace_lsp(language, duration_ms)` — turn the tracer on for one LSP for a fixed window, return the captured trace lines
 
 Write-ish (gated behind env var or per-call confirmation):
 - `runtime_trace_module(module, duration_ms)` — `:dbg.tracer` + `:dbg.tpl` for a window, return collected calls
@@ -573,6 +611,8 @@ Risks captured in a forthcoming ADR:
 - Output volume on busy nodes (clip at 100 processes default, raise via `limit`)
 - Distributed-Erlang multi-node observer is out of scope (pharos is single-node)
 - Trace hooks have side effects on scheduler; document timeouts + auto-stop
+- Correlation id propagation across actors requires threading through `proc.request`'s call chain — small refactor lands alongside Part A
+- Ring buffer is volatile (lost on BEAM exit); the file sink is the persistent one for post-mortem
 
 ### Milestone 10 — Public distribution
 - Multi-target Burrito matrix (linux_x64, linux_arm64, darwin_x64, darwin_arm64, win_x64)
