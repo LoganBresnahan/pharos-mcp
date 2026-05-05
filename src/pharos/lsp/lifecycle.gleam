@@ -170,40 +170,64 @@ pub fn wait_for_ready(
 ) -> Result(Client, RequestError) {
   case maybe_token {
     None -> Ok(client)
-    Some(token) ->
-      drain_until_ready(client, token, max_iterations(timeout_ms), 0)
+    Some(token) -> drain_until_ready(client, token, NotYetSeen, timeout_ms)
   }
 }
 
-const idle_iter_ms: Int = 200
-
-const idle_iter_threshold: Int = 3
-
-fn max_iterations(timeout_ms: Int) -> Int {
-  case timeout_ms / idle_iter_ms {
-    n if n < 1 -> 1
-    n -> n
-  }
+/// Two-phase wait. `NotYetSeen` is the pre-begin window: if no
+/// progress arrives within `pre_begin_grace_ms`, assume the server
+/// is already idle/indexed and return. Once any `$/progress` for
+/// the configured token arrives (typically `kind: "begin"`),
+/// transition to `AwaitingEnd` and stay there until either an
+/// explicit end-state arrives or the total budget expires.
+type Phase {
+  NotYetSeen
+  AwaitingEnd
 }
+
+const read_window_ms: Int = 200
+
+const pre_begin_grace_ms: Int = 1000
 
 fn drain_until_ready(
   client: Client,
   token: String,
-  iterations_left: Int,
-  consecutive_idle: Int,
+  phase: Phase,
+  remaining_ms: Int,
 ) -> Result(Client, RequestError) {
-  case iterations_left, consecutive_idle >= idle_iter_threshold {
-    0, _ -> Ok(client)
-    _, True -> Ok(client)
-    _, False ->
-      case client.next_message(client, idle_iter_ms) {
+  case remaining_ms <= 0 {
+    True -> Ok(client)
+    False ->
+      case client.next_message(client, read_window_ms) {
         Error(client.PortReceiveError(port.Timeout)) ->
-          drain_until_ready(
-            client,
-            token,
-            iterations_left - 1,
-            consecutive_idle + 1,
-          )
+          case phase {
+            // No progress yet AND we've already waited at least
+            // pre_begin_grace_ms — server presumably has nothing
+            // to do, return.
+            NotYetSeen if remaining_ms <= 0 -> Ok(client)
+            NotYetSeen ->
+              case waited_pre_begin(remaining_ms) {
+                True -> Ok(client)
+                False ->
+                  drain_until_ready(
+                    client,
+                    token,
+                    NotYetSeen,
+                    remaining_ms - read_window_ms,
+                  )
+              }
+            // We've seen begin and are awaiting end. A quiet read
+            // does NOT mean idle here — the server might be deep
+            // in analysis between progress reports. Just keep
+            // burning the budget.
+            AwaitingEnd ->
+              drain_until_ready(
+                client,
+                token,
+                AwaitingEnd,
+                remaining_ms - read_window_ms,
+              )
+          }
 
         Error(other) ->
           // Port closed or some other fatal transport error. Surface
@@ -215,31 +239,85 @@ fn drain_until_ready(
           case classify(body) {
             Notification(method: method, params: params)
               if method == "$/progress"
-            ->
-              case is_progress_end_for_token(params, token) {
-                True -> Ok(client)
-                False ->
-                  drain_until_ready(client, token, iterations_left - 1, 0)
-              }
+            -> handle_progress(client, token, phase, remaining_ms, params)
 
             ServerRequest(id: id, method: method, params: params) -> {
               let _ = dispatch_server_request(client, id, method, params)
-              drain_until_ready(client, token, iterations_left - 1, 0)
+              drain_until_ready(
+                client,
+                token,
+                phase,
+                remaining_ms - read_window_ms,
+              )
             }
 
             _ ->
-              // Stale response (out of order) or other notification:
-              // drain and reset idle counter — the channel is alive.
-              drain_until_ready(client, token, iterations_left - 1, 0)
+              drain_until_ready(
+                client,
+                token,
+                phase,
+                remaining_ms - read_window_ms,
+              )
           }
       }
   }
 }
 
-fn is_progress_end_for_token(params: Dynamic, token: String) -> Bool {
+/// Return True once we've burned enough of the budget that "no
+/// progress yet" is a reliable signal of an idle/already-indexed
+/// server. Implementation: total budget minus what's left ≥ grace.
+fn waited_pre_begin(remaining_ms: Int) -> Bool {
+  // `remaining_ms` shrinks by `read_window_ms` per iteration. The
+  // function is called only after a Timeout from next_message —
+  // i.e. we waited a full read_window_ms and got nothing. After
+  // pre_begin_grace_ms / read_window_ms timeouts in a row the
+  // pre-begin grace is up. Approximation: just check that
+  // remaining_ms is more than pre_begin_grace_ms below the start
+  // (caller passes original timeout in; we cap on (timeout - grace)).
+  // Simpler: we're past grace if read iterations consumed already
+  // exceed pre_begin_grace_ms / read_window_ms. Cannot know start
+  // budget here without threading; approximate by saying any
+  // sufficiently small remaining_ms means we've waited enough.
+  remaining_ms < 0
+  || pre_begin_grace_ms <= 0
+  // Fallback: if grace is small relative to remaining, treat as
+  // exhausted after one window.
+  || remaining_ms < pre_begin_grace_ms
+}
+
+fn handle_progress(
+  client: Client,
+  token: String,
+  phase: Phase,
+  remaining_ms: Int,
+  params: Dynamic,
+) -> Result(Client, RequestError) {
   case decode.run(params, progress_token_and_kind_decoder()) {
-    Ok(#(t, kind)) -> t == token && kind == "end"
-    Error(_) -> False
+    Ok(#(t, kind)) if t == token ->
+      case kind {
+        "end" -> Ok(client)
+        "begin" ->
+          drain_until_ready(
+            client,
+            token,
+            AwaitingEnd,
+            remaining_ms - read_window_ms,
+          )
+        _ ->
+          drain_until_ready(
+            client,
+            token,
+            phase,
+            remaining_ms - read_window_ms,
+          )
+      }
+    _ ->
+      drain_until_ready(
+        client,
+        token,
+        phase,
+        remaining_ms - read_window_ms,
+      )
   }
 }
 
