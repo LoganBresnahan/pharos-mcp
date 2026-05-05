@@ -127,7 +127,7 @@ fn build_initialize_params(
     #("processId", json.null()),
     #("rootUri", json.string(root_uri)),
     #("rootPath", json.string(workspace_path)),
-    #("capabilities", json.object([])),
+    #("capabilities", build_client_capabilities()),
     #(
       "clientInfo",
       json.object([
@@ -136,6 +136,170 @@ fn build_initialize_params(
       ]),
     ),
     #("initializationOptions", config.initialization_options),
+  ])
+}
+
+/// LSP `ClientCapabilities` advertised at handshake. Until M8 Stage 2
+/// pharos sent `{}` here, which is spec-legal but caused several
+/// servers (rust-analyzer in particular) to silently degrade for
+/// methods the client did not opt into. Empirically:
+///   - signature_help, format_document, code_actions all timed out
+///     against rust-analyzer with empty capabilities; declaring the
+///     matching textDocument.* capabilities made them respond.
+///   - tsserver still gates publishDiagnostics on
+///     workspace/didChangeConfiguration regardless of declared
+///     capabilities (Stage 0C handles that separately).
+///
+/// Capabilities below cover everything pharos's Tier 1 + Tier 2
+/// surface exercises. New tools added later may need to extend this
+/// payload. Marked `pub` so unit tests can introspect the JSON shape.
+pub fn build_client_capabilities() -> json.Json {
+  json.object([
+    #("workspace", workspace_capabilities()),
+    #("textDocument", text_document_capabilities()),
+  ])
+}
+
+fn workspace_capabilities() -> json.Json {
+  json.object([
+    #("applyEdit", json.bool(True)),
+    #(
+      "workspaceEdit",
+      json.object([
+        #("documentChanges", json.bool(True)),
+        #(
+          "resourceOperations",
+          json.preprocessed_array([
+            json.string("create"),
+            json.string("rename"),
+            json.string("delete"),
+          ]),
+        ),
+        #("failureHandling", json.string("abort")),
+      ]),
+    ),
+    #(
+      "didChangeConfiguration",
+      json.object([#("dynamicRegistration", json.bool(False))]),
+    ),
+    #("configuration", json.bool(True)),
+    #(
+      "symbol",
+      json.object([#("dynamicRegistration", json.bool(False))]),
+    ),
+  ])
+}
+
+fn text_document_capabilities() -> json.Json {
+  json.object([
+    #(
+      "synchronization",
+      json.object([
+        #("dynamicRegistration", json.bool(False)),
+        #("willSave", json.bool(False)),
+        #("didSave", json.bool(False)),
+      ]),
+    ),
+    #(
+      "hover",
+      json.object([
+        #(
+          "contentFormat",
+          json.preprocessed_array([
+            json.string("markdown"),
+            json.string("plaintext"),
+          ]),
+        ),
+      ]),
+    ),
+    #(
+      "signatureHelp",
+      json.object([
+        #(
+          "signatureInformation",
+          json.object([
+            #(
+              "documentationFormat",
+              json.preprocessed_array([
+                json.string("markdown"),
+                json.string("plaintext"),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+    #(
+      "definition",
+      json.object([#("linkSupport", json.bool(True))]),
+    ),
+    #(
+      "typeDefinition",
+      json.object([#("linkSupport", json.bool(True))]),
+    ),
+    #(
+      "implementation",
+      json.object([#("linkSupport", json.bool(True))]),
+    ),
+    #("references", json.object([])),
+    #(
+      "documentSymbol",
+      json.object([
+        #("hierarchicalDocumentSymbolSupport", json.bool(True)),
+      ]),
+    ),
+    #(
+      "formatting",
+      json.object([#("dynamicRegistration", json.bool(False))]),
+    ),
+    #(
+      "rename",
+      json.object([#("prepareSupport", json.bool(False))]),
+    ),
+    #(
+      "codeAction",
+      json.object([
+        #(
+          "codeActionLiteralSupport",
+          json.object([
+            #(
+              "codeActionKind",
+              json.object([
+                #(
+                  "valueSet",
+                  json.preprocessed_array([
+                    json.string(""),
+                    json.string("quickfix"),
+                    json.string("refactor"),
+                    json.string("refactor.extract"),
+                    json.string("refactor.inline"),
+                    json.string("refactor.rewrite"),
+                    json.string("source"),
+                    json.string("source.organizeImports"),
+                  ]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+    #(
+      "callHierarchy",
+      json.object([#("dynamicRegistration", json.bool(False))]),
+    ),
+    #(
+      "publishDiagnostics",
+      json.object([#("versionSupport", json.bool(False))]),
+    ),
+    #(
+      "diagnostic",
+      json.object([#("dynamicRegistration", json.bool(False))]),
+    ),
+    #(
+      "inlayHint",
+      json.object([#("dynamicRegistration", json.bool(False))]),
+    ),
   ])
 }
 

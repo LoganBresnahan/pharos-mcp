@@ -31,6 +31,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 010 | [Defer bidirectional LSP server-request handling until pre-Tier-2](010-defer-server-request-handling.md) | Accepted |
 | 011 | [Local Mix.Task workaround for hex package name vs OTP application name mismatch](011-mix-app-name-symlink-workaround.md) | Accepted |
 | 012 | [Bidirectional LSP server-request handling: registry, sessions, and SSE](012-bidirectional-lsp-and-sse.md) | Accepted |
+| 013 | [Supervisor tree and per-LSP worker process](013-supervisor-tree-and-lsp-worker.md) | Accepted |
 
 ## Anticipated future ADRs
 
@@ -38,10 +39,9 @@ Written when the corresponding decision actually arises with tradeoffs — not p
 
 | # | Title | Trigger |
 |---|-------|---------|
-| 013 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
-| 014 | Config file format and location | Language-registry config gets implemented |
-| 015 | LSP lifecycle policy: kept-warm vs spawn-per-call | rust-analyzer cold-start hits in real use |
-| 016 | Bridge port discovery mechanism | Extension repo bootstraps |
-| 017 | Workspace root determination | First multi-root project test runs |
-| 018 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
-| 019 | LSP fault tolerance: supervision and recovery | M9 polish surfaces real crash scenarios |
+| 014 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
+| 015 | Config file format and location | Language-registry config gets implemented |
+| 016 | LSP lifecycle policy: kept-warm vs spawn-per-call | rust-analyzer cold-start hits in real use |
+| 017 | Bridge port discovery mechanism | Extension repo bootstraps |
+| 018 | Workspace root determination | First multi-root project test runs |
+| 019 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
