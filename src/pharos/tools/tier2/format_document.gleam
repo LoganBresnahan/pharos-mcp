@@ -60,11 +60,35 @@ pub fn handle(
 /// Wrap the LSP-returned `TextEdit[]` (single-file edits) into a
 /// synthetic WorkspaceEdit `{changes: {<uri>: [...]}}` and render
 /// via the shared workspace_edit summary renderer.
+///
+/// LSP `textDocument/formatting` may return `null` when the
+/// formatter has no edits to make (already-formatted file) or
+/// `[]` when the formatter ran but produced an empty edit list.
+/// Both shapes mean "no changes needed" — callers want a friendly
+/// message, not a decoder error from the WorkspaceEdit renderer.
 fn render(
   file_uri: String,
   edits_value: Dynamic,
 ) -> Result(String, FormatDocumentError) {
   let edits_text = tool_helpers.json_encode(edits_value)
+  case is_no_edit_response(edits_text) {
+    True -> Ok("File is already formatted — no edits proposed by the LSP.")
+    False -> render_workspace_edit(file_uri, edits_text)
+  }
+}
+
+fn is_no_edit_response(edits_text: String) -> Bool {
+  case edits_text {
+    "null" -> True
+    "[]" -> True
+    _ -> False
+  }
+}
+
+fn render_workspace_edit(
+  file_uri: String,
+  edits_text: String,
+) -> Result(String, FormatDocumentError) {
   let synthetic =
     "{\"changes\":{\""
     <> file_uri

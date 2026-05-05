@@ -667,10 +667,16 @@ fn message_decoder() -> decode.Decoder(Classified) {
     None,
     decode.optional(decode.string),
   )
+  // `result` key absent => None (request or notification, no
+  // response). Key present with ANY value (including null) =>
+  // Some(...). Wrapping with `decode.optional` would collapse
+  // `result: null` into None, mis-classifying valid void
+  // responses (e.g. textDocument/formatting with no edits) as
+  // notifications and starving wait_for_response.
   use maybe_result <- decode.optional_field(
     "result",
     None,
-    decode.optional(decode.dynamic),
+    decode.map(decode.dynamic, Some),
   )
   use maybe_error <- decode.optional_field(
     "error",

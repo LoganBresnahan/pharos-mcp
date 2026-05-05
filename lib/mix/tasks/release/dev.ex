@@ -24,6 +24,7 @@ defmodule Mix.Tasks.Release.Dev do
   @impl Mix.Task
   def run(_args) do
     wipe_burrito_cache()
+    wipe_prod_build()
     Mix.shell().info("[release.dev] running `mix do compile, release --overwrite`")
 
     # Single subprocess invocation chaining compile + release via
@@ -65,6 +66,22 @@ defmodule Mix.Tasks.Release.Dev do
     Mix.shell().info("")
     Mix.shell().info("[release.dev] binaries written to burrito_out/")
     Mix.shell().info("[release.dev] reconnect /mcp in Claude Code to pick up the new binary")
+  end
+
+  # Second and later rebuilds without this wipe hit the
+  # `Could not find application :hpack` failure: ADR-011's
+  # fix_app_names alias only fires when deps.compile decides
+  # there is something to compile. On a warm `_build/prod`,
+  # deps.compile no-ops, the symlink + wrapper file may have
+  # been disturbed (e.g. a prior partial release run rewrote
+  # the dir), and `mix release` errors during application
+  # graph walk. Always nuking `_build/prod` makes the dev
+  # rebuild idempotent at the cost of ~30s of recompile.
+  defp wipe_prod_build do
+    if File.dir?("_build/prod") do
+      Mix.shell().info("[release.dev] wiping _build/prod for a clean alias rerun")
+      File.rm_rf!("_build/prod")
+    end
   end
 
   defp wipe_burrito_cache do
