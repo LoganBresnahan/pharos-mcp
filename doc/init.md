@@ -549,6 +549,30 @@ Tool errors continue to log to stderr globally via `mcp/server.tool_text_result/
 - Structured logging with verbosity levels
 - Telemetry events (opt-in)
 
+### Milestone 9.5 — BEAM runtime introspection tools (Tier 4)
+
+Expose BEAM observer-equivalent state as MCP tools so the LLM can debug pharos itself without leaving the chat surface. Pattern matches existing tools: typed Gleam wrappers over `:erlang.*` / `:ets.*` BIFs, registered-name-first to avoid raw-pid leak across restarts, output clipped via the existing `pharos/tools/clip` helper.
+
+Read-only first batch:
+- `runtime_processes` — `[{pid, registered_name, current_function, message_queue_len, memory}]` clipped to N
+- `runtime_supervision_tree` — walk root supervisor, render as nested object
+- `runtime_ets_tables` — list public ETS tables + sizes (pharos_diagnostics_cache visible)
+- `runtime_memory` — `:erlang.memory()` breakdown (total, processes, atom, binary, ets)
+- `runtime_applications` — `application:which_applications()`
+- `runtime_scheduler_util` — `scheduler:utilization(1)` snapshot
+- `runtime_pid_info(pid_text)` — full `process_info/1` for a single pid
+- `runtime_log_tail(n)` — last N stderr lines (needs a ring-buffer hook in `pharos/log`)
+
+Write-ish (gated behind env var or per-call confirmation):
+- `runtime_trace_module(module, duration_ms)` — `:dbg.tracer` + `:dbg.tpl` for a window, return collected calls
+- `runtime_kill_pid(pid)` — destructive, off by default
+
+Risks captured in a forthcoming ADR:
+- Pid serialization stability across restarts (use names where possible; pids text-only)
+- Output volume on busy nodes (clip at 100 processes default, raise via `limit`)
+- Distributed-Erlang multi-node observer is out of scope (pharos is single-node)
+- Trace hooks have side effects on scheduler; document timeouts + auto-stop
+
 ### Milestone 10 — Public distribution
 - Multi-target Burrito matrix (linux_x64, linux_arm64, darwin_x64, darwin_arm64, win_x64)
 - GitHub Actions release workflow green on tag push
