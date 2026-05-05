@@ -328,6 +328,36 @@ fn progress_token_and_kind_decoder() -> decode.Decoder(#(String, String)) {
   decode.success(#(token, kind))
 }
 
+/// Classify one frame body and dispatch any required reply. Used
+/// by `pharos/lsp/proc`'s actor when raw Port messages arrive
+/// outside of an in-flight `request` — the actor still needs to
+/// answer server-emitted requests (workspace/configuration etc.)
+/// and update the diagnostics cache, just without blocking on a
+/// specific response id.
+///
+/// Returns the (possibly mutated) Client; never errors, because
+/// classification failures and orphan responses are simply dropped.
+pub fn classify_and_dispatch(
+  client: Client,
+  body: BitArray,
+) -> Result(Client, RequestError) {
+  case classify(body) {
+    ServerRequest(id: id, method: method, params: params) -> {
+      let _ = dispatch_server_request(client, id, method, params)
+      Ok(client)
+    }
+
+    Notification(method: method, params: params) -> {
+      cache_publish_diagnostics(method, params)
+      Ok(client)
+    }
+
+    // Orphan responses (no in-flight request) and decode failures
+    // drop silently. The actor just continues processing.
+    _ -> Ok(client)
+  }
+}
+
 /// Side-effect for `Notification` classifications: when the server
 /// emits `textDocument/publishDiagnostics`, store the params keyed
 /// by URI so the get_diagnostics tool can read them on subsequent

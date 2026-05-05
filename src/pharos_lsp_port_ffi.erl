@@ -9,7 +9,19 @@
 %% them as the variants declared in `lsp/port.gleam`.
 
 -module(pharos_lsp_port_ffi).
--export([spawn/3, send/2, receive_data/2, close/1, connect/2]).
+-export([spawn/3, send/2, receive_data/2, close/1, connect/2, decode_port_data/1]).
+
+%% Decode a raw mailbox payload that gleam_otp's selector handed us
+%% via `process.select_other`. Returns `{ok, Bytes}` if the payload
+%% is `{Port, {data, Bytes}}`; `{error, nil}` for anything else
+%% (exit_status, system messages, junk).
+decode_port_data(Payload) when is_tuple(Payload), tuple_size(Payload) =:= 2 ->
+    case Payload of
+        {_Port, {data, Bytes}} when is_binary(Bytes) -> {ok, Bytes};
+        _ -> {error, nil}
+    end;
+decode_port_data(_) ->
+    {error, nil}.
 
 %% Spawn a subprocess. `Command` is the absolute path or PATH-resolved
 %% binary name; `Args` is a list of binary arguments; `Cwd` is the
@@ -44,6 +56,7 @@ spawn(Command, Args, Cwd) ->
 %%   {ok, nil}        — bytes accepted by the port
 %%   {error, closed}  — port already closed
 send(Port, Bytes) ->
+    trace(out, Bytes),
     try
         true = erlang:port_command(Port, Bytes),
         {ok, nil}
@@ -62,8 +75,10 @@ send(Port, Bytes) ->
 receive_data(Port, TimeoutMs) ->
     receive
         {Port, {data, Bytes}} ->
+            trace(in, Bytes),
             {ok, Bytes};
         {Port, {exit_status, Status}} ->
+            io:format(standard_error, "[lsp-trace] EXIT status=~p~n", [Status]),
             {error, {port_closed, Status}}
     after TimeoutMs ->
         {error, timeout}
@@ -100,3 +115,41 @@ connect(Port, Pid) ->
     catch
         _:_ -> {error, nil}
     end.
+
+%% LSP traffic tracer. Off by default. Enabled when the env var
+%% PHAROS_TRACE_LSP is set to any non-empty value. Each call writes
+%% one line to stderr with direction (in|out), byte count, and the
+%% body truncated to 2000 bytes (enough to see the JSON-RPC envelope
+%% + initial fields without flooding the log).
+%%
+%% Used by M9.5 Part B's diagnostic work; longer-term will move
+%% behind a runtime-configurable filter via the structured logging
+%% layer.
+trace(Direction, Bytes) ->
+    case os:getenv("PHAROS_TRACE_LSP") of
+        false -> ok;
+        "" -> ok;
+        _ ->
+            Truncated = case byte_size(Bytes) > 2000 of
+                true ->
+                    <<First:2000/binary, _/binary>> = Bytes,
+                    First;
+                false -> Bytes
+            end,
+            %% Replace control bytes (incl. CR/LF inside header) with
+            %% printable escapes so each trace entry stays on one line
+            %% and the JSON body is readable.
+            Sanitized = << <<(escape_byte(B))/binary>> || <<B>> <= Truncated >>,
+            io:format(
+                standard_error,
+                "[lsp-trace] direction=~p bytes=~p body=~s~n",
+                [Direction, byte_size(Bytes), Sanitized]
+            )
+    end.
+
+escape_byte($\r) -> <<"\\r">>;
+escape_byte($\n) -> <<"\\n">>;
+escape_byte($\t) -> <<"\\t">>;
+escape_byte(B) when B < 32 ->
+    list_to_binary(io_lib:format("\\x~2.16.0b", [B]));
+escape_byte(B) -> <<B>>.

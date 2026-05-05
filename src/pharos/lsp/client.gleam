@@ -127,6 +127,41 @@ fn read_until_message(
   }
 }
 
+/// Append externally-received bytes to the framing buffer without
+/// blocking on a port read. Used by the proc actor when raw Port
+/// messages arrive via its mailbox selector instead of through the
+/// blocking `next_message` path. Returns the updated Client; any
+/// complete frames now sit in `queue` ready for `drain_one_frame`.
+pub fn feed_bytes(client: Client, bytes: BitArray) -> Client {
+  let new_buffer = bit_array.append(client.buffer, bytes)
+  case framing.parse(new_buffer) {
+    Error(_) ->
+      // Malformed bytes mid-stream. Keep accumulating; the next
+      // chunk may complete the frame, or the parser stays unhappy
+      // and we let drain_one_frame surface it later.
+      Client(..client, buffer: new_buffer)
+
+    Ok(framing.Parsed(messages: messages, buffer: leftover)) -> {
+      let combined_queue = list_append(client.queue, messages)
+      Client(..client, buffer: leftover, queue: combined_queue)
+    }
+  }
+}
+
+@external(erlang, "lists", "append")
+fn list_append(a: List(a), b: List(a)) -> List(a)
+
+/// Pop one fully-buffered frame off the queue without doing any
+/// Port I/O. Companion to `feed_bytes` for the actor's
+/// inbound-message dispatch loop. Returns `Error(Nil)` when no
+/// complete frame is currently buffered.
+pub fn drain_one_frame(client: Client) -> Result(#(Client, BitArray), Nil) {
+  case client.queue {
+    [first, ..rest] -> Ok(#(Client(..client, queue: rest), first))
+    [] -> Error(Nil)
+  }
+}
+
 /// Tear down the subprocess. Idempotent.
 pub fn close(client: Client) -> Nil {
   port.close(client.port)

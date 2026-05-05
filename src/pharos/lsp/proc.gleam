@@ -86,6 +86,14 @@ pub opaque type Msg {
     timeout_ms: Int,
     reply_to: Subject(Result(Option(String), client.Error)),
   )
+  /// Catch-all for Port-emitted messages (server-side notifications,
+  /// server-requests, exit_status) that arrive at the actor's
+  /// mailbox between Request handlers. Without this, gleam_otp's
+  /// outer loop discards them as "unexpected" — gopls in particular
+  /// emits a `workspace/configuration` server-request immediately
+  /// after `initialized`, expects our reply before answering any
+  /// subsequent request, and otherwise hangs.
+  PortMessage(payload: Dynamic)
   Close
 }
 
@@ -116,8 +124,24 @@ pub fn start(
         case lifecycle.initialize(c, 0, init_params, initialize_timeout_ms) {
           Error(e) ->
             Error("initialize handshake failed: " <> describe_lifecycle_error(e))
-          Ok(#(c, _capabilities)) ->
-            Ok(actor.initialised(State(client: c)) |> actor.returning(self))
+          Ok(#(c, _capabilities)) -> {
+            // Custom selector accepts both:
+            //   - Subject(Msg) messages (Request/RequestRaw/etc.)
+            //   - Anything else (Port data + exit_status) wrapped as
+            //     PortMessage(Dynamic). Without this gleam_otp's
+            //     outer loop discards Port messages as "unexpected"
+            //     between handler invocations, dropping server-
+            //     emitted notifications + server-requests.
+            let selector =
+              process.new_selector()
+              |> process.select(self)
+              |> process.select_other(PortMessage)
+            Ok(
+              actor.initialised(State(client: c))
+              |> actor.selecting(selector)
+              |> actor.returning(self),
+            )
+          }
         }
     }
   }
@@ -383,10 +407,68 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     WaitForPublish(target_uri:, timeout_ms:, reply_to:) ->
       handle_wait_for_publish(state, target_uri, timeout_ms, reply_to)
 
+    PortMessage(payload:) -> handle_port_message(state, payload)
+
     Close -> {
       client.close(state.client)
       actor.stop()
     }
+  }
+}
+
+/// A Port-emitted message arrived at the actor's mailbox between
+/// Request handlers (e.g. an unsolicited gopls
+/// `workspace/configuration` server-request). Decode the payload,
+/// feed bytes through the framing parser, classify, and dispatch
+/// any required reply via the existing handler registry. Cache
+/// publishDiagnostics as a side effect so subsequent
+/// get_diagnostics calls can return from cache.
+fn handle_port_message(
+  state: State,
+  payload: Dynamic,
+) -> actor.Next(State, Msg) {
+  case decode_port_data_bytes(payload) {
+    // Not a Port-data tuple (could be exit_status, system noise,
+    // etc.). Drop and continue — the actor stays alive.
+    Error(_) -> actor.continue(state)
+
+    Ok(bytes) -> {
+      // Append raw bytes to the Client's framing buffer, parse out
+      // any complete frames, and process each.
+      let updated = client.feed_bytes(state.client, bytes)
+      let State(client: drained) = drain_buffered_frames(State(client: updated))
+      actor.continue(State(client: drained))
+    }
+  }
+}
+
+@external(erlang, "pharos_lsp_port_ffi", "decode_port_data")
+fn decode_port_data(payload: Dynamic) -> Result(BitArray, Nil)
+
+fn decode_port_data_bytes(payload: Dynamic) -> Result(BitArray, Nil) {
+  decode_port_data(payload)
+}
+
+fn drain_buffered_frames(state: State) -> State {
+  // Pull frames out of the Client until none remain, classifying
+  // and dispatching each. Stops cleanly when the buffer holds only
+  // a partial frame.
+  case client.drain_one_frame(state.client) {
+    Error(_) -> state
+    Ok(#(updated, body)) -> {
+      let new_client = process_frame(updated, body)
+      drain_buffered_frames(State(client: new_client))
+    }
+  }
+}
+
+fn process_frame(c: client.Client, body: BitArray) -> client.Client {
+  // Reuse lifecycle's classifier path. ServerRequest replies are
+  // sent via the same handler registry the request loop uses;
+  // notifications cache publishDiagnostics; orphan responses drop.
+  case lifecycle.classify_and_dispatch(c, body) {
+    Ok(updated) -> updated
+    Error(_) -> c
   }
 }
 
