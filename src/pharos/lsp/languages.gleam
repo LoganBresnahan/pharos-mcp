@@ -259,7 +259,13 @@ fn python() -> LanguageConfig {
     ],
     // pyright's main config is in pyrightconfig.json or pyproject.toml.
     initialization_options: json.object([]),
-    diagnostics_mode: Push,
+    // Pyright advertises `diagnosticProvider` (LSP 3.17 pull) but
+    // does not reliably push `textDocument/publishDiagnostics`
+    // notifications — rust-analyzer and gopls do, pyright doesn't.
+    // Stage-2 dogfood saw `NoDiagnosticsObserved` here despite a
+    // file with obvious type errors. `textDocument/diagnostic`
+    // pull returns the items synchronously.
+    diagnostics_mode: Pull,
     workspace_configuration: None,
     readiness_token: Some("Indexing"),
   )

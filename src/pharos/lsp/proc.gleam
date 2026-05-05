@@ -19,12 +19,10 @@
 //// returns `actor.stop_abnormal`, the supervisor / monitor see the
 //// exit.
 
-import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
-import gleam/dynamic/decode as dynamic_decode
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/json.{type Json}
-import gleam/option.{type Option}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import pharos/lsp/client.{type Client}
@@ -559,77 +557,64 @@ fn drain_loop(
   remaining_ms: Int,
   latest: Option(String),
 ) -> Result(#(Client, Option(String)), client.Error) {
-  case remaining_ms <= 0 {
-    True -> Ok(#(c, latest))
-    False ->
-      case client.next_message(c, drain_step_ms) {
-        Error(client.PortReceiveError(_)) ->
-          drain_loop(c, target_uri, remaining_ms - drain_step_ms, latest)
+  // Cache poll: the actor's PortMessage handler may already have
+  // cached publishDiagnostics for `target_uri` between handler
+  // invocations.
+  case latest, lookup_cached_envelope(target_uri) {
+    None, Some(envelope) -> Ok(#(c, Some(envelope)))
 
-        Error(other) -> Error(other)
+    _, _ ->
+      case remaining_ms <= 0 {
+        True -> Ok(#(c, latest))
+        False ->
+          case client.next_message(c, drain_step_ms) {
+            Error(client.PortReceiveError(_)) ->
+              drain_loop(c, target_uri, remaining_ms - drain_step_ms, latest)
 
-        Ok(#(body, c)) -> {
-          let next_latest = match_publish_diagnostics(body, target_uri, latest)
-          drain_loop(c, target_uri, remaining_ms - drain_step_ms, next_latest)
-        }
-      }
-  }
-}
+            Error(other) -> Error(other)
 
-/// If `body` is a publishDiagnostics notification, write to the
-/// diagnostics cache (keyed by uri) and, if its uri matches
-/// `target_uri`, return its full JSON text wrapped in Some.
-/// Otherwise propagate `latest`.
-fn match_publish_diagnostics(
-  body: BitArray,
-  target_uri: String,
-  latest: Option(String),
-) -> Option(String) {
-  case bit_array.to_string(body) {
-    Error(_) -> latest
-    Ok(text) ->
-      case json.parse(text, dynamic_decoder()) {
-        Error(_) -> latest
-        Ok(value) ->
-          case decode_publish_diagnostics(value) {
-            Error(_) -> latest
-            Ok(#(uri, params)) -> {
-              diagnostics_cache.put(uri, params)
-              case uri == target_uri {
-                True -> option.Some(text)
-                False -> latest
+            Ok(#(body, c)) -> {
+              // Dispatch the frame through lifecycle's classifier
+              // so server-requests (notably gopls's
+              // workspace/configuration) get replies. Without
+              // this, gopls blocks forever waiting for a
+              // configuration response and never publishes
+              // diagnostics. After dispatch, side-effect
+              // cache_publish_diagnostics has updated the cache
+              // for any publishDiagnostics frame; check the
+              // cache for our target_uri to capture the body.
+              let updated_client =
+                case lifecycle.classify_and_dispatch(c, body) {
+                  Ok(uc) -> uc
+                  Error(_) -> c
+                }
+              let next_latest = case latest {
+                Some(_) -> latest
+                None -> lookup_cached_envelope(target_uri)
               }
+              drain_loop(updated_client, target_uri, remaining_ms - drain_step_ms, next_latest)
             }
           }
       }
   }
 }
 
-fn dynamic_decoder() -> dynamic_decode.Decoder(Dynamic) {
-  dynamic_decode.dynamic
-}
-
-fn decode_publish_diagnostics(
-  value: Dynamic,
-) -> Result(#(String, Dynamic), Nil) {
-  case dynamic_decode.run(value, publish_decoder()) {
-    Ok(t) -> Ok(t)
-    Error(_) -> Error(Nil)
-  }
-}
-
-fn publish_decoder() -> dynamic_decode.Decoder(#(String, Dynamic)) {
-  use method <- dynamic_decode.field("method", dynamic_decode.string)
-  case method == "textDocument/publishDiagnostics" {
-    False ->
-      dynamic_decode.failure(#("", dynamic.nil()), "not publishDiagnostics")
-    True -> {
-      use params <- dynamic_decode.field("params", dynamic_decode.dynamic)
-      use uri <- dynamic_decode.subfield(
-        ["params", "uri"],
-        dynamic_decode.string,
+/// Read the cache and re-shape into a `publishDiagnostics`
+/// notification envelope so drain_loop's caller can return the
+/// same JSON shape whether the body came from cache or live drain.
+fn lookup_cached_envelope(target_uri: String) -> Option(String) {
+  case diagnostics_cache.get(target_uri) {
+    Error(_) -> None
+    Ok(params) ->
+      Some(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
+        <> "\"params\":"
+        <> tool_helpers_json_encode(params)
+        <> "}",
       )
-      dynamic_decode.success(#(uri, params))
-    }
   }
 }
+
+@external(erlang, "pharos_fs_ffi", "encode_json")
+fn tool_helpers_json_encode(value: Dynamic) -> String
+

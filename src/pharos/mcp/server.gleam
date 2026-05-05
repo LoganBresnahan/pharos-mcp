@@ -495,7 +495,10 @@ fn get_diagnostics_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Optional. How long to wait for diagnostics after the "
-                      <> "LSP initialize handshake. Defaults to 8000ms.",
+                      <> "LSP initialize handshake. Defaults to 20000ms — "
+                      <> "gopls and rust-analyzer commonly take 10-15s on "
+                      <> "cold workspaces before they emit the first "
+                      <> "publishDiagnostics.",
                   ),
                 ),
               ]),
@@ -682,7 +685,7 @@ fn decode_get_diagnostics_arguments(
     use uri <- decode.field("uri", decode.string)
     use timeout_ms <- decode.optional_field(
       "timeout_ms",
-      8000,
+      20_000,
       decode.int,
     )
     decode.success(#(uri, timeout_ms))
