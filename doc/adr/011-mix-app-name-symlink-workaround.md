@@ -98,6 +98,67 @@ The dynamic detection means the workaround is harmless even if removed premature
 - If `_build` is ever populated by a path that bypasses `deps.compile` (e.g. a CI cache restoration), the workaround does not run. The error returns. Solution: ensure CI runs `mix deps.compile` after cache restore, or add a release-step hook later if needed. YAGNI today; revisit if it bites.
 - Burrito's wrapping is unaffected. `application:which_applications().` at runtime in the wrapped binary will list the OTP application by its real name (`hpack`), not the alias name (`hpack_erl`), proving the runtime is using the correct file.
 
+## Operational gotchas (release-time)
+
+Two practical pitfalls surfaced while wiring up the M9.5 dev-loop
+build tasks (`mix release.dev`, `mix release.prod`). Both are
+downstream of this ADR's workaround and need to be remembered by
+anyone running release builds.
+
+### 1. Burrito caches the extracted release by version
+
+Burrito's launcher binary unpacks its bundled BEAM release on first
+run into:
+
+```
+~/.local/share/.burrito/<app>_erts-<otp_vsn>_<app_vsn>/
+```
+
+The cache key includes the application version (`@version` in
+`mix.exs`). On second run with the **same** version the launcher
+finds an existing extraction and reuses it — even if a fresh
+`mix release` has rewritten the on-disk wrapper binary. Result:
+the new binary executes the OLD code from the cached extraction.
+
+Two correct patterns:
+
+- **Dev rebuilds, same version:** wipe the cache directory before
+  launching. `mix release.dev` does this automatically (matches
+  `pharos_*` to leave other apps' extractions alone).
+- **Released rebuilds, new version:** bump `@version` in `mix.exs`
+  AND `version` in `gleam.toml` before building. The cache key
+  changes, no wipe needed. `mix release.prod <new_vsn>` does the
+  bump in both files, commits, tags, and runs the build.
+
+If a binary appears to ignore recent code changes after a `mix
+release --overwrite`, the cache is the first thing to check.
+
+### 2. Calling `mix` from inside a Mix.Task subprocess needs a
+   clean env
+
+When a Mix.Task (e.g. `mix release.dev`) shells out via
+`System.cmd("mix", ...)`, the subprocess inherits MIX_BUILD_PATH,
+MIX_TARGET, MIX_DEPS_PATH, and MIX_ENV from the parent VM. These
+point at the parent's `_build/dev` tree even when the subprocess
+sets `MIX_ENV=prod`. The subprocess then tries to compile under
+prod but resolves application paths from dev, the
+`fix_app_names` alias does not re-fire on the prod tree, and the
+build fails with `** (Mix) Could not find application :hpack`.
+
+Symptom is identical whether the cause is missing `fix_app_names`
+or env leakage; the fix is different. To distinguish: run the
+same command directly in a fresh shell. If it works there but
+fails inside the task, the cause is env leakage.
+
+The fix in the release tasks is to pass `env:` to `System.cmd`
+with only `PATH`, `HOME`, `USER`, and `MIX_ENV=prod` — every
+other Mix-related env var is dropped. The subprocess then sees
+the same environment as a vanilla `MIX_ENV=prod mix do compile,
+release --overwrite` invocation.
+
+This is not specific to release builds; any Mix.Task that
+shells out to a fresh `mix` should strip the parent env.
+
 ## Alternatives considered
 
 - **Option A — wait for upstream.** Rejected: M6 timeline pressure.
