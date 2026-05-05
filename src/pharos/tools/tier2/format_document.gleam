@@ -18,7 +18,7 @@ import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
 import pharos/tools/workspace_edit
 
-const default_timeout_ms: Int = 10_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type FormatDocumentError {
   SessionFailed(reason: String)
@@ -29,6 +29,7 @@ pub type FormatDocumentError {
 pub fn handle(
   pool: Pool,
   file_uri: String,
+  timeout_ms: Int,
 ) -> Result(String, FormatDocumentError) {
   case session.prepare(pool, file_uri) {
     Error(err) -> Error(SessionFailed(describe_session_error(err)))
@@ -51,7 +52,7 @@ pub fn handle(
           "textDocument/formatting",
           params,
           tool_helpers.next_id(),
-          default_timeout_ms,
+          timeout_ms,
         )
       {
         Error(err) ->

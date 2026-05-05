@@ -935,15 +935,15 @@ fn handle_format_document(
   id: Id,
   arguments: Option(Dynamic),
 ) -> String {
-  case decode_uri_only_arguments(arguments) {
+  case decode_format_document_arguments(arguments) {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid format_document params: " <> reason,
       )
-    Ok(uri) ->
-      case format_document.handle(pool, uri) {
+    Ok(#(uri, timeout_ms)) ->
+      case format_document.handle(pool, uri, timeout_ms) {
         Ok(rendered) ->
           success_response(id, fn() { tool_text_result(rendered, False) })
         Error(format_document.SessionFailed(reason)) ->
@@ -1290,7 +1290,12 @@ fn format_document_tool_definition() -> Json {
           <> "formatter's proposed edits. Pharos does not write the "
           <> "changes — review and apply with your own Edit tool. "
           <> "Formatting options use LSP defaults (tabSize=4, "
-          <> "insertSpaces=true); per-language overrides land in M9.",
+          <> "insertSpaces=true). Default per-call timeout is 30s; "
+          <> "rust-analyzer shells out to rustfmt and may exceed the "
+          <> "default on cold cache — raise via `timeout_ms`. Pyright "
+          <> "(.py) does not implement formatting; it returns "
+          <> "`-32601 Unhandled method`. Format Python externally "
+          <> "with ruff/black/yapf.",
       ),
     ),
     #(
@@ -1308,6 +1313,18 @@ fn format_document_tool_definition() -> Json {
                   "description",
                   json.string(
                     "file:// URI of the source file to format.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "timeout_ms",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Per-call timeout in milliseconds. Default 30000.",
                   ),
                 ),
               ]),
@@ -1574,6 +1591,25 @@ fn decode_goto_implementation_arguments(
   |> result.map_error(fn(_) {
     "expected `uri: string`, `line: int`, `character: int`, "
     <> "optional `limit: int`"
+  })
+}
+
+fn decode_format_document_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      format_document.default_timeout_ms,
+      decode.int,
+    )
+    decode.success(#(uri, timeout_ms))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, optional `timeout_ms: int`"
   })
 }
 
