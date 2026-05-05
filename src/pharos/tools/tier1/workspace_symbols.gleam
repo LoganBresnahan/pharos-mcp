@@ -11,7 +11,7 @@
 
 import gleam/int
 import gleam/json
-import pharos/lsp/lifecycle
+import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/clip
 import pharos/tools/tier1/session
@@ -37,18 +37,10 @@ pub fn handle(
     Ok(lsp) -> {
       let params = json.object([#("query", json.string(query))])
 
-      case
-        lifecycle.request(
-          lsp,
-          "workspace/symbol",
-          params,
-          tool_helpers.next_id(),
-          default_timeout_ms,
-        )
-      {
+      case proc.request(lsp, "workspace/symbol", params, default_timeout_ms) {
         Error(err) ->
           Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(#(_lsp, result_value)) -> {
+        Ok(result_value) -> {
           let clipped = clip.clip_array(result_value, limit)
           case clipped.truncated_by {
             0 -> Ok(clipped.json_text)

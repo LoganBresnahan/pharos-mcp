@@ -25,7 +25,7 @@
 
 import gleam/erlang/process
 import gleam/json
-import pharos/lsp/client
+import pharos/lsp/proc.{type Proc}
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
@@ -87,21 +87,13 @@ fn build_params(
 }
 
 fn attempt(
-  lsp: client.Client,
+  lsp: Proc,
   params: json.Json,
   timeout_ms: Int,
   retries_left retries_left: Int,
 ) -> Result(String, FindReferencesError) {
-  case
-    lifecycle.request(
-      lsp,
-      "textDocument/references",
-      params,
-      tool_helpers.next_id(),
-      timeout_ms,
-    )
-  {
-    Ok(#(_lsp, result_value)) -> Ok(tool_helpers.json_encode(result_value))
+  case proc.request(lsp, "textDocument/references", params, timeout_ms) {
+    Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
 
     Error(lifecycle.ServerError(code, _message))
       if code == content_modified_code && retries_left > 0

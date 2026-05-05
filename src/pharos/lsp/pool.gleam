@@ -1,19 +1,26 @@
 //// Kept-warm LSP pool.
 ////
-//// One actor owns a cache of `(language, workspace) -> Client`.
-//// Tools call `get/4` to fetch a Client; on cache miss the pool
-//// spawns the LSP and runs the initialize handshake before
-//// returning. On cache hit the pool returns the existing Client
-//// immediately — cold-start cost is paid once per (language,
+//// One actor owns a cache of `(language, workspace) -> Proc`. Tools
+//// call `get/4` to fetch a Proc; on cache miss the pool spawns
+//// a fresh `lsp_proc` (which itself runs the initialize handshake)
+//// and stashes it. On cache hit the pool returns the existing
+//// Proc immediately — cold-start cost is paid once per (language,
 //// workspace) per session, not per tool call.
 ////
-//// At Milestone 4 the pool is in-process and lives for the duration
-//// of `mix start`. Idle eviction and crash detection arrive in M5+.
-//// The MCP host's session typically aligns with the pool's lifetime,
-//// so simple "keep until process exits" is enough for v0.1.
+//// M9 Phase B: pool monitors each `Proc` via `process.monitor`. On
+//// the proc's exit (DOWN), pool evicts the cache entry so the
+//// next tool call respawns transparently. ADR-013 calls this
+//// "structure-by-supervision, communication-by-monitoring."
+////
+//// At Milestone 4 the pool was in-process and lived for the
+//// duration of `mix start`. Phase A's supervisor scaffolding does
+//// not yet wrap the pool; Phase C adds tool-level retry that
+//// transparently respawns on transport error in addition to the
+//// auto-evict here.
 
 import gleam/bit_array
 import gleam/dict.{type Dict}
+import gleam/dynamic
 import gleam/erlang/process.{type Subject}
 import gleam/json
 import gleam/option
@@ -21,8 +28,7 @@ import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
 import pharos/log
-import pharos/lsp/client.{type Client}
-import pharos/lsp/lifecycle
+import pharos/lsp/proc.{type Proc}
 import pharos/lsp/server_request_handlers
 
 pub opaque type Pool {
@@ -37,7 +43,7 @@ pub type SpawnSpec {
     /// Optional `workspace/didChangeConfiguration` payload pushed
     /// post-`initialized`. Also used to answer the server's pull-style
     /// `workspace/configuration` requests via a per-language handler
-    /// override on the Client. Keyed by section name (e.g.
+    /// override on the Proc. Keyed by section name (e.g.
     /// `"typescript"`, `"javascript"`); each section's value is the
     /// JSON the server wants for that scope. `None` means the server
     /// gets neither push nor per-language pull-handler. See ADR-012.
@@ -46,8 +52,7 @@ pub type SpawnSpec {
 }
 
 pub type GetError {
-  StartFailed(client.Error)
-  HandshakeFailed(lifecycle.InitializeError)
+  ProcStartFailed(reason: String)
 }
 
 pub type StartError {
@@ -59,7 +64,7 @@ pub opaque type Msg {
     language: String,
     workspace: String,
     spec: SpawnSpec,
-    reply_to: Subject(Result(Client, GetError)),
+    reply_to: Subject(Result(Proc, GetError)),
   )
   Evict(language: String, workspace: String)
   CloseAll
@@ -71,19 +76,27 @@ pub opaque type Msg {
     content: String,
     reply_to: Subject(Result(Nil, EnsureOpenError)),
   )
+  /// Sent to the pool actor when one of its monitored procs exits.
+  /// `reason` is included for diagnostic logging; pool just evicts
+  /// the cache entry regardless of why.
+  ProcDown(monitor_ref: process.Monitor, reason: dynamic.Dynamic)
 }
 
 pub type EnsureOpenError {
   /// No LSP cached for this (language, workspace) — caller must
   /// `get/4` first to spawn one.
   NoCachedClient
-  /// `port.send` returned an error — the LSP subprocess is gone.
+  /// `proc.send_notification` returned an error — the LSP
+  /// subprocess is gone or its Port is closed.
   SendFailed
 }
 
 type State {
   State(
-    cache: Dict(#(String, String), Client),
+    cache: Dict(#(String, String), Proc),
+    /// Reverse index from monitor ref to cache key, so when a
+    /// `ProcDown` arrives we can find which entry to evict.
+    monitors: Dict(process.Monitor, #(String, String)),
     opened: Set(#(String, String, String)),
   )
 }
@@ -95,29 +108,30 @@ const default_call_timeout_ms: Int = 60_000
 /// Spawn the pool. Returns a handle the rest of the program shares
 /// for `get/4`, `evict/3`, and `close_all/1`.
 pub fn start() -> Result(Pool, StartError) {
-  actor.new(State(cache: dict.new(), opened: set.new()))
+  actor.new(State(cache: dict.new(), monitors: dict.new(), opened: set.new()))
   |> actor.on_message(handle_message)
   |> actor.start()
   |> result.map(fn(started) { Pool(subject: started.data) })
   |> result.map_error(StartFailedActor)
 }
 
-/// Fetch a Client for the given language and workspace, spawning a
+/// Fetch a `Proc` for the given language and workspace, spawning a
 /// fresh LSP if none is cached.
 pub fn get(
   pool: Pool,
   language: String,
   workspace: String,
   spec: SpawnSpec,
-) -> Result(Client, GetError) {
+) -> Result(Proc, GetError) {
   let Pool(subject) = pool
   actor.call(subject, default_call_timeout_ms, fn(reply) {
     Get(language, workspace, spec, reply)
   })
 }
 
-/// Drop the cached entry for one (language, workspace). Use when an
-/// LSP appears to have crashed (next get respawns it transparently).
+/// Drop the cached entry for one (language, workspace). Tool layer
+/// can call this on transport error before retrying. The Proc is
+/// closed (which kills its Port and the LSP child).
 pub fn evict(pool: Pool, language: String, workspace: String) -> Nil {
   let Pool(subject) = pool
   actor.send(subject, Evict(language, workspace))
@@ -134,11 +148,7 @@ pub fn close_all(pool: Pool) -> Nil {
 /// the (language, workspace, uri) tuple has already been opened on
 /// this LSP in this session, this is a no-op. Otherwise the pool
 /// builds and sends a didOpen notification through the cached
-/// Client and records the URI as opened.
-///
-/// Used by tier-1 tools' session prelude to avoid sending didOpen
-/// on every tool call — repeat opens trigger rust-analyzer's
-/// "content modified" cancellation against in-flight requests.
+/// Proc and records the URI as opened.
 pub fn ensure_open(
   pool: Pool,
   language: String,
@@ -173,6 +183,9 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         content,
         reply,
       )
+
+    ProcDown(monitor_ref:, reason: _reason) ->
+      handle_proc_down(state, monitor_ref)
   }
 }
 
@@ -181,36 +194,28 @@ fn handle_get(
   language: String,
   workspace: String,
   spec: SpawnSpec,
-  reply: Subject(Result(Client, GetError)),
+  reply: Subject(Result(Proc, GetError)),
 ) -> actor.Next(State, Msg) {
   let key = #(language, workspace)
-  let caller_pid = case process.subject_owner(reply) {
-    Ok(pid) -> pid
-    Error(_) -> process.self()
-  }
 
   case dict.get(state.cache, key) {
     Ok(existing) -> {
-      // Cache hit: re-transfer ownership to this caller in case the
-      // previous caller's process exited. Idempotent — no-op if the
-      // current owner is already this caller.
-      let _ = client.connect(existing, caller_pid)
       process.send(reply, Ok(existing))
       actor.continue(state)
     }
 
     Error(_) ->
-      case spawn_and_initialize(spec, workspace) {
-        Ok(client_handle) -> {
-          // Transfer Port ownership to the calling process. Until
-          // this point the pool actor owns the Port and was
-          // receiving its messages (necessary for the initialize
-          // handshake to read the response). Now the tool will be
-          // doing the reading.
-          let _ = client.connect(client_handle, caller_pid)
-          process.send(reply, Ok(client_handle))
-          let cache = dict.insert(state.cache, key, client_handle)
-          actor.continue(State(cache: cache, opened: state.opened))
+      case spawn_proc(spec, workspace) {
+        Ok(spawned) -> {
+          // Auto-evict on proc exit per ADR-013. Pool monitors the
+          // proc actor's pid; on DOWN, lookup ref→key and remove.
+          let monitor_ref = process.monitor(proc.pid(spawned))
+          process.send(reply, Ok(spawned))
+          let cache = dict.insert(state.cache, key, spawned)
+          let monitors = dict.insert(state.monitors, monitor_ref, key)
+          actor.continue(
+            State(cache: cache, monitors: monitors, opened: state.opened),
+          )
         }
         Error(err) -> {
           process.send(reply, Error(err))
@@ -227,8 +232,8 @@ fn handle_evict(
 ) -> actor.Next(State, Msg) {
   let key = #(language, workspace)
   case dict.get(state.cache, key) {
-    Ok(client_handle) -> {
-      client.close(client_handle)
+    Ok(spawned) -> {
+      proc.close(spawned)
       let cache = dict.delete(state.cache, key)
       // Drop opened-doc entries for this (language, workspace) — when
       // a fresh LSP spawns later it will not know about previously
@@ -238,7 +243,9 @@ fn handle_evict(
           let #(l, w, _) = triple
           !{ l == language && w == workspace }
         })
-      actor.continue(State(cache: cache, opened: opened))
+      // Monitor cleanup happens implicitly when ProcDown fires after
+      // proc.close terminates the actor; no explicit demonitor here.
+      actor.continue(State(cache: cache, monitors: state.monitors, opened: opened))
     }
     Error(_) -> actor.continue(state)
   }
@@ -248,7 +255,39 @@ fn handle_close_all(state: State) -> actor.Next(State, Msg) {
   state.cache
   |> dict.values
   |> close_each
-  actor.continue(State(cache: dict.new(), opened: set.new()))
+  actor.continue(State(
+    cache: dict.new(),
+    monitors: dict.new(),
+    opened: set.new(),
+  ))
+}
+
+fn handle_proc_down(
+  state: State,
+  monitor_ref: process.Monitor,
+) -> actor.Next(State, Msg) {
+  case dict.get(state.monitors, monitor_ref) {
+    Error(_) -> actor.continue(state)
+
+    Ok(key) -> {
+      let #(language, workspace) = key
+      log.warn(
+        "lsp_proc for "
+        <> language
+        <> " / "
+        <> workspace
+        <> " exited; evicting pool cache entry",
+      )
+      let cache = dict.delete(state.cache, key)
+      let monitors = dict.delete(state.monitors, monitor_ref)
+      let opened =
+        set.filter(state.opened, fn(triple) {
+          let #(l, w, _) = triple
+          !{ l == language && w == workspace }
+        })
+      actor.continue(State(cache: cache, monitors: monitors, opened: opened))
+    }
+  }
 }
 
 fn handle_ensure_open(
@@ -275,7 +314,7 @@ fn handle_ensure_open(
           actor.continue(state)
         }
 
-        Ok(client_handle) -> {
+        Ok(spawned) -> {
           let body =
             json.object([
               #("jsonrpc", json.string("2.0")),
@@ -298,7 +337,7 @@ fn handle_ensure_open(
             |> json.to_string
             |> bit_array.from_string
 
-          case client.send_body(client_handle, body) {
+          case proc.send_notification(spawned, body) {
             Ok(Nil) -> {
               process.send(reply, Ok(Nil))
               actor.continue(
@@ -315,63 +354,68 @@ fn handle_ensure_open(
   }
 }
 
-fn close_each(clients: List(Client)) -> Nil {
-  case clients {
+fn close_each(procs: List(Proc)) -> Nil {
+  case procs {
     [] -> Nil
     [first, ..rest] -> {
-      client.close(first)
+      proc.close(first)
       close_each(rest)
     }
   }
 }
 
-fn spawn_and_initialize(
+fn spawn_proc(
   spec: SpawnSpec,
   workspace: String,
-) -> Result(Client, GetError) {
-  use lsp <- result.try(
-    client.start(spec.command, spec.args, workspace)
-    |> result.map_error(StartFailed),
+) -> Result(Proc, GetError) {
+  use spawned <- result.try(
+    proc.start(
+      spec.command,
+      spec.args,
+      workspace,
+      spec.init_params,
+      initialize_timeout_ms,
+    )
+    |> result.map_error(describe_proc_start_error),
   )
 
-  use #(lsp, _capabilities) <- result.try(
-    lifecycle.initialize(lsp, 0, spec.init_params, initialize_timeout_ms)
-    |> result.map_error(HandshakeFailed),
-  )
-
-  // Stage 0C: if the language declared workspace settings, install a
-  // per-language workspace/configuration handler (overrides the
-  // default null-array reply with real per-section values) and push
-  // them via `workspace/didChangeConfiguration`. Push failure is
-  // logged and swallowed per ADR-012 decision 4: most servers degrade
-  // gracefully without the config; full refusal would be too strict.
-  let lsp = case spec.workspace_configuration {
-    option.None -> lsp
+  // Per-language workspace_configuration (Stage 0C). Install a
+  // workspace/configuration handler on the proc and push
+  // workspace/didChangeConfiguration. Push failure is logged and
+  // swallowed per ADR-012 decision 4.
+  case spec.workspace_configuration {
+    option.None -> Nil
 
     option.Some(settings) -> {
-      let registry =
-        server_request_handlers.defaults()
-        |> server_request_handlers.insert(
-          "workspace/configuration",
-          server_request_handlers.workspace_configuration_handler(settings),
-        )
+      proc.add_handler(
+        spawned,
+        "workspace/configuration",
+        server_request_handlers.workspace_configuration_handler(settings),
+      )
 
-      let lsp = client.with_handlers(lsp, registry)
-
-      case lifecycle.push_configuration(lsp, settings_to_json(settings)) {
-        Ok(Nil) -> lsp
-        Error(_err) -> {
+      case proc.push_configuration(spawned, settings_to_json(settings)) {
+        Ok(Nil) -> Nil
+        Error(_err) ->
           log.warn(
             "workspace/didChangeConfiguration push failed; "
             <> "server may run with degraded settings",
           )
-          lsp
-        }
       }
     }
   }
 
-  Ok(lsp)
+  Ok(spawned)
+}
+
+fn describe_proc_start_error(err: proc.StartError) -> GetError {
+  case err {
+    proc.ClientStartFailed(_) ->
+      ProcStartFailed("LSP subprocess could not be spawned")
+    proc.HandshakeFailed(_) ->
+      ProcStartFailed("LSP initialize handshake failed")
+    proc.ActorStartFailed(_) ->
+      ProcStartFailed("lsp_proc actor failed to start")
+  }
 }
 
 fn settings_to_json(settings: Dict(String, json.Json)) -> json.Json {

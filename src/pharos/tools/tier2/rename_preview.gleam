@@ -22,7 +22,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/json
-import pharos/lsp/lifecycle
+import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/server_request_handlers
 import pharos/tools/tier1/session
@@ -67,16 +67,15 @@ pub fn handle(
       }
 
       let request_result =
-        lifecycle.with_handler(
+        proc.with_handler(
           lsp,
           "workspace/applyEdit",
           capture_handler,
-          fn(c) {
-            lifecycle.request(
-              c,
+          fn() {
+            proc.request(
+              lsp,
               "textDocument/rename",
               params,
-              tool_helpers.next_id(),
               default_timeout_ms,
             )
           },
@@ -91,7 +90,7 @@ pub fn handle(
           case request_result {
             Error(err) ->
               Error(RequestFailed(tool_helpers.describe_request_error(err)))
-            Ok(#(_lsp, result_value)) -> render_workspace_edit(result_value)
+            Ok(result_value) -> render_workspace_edit(result_value)
           }
       }
     }

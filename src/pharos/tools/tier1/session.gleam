@@ -18,9 +18,9 @@
 import gleam/bit_array
 import gleam/json
 import gleam/result
-import pharos/lsp/client.{type Client}
 import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc.{type Proc}
 import pharos/workspace_root
 
 pub type SessionError {
@@ -31,12 +31,12 @@ pub type SessionError {
   HandshakeFailed(reason: String)
 }
 
-/// Prepare a Client for tools that operate on a single file. Looks
+/// Prepare a Proc for tools that operate on a single file. Looks
 /// up the language by extension, finds the workspace root, fetches
 /// the cached LSP from the pool (or spawns a fresh one), and asks
 /// the pool to send `didOpen` if it has not already done so this
 /// session for this (language, workspace, uri) triple.
-pub fn prepare(pool: Pool, file_uri: String) -> Result(Client, SessionError) {
+pub fn prepare(pool: Pool, file_uri: String) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(file_uri))
   use workspace <- result.try(discover_workspace(file_uri, config.root_markers))
   use lsp <- result.try(get_lsp(pool, config, workspace))
@@ -51,7 +51,7 @@ pub fn prepare(pool: Pool, file_uri: String) -> Result(Client, SessionError) {
 pub fn prepare_workspace(
   pool: Pool,
   workspace_uri_hint: String,
-) -> Result(Client, SessionError) {
+) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(workspace_uri_hint))
   use workspace <- result.try(discover_workspace(
     workspace_uri_hint,
@@ -97,7 +97,7 @@ fn get_lsp(
   pool: Pool,
   config: LanguageConfig,
   workspace: String,
-) -> Result(Client, SessionError) {
+) -> Result(Proc, SessionError) {
   let spec =
     pool.SpawnSpec(
       command: config.command,
@@ -108,12 +108,7 @@ fn get_lsp(
   pool.get(pool, config.id, workspace, spec)
   |> result.map_error(fn(err) {
     case err {
-      pool.StartFailed(_) ->
-        SpawnFailed(
-          "LSP failed to spawn (command: " <> config.command <> ")",
-        )
-      pool.HandshakeFailed(_) ->
-        HandshakeFailed("LSP initialize handshake failed")
+      pool.ProcStartFailed(reason) -> SpawnFailed(reason)
     }
   })
 }

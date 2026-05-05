@@ -18,22 +18,18 @@
 //// reads identical JSON structure regardless of which transport
 //// the LSP supports.
 
-import gleam/bit_array
-import gleam/dynamic
 import gleam/dynamic/decode
 import gleam/json
 import gleam/option
 import pharos/lsp/client
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/languages.{Pull, Push}
-import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
 
 const default_drain_window_ms: Int = 8000
-
-const drain_step_ms: Int = 500
 
 pub type DiagnosticsError {
   /// File URI did not have a `file://` prefix.
@@ -93,7 +89,7 @@ pub fn handle(
 
             option.None ->
               case config.diagnostics_mode {
-                Push -> drain(lsp, file_uri, timeout_ms, option.None)
+                Push -> push_drain(lsp, file_uri, timeout_ms)
                 Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
               }
           }
@@ -127,116 +123,31 @@ pub fn handle_with_default_timeout(
 
 // -- Push mode (drain) ---------------------------------------------------
 
-fn drain(
-  lsp: client.Client,
-  target_uri: String,
-  remaining_ms: Int,
-  latest: option.Option(String),
+/// Cache miss + Push-mode language: ask the proc to drain inbound
+/// notifications inside its actor (where the Port owner lives) and
+/// return the first publishDiagnostics for the target URI. The
+/// proc's drain also writes every observed publishDiagnostics into
+/// the diagnostics cache as a side effect, populating it for future
+/// hits.
+fn push_drain(
+  lsp: proc.Proc,
+  file_uri: String,
+  timeout_ms: Int,
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
-  case remaining_ms <= 0 {
-    True ->
-      Ok(case latest {
-        option.Some(body) -> Diagnostics(uri: target_uri, body_json: body)
-        option.None -> NoDiagnosticsObserved(uri: target_uri)
-      })
-
-    False ->
-      case client.next_message(lsp, drain_step_ms) {
-        Error(client.PortReceiveError(_)) ->
-          drain(lsp, target_uri, remaining_ms - drain_step_ms, latest)
-
-        Error(other) ->
-          Error(TransportFailed(describe_client_error(other)))
-
-        Ok(#(body, lsp)) -> {
-          // Stage 2 second-pass C: drain bypasses lifecycle's classifier,
-          // so populate the diagnostics cache directly here when the
-          // body is a publishDiagnostics for any URI (not only the
-          // target — caching siblings is harmless and useful next time).
-          cache_publish_diagnostics_body(body)
-
-          let next_latest = case extract_matching_body(body, target_uri) {
-            option.Some(text) -> option.Some(text)
-            option.None -> latest
-          }
-          drain(lsp, target_uri, remaining_ms - drain_step_ms, next_latest)
-        }
-      }
-  }
-}
-
-/// Decode `body` as a JSON-RPC notification and, if it is a
-/// publishDiagnostics, write `params` into the cache.
-fn cache_publish_diagnostics_body(body: BitArray) -> Nil {
-  case bit_array.to_string(body) {
-    Error(_) -> Nil
-    Ok(text) ->
-      case json.parse(text, decode.dynamic) {
-        Error(_) -> Nil
-        Ok(value) ->
-          case decode.run(value, publish_diagnostics_full_decoder()) {
-            Error(_) -> Nil
-            Ok(#(uri, params)) -> diagnostics_cache.put(uri, params)
-          }
-      }
-  }
-}
-
-/// Decoder for full publishDiagnostics notification — yields the
-/// URI plus the entire `params` Dynamic for caching.
-fn publish_diagnostics_full_decoder() -> decode.Decoder(
-  #(String, dynamic.Dynamic),
-) {
-  use method <- decode.field("method", decode.string)
-  case method == "textDocument/publishDiagnostics" {
-    False -> decode.failure(#("", dynamic.nil()), "not publishDiagnostics")
-    True -> {
-      use params <- decode.field("params", decode.dynamic)
-      use uri <- decode.subfield(["params", "uri"], decode.string)
-      decode.success(#(uri, params))
-    }
-  }
-}
-
-/// If `body` is a `textDocument/publishDiagnostics` notification for
-/// `target_uri`, return the verbatim JSON text. Otherwise None.
-fn extract_matching_body(
-  body: BitArray,
-  target_uri: String,
-) -> option.Option(String) {
-  case bit_array.to_string(body) {
-    Error(Nil) -> option.None
-    Ok(text) ->
-      case json.parse(text, decode.dynamic) {
-        Error(_) -> option.None
-        Ok(value) ->
-          case decode.run(value, publish_diagnostics_uri_decoder()) {
-            Error(_) -> option.None
-            Ok(uri) ->
-              case uri == target_uri {
-                True -> option.Some(text)
-                False -> option.None
-              }
-          }
-      }
-  }
-}
-
-fn publish_diagnostics_uri_decoder() -> decode.Decoder(String) {
-  use method <- decode.field("method", decode.string)
-  case method == "textDocument/publishDiagnostics" {
-    False -> decode.failure("", "not publishDiagnostics")
-    True -> {
-      use uri <- decode.subfield(["params", "uri"], decode.string)
-      decode.success(uri)
-    }
+  case proc.wait_for_publish_diagnostics(lsp, file_uri, timeout_ms) {
+    Error(err) ->
+      Error(TransportFailed(
+        "publishDiagnostics drain failed: " <> describe_client_error(err),
+      ))
+    Ok(option.None) -> Ok(NoDiagnosticsObserved(uri: file_uri))
+    Ok(option.Some(body)) -> Ok(Diagnostics(uri: file_uri, body_json: body))
   }
 }
 
 // -- Pull mode (textDocument/diagnostic) ---------------------------------
 
 fn pull_diagnostics(
-  lsp: client.Client,
+  lsp: proc.Proc,
   file_uri: String,
   timeout_ms: Int,
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
@@ -245,19 +156,11 @@ fn pull_diagnostics(
       #("textDocument", json.object([#("uri", json.string(file_uri))])),
     ])
 
-  case
-    lifecycle.request(
-      lsp,
-      "textDocument/diagnostic",
-      params,
-      tool_helpers.next_id(),
-      timeout_ms,
-    )
-  {
+  case proc.request(lsp, "textDocument/diagnostic", params, timeout_ms) {
     Error(err) ->
       Error(TransportFailed(tool_helpers.describe_request_error(err)))
 
-    Ok(#(_lsp, result_value)) ->
+    Ok(result_value) ->
       case decode.run(result_value, full_report_items_decoder()) {
         Error(decode_errs) ->
           Error(TransportFailed(

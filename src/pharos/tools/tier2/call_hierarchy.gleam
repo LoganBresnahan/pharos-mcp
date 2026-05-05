@@ -15,7 +15,7 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
-import pharos/lsp/lifecycle
+import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
@@ -53,17 +53,16 @@ pub fn prepare(
         ])
 
       case
-        lifecycle.request(
+        proc.request(
           lsp,
           "textDocument/prepareCallHierarchy",
           params,
-          tool_helpers.next_id(),
           default_timeout_ms,
         )
       {
         Error(err) ->
           Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(#(_lsp, result_value)) -> Ok(tool_helpers.json_encode(result_value))
+        Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
       }
     }
   }
@@ -103,19 +102,10 @@ fn call_with_item(
           let params_text =
             "{\"item\":" <> tool_helpers.json_encode(item) <> "}"
 
-          case
-            lifecycle.request_raw_params(
-              lsp,
-              method,
-              params_text,
-              tool_helpers.next_id(),
-              default_timeout_ms,
-            )
-          {
+          case proc.request_raw(lsp, method, params_text, default_timeout_ms) {
             Error(err) ->
               Error(RequestFailed(tool_helpers.describe_request_error(err)))
-            Ok(#(_lsp, result_value)) ->
-              Ok(tool_helpers.json_encode(result_value))
+            Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
           }
         }
       }

@@ -11,7 +11,7 @@
 //// whichever variant the server sent.
 
 import gleam/json
-import pharos/lsp/lifecycle
+import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
@@ -48,17 +48,11 @@ pub fn handle(
         ])
 
       case
-        lifecycle.request(
-          lsp,
-          "textDocument/definition",
-          params,
-          tool_helpers.next_id(),
-          default_timeout_ms,
-        )
+        proc.request(lsp, "textDocument/definition", params, default_timeout_ms)
       {
         Error(err) ->
           Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(#(_lsp, result_value)) -> Ok(tool_helpers.json_encode(result_value))
+        Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
       }
     }
   }
