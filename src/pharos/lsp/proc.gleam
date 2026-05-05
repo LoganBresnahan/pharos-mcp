@@ -104,31 +104,52 @@ pub fn start(
   init_params: Json,
   initialize_timeout_ms: Int,
 ) -> Result(Proc, StartError) {
-  use client <- result.try(
-    client.start(command, args, workspace)
-    |> result.map_error(ClientStartFailed),
-  )
+  // Run client.start + lifecycle.initialize INSIDE the actor's
+  // initialiser so the Erlang Port is owned by the actor process
+  // from creation. Avoids the post-spawn `client.connect` ownership
+  // transfer that, in dogfood, raced with gopls's unsolicited
+  // post-initialize messages and starved its inbound queue.
+  let initialise = fn(self) {
+    case client.start(command, args, workspace) {
+      Error(e) -> Error("client.start failed: " <> describe_client_error(e))
+      Ok(c) ->
+        case lifecycle.initialize(c, 0, init_params, initialize_timeout_ms) {
+          Error(e) ->
+            Error("initialize handshake failed: " <> describe_lifecycle_error(e))
+          Ok(#(c, _capabilities)) ->
+            Ok(actor.initialised(State(client: c)) |> actor.returning(self))
+        }
+    }
+  }
 
-  use #(client, _capabilities) <- result.try(
-    lifecycle.initialize(client, 0, init_params, initialize_timeout_ms)
-    |> result.map_error(HandshakeFailed),
-  )
+  // Initialiser timeout includes the LSP handshake budget plus a
+  // small margin so we don't trip on the actor's outer wrapper.
+  actor.new_with_initialiser(initialize_timeout_ms + 5000, initialise)
+  |> actor.on_message(handle_message)
+  |> actor.start()
+  |> result.map(fn(started) { Proc(subject: started.data) })
+  |> result.map_error(ActorStartFailed)
+}
 
-  use started <- result.try(
-    actor.new(State(client: client))
-    |> actor.on_message(handle_message)
-    |> actor.start()
-    |> result.map_error(ActorStartFailed),
-  )
+fn describe_client_error(err: client.Error) -> String {
+  // Lossy string for the initialiser error path. Caller only sees
+  // "ActorStartFailed(...)" anyway; preserves intent without
+  // bringing the full client error variant into Proc's StartError.
+  case err {
+    client.PortReceiveError(_) -> "port receive error"
+    client.PortSendError(_) -> "port send error"
+    client.FramingError(_) -> "framing error"
+    client.SpawnError(_) -> "subprocess spawn error"
+  }
+}
 
-  // Transfer Port ownership from this process (the caller of
-  // proc.start, typically the pool actor) to the new proc actor.
-  // Without this the actor's `lifecycle.request` reads in
-  // handle_request would never see port data — the messages
-  // continue arriving at this caller's mailbox until eviction.
-  let _ = client.connect(client, process.subject_owner(started.data) |> result.unwrap(process.self()))
-
-  Ok(Proc(subject: started.data))
+fn describe_lifecycle_error(err: lifecycle.RequestError) -> String {
+  case err {
+    lifecycle.ClientFailure(_) -> "client transport failure"
+    lifecycle.ResponseDecodeError(reason) -> "response decode: " <> reason
+    lifecycle.ServerError(code, message) ->
+      "server error " <> int_to_text(code) <> ": " <> message
+  }
 }
 
 /// Send a JSON-RPC request and wait for the response. The
