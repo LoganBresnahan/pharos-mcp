@@ -271,7 +271,8 @@ fn handle_proc_down(
 
     Ok(key) -> {
       let #(language, workspace) = key
-      log.warn(
+      log.warn_at(
+        "pharos/lsp/pool",
         "lsp_proc for "
         <> language
         <> " / "
@@ -396,7 +397,8 @@ fn spawn_proc(
       case proc.push_configuration(spawned, settings_to_json(settings)) {
         Ok(Nil) -> Nil
         Error(_err) ->
-          log.warn(
+          log.warn_at(
+            "pharos/lsp/pool",
             "workspace/didChangeConfiguration push failed; "
             <> "server may run with degraded settings",
           )

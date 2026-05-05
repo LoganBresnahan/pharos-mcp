@@ -88,7 +88,7 @@ fn handle_post(
 ) -> Response(mist.ResponseData) {
   case origin_allowed(req) {
     False -> {
-      log.warn("rejecting POST /mcp with disallowed Origin header")
+      log.warn_at("pharos/mcp/http", "rejecting POST /mcp with disallowed Origin header")
       forbidden()
     }
     True -> {
@@ -117,7 +117,7 @@ fn handle_session(
   case is_initialize(body_text) {
     True -> {
       let id = sessions.issue(sessions)
-      log.info("issued session " <> id)
+      log.info_at("pharos/mcp/http", "issued session " <> id)
       with_session_id(dispatch(pool, body_text), id)
     }
 
@@ -127,7 +127,7 @@ fn handle_session(
         Ok(id) ->
           case sessions.validate(sessions, id) {
             False -> {
-              log.warn("rejecting unknown Mcp-Session-Id " <> id)
+              log.warn_at("pharos/mcp/http", "rejecting unknown Mcp-Session-Id " <> id)
               bad_request("unknown Mcp-Session-Id")
             }
             True -> dispatch(pool, body_text)
@@ -154,7 +154,7 @@ fn handle_sse(
 ) -> Response(mist.ResponseData) {
   case origin_allowed(req) {
     False -> {
-      log.warn("rejecting GET /mcp/events with disallowed Origin header")
+      log.warn_at("pharos/mcp/http", "rejecting GET /mcp/events with disallowed Origin header")
       forbidden()
     }
     True ->
@@ -163,7 +163,7 @@ fn handle_sse(
         Ok(id) ->
           case sessions.validate(sessions, id) {
             False -> {
-              log.warn("rejecting SSE for unknown Mcp-Session-Id " <> id)
+              log.warn_at("pharos/mcp/http", "rejecting SSE for unknown Mcp-Session-Id " <> id)
               bad_request("unknown Mcp-Session-Id")
             }
             True -> open_sse_stream(req, sessions, id)
@@ -205,7 +205,7 @@ fn sse_init(
   session_id: String,
 ) -> SseState {
   let _ = sessions.attach_sse(sessions, session_id, self)
-  log.info("SSE attached for session " <> session_id)
+  log.info_at("pharos/mcp/http", "SSE attached for session " <> session_id)
   schedule_heartbeat(self)
   SseState(sessions: sessions, session_id: session_id, self: self)
 }
@@ -228,7 +228,7 @@ fn sse_loop(
           actor.continue(state)
         }
         Error(_) -> {
-          log.warn("SSE send failed; closing stream for " <> state.session_id)
+          log.warn_at("pharos/mcp/http", "SSE send failed; closing stream for " <> state.session_id)
           sessions.detach_sse(state.sessions, state.session_id)
           actor.stop()
         }

@@ -10,6 +10,7 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/int
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -88,20 +89,34 @@ fn id_decoder() -> decode.Decoder(Id) {
 
 fn dispatch(pool: Pool, message: Message) -> DispatchResult {
   case message {
-    RequestMessage(id, "initialize", _params) -> Reply(initialize_response(id))
-    RequestMessage(id, "tools/list", _params) -> Reply(tools_list_response(id))
-    RequestMessage(id, "tools/call", params) ->
-      Reply(handle_tool_call(pool, id, params))
-    RequestMessage(id, method, _) ->
-      Reply(error_response(
-        Some(id),
-        -32_601,
-        "Method not found: " <> method,
-      ))
+    RequestMessage(id, method, params) -> {
+      log.set_correlation_id(id_to_text(id))
+      log.debug_at("pharos/mcp/server", "dispatch " <> method)
+      let result = case method {
+        "initialize" -> Reply(initialize_response(id))
+        "tools/list" -> Reply(tools_list_response(id))
+        "tools/call" -> Reply(handle_tool_call(pool, id, params))
+        other ->
+          Reply(error_response(
+            Some(id),
+            -32_601,
+            "Method not found: " <> other,
+          ))
+      }
+      log.clear_correlation_id()
+      result
+    }
 
     NotificationMessage("initialized", _) -> NoReply
     NotificationMessage("notifications/cancelled", _) -> NoReply
     NotificationMessage(_, _) -> NoReply
+  }
+}
+
+fn id_to_text(id: Id) -> String {
+  case id {
+    IntId(n) -> int.to_string(n)
+    StringId(s) -> s
   }
 }
 
@@ -1728,7 +1743,7 @@ fn tool_text_result(message: String, is_error: Bool) -> Json {
   // what went wrong without waiting for the LLM to surface the
   // content block. Stdout stays reserved for JSON-RPC frames.
   case is_error {
-    True -> log.warn("tool error returned to client: " <> message)
+    True -> log.warn_at("pharos/mcp/server", "tool error returned to client: " <> message)
     False -> Nil
   }
 

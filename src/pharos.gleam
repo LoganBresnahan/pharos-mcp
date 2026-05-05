@@ -43,6 +43,7 @@ type Transport {
 }
 
 pub fn main() -> Nil {
+  let _writer = log.start_default()
   let transport = read_transport()
   log.info("pharos starting (transport=" <> transport_label(transport) <> ")")
   diagnostics_cache.init()
