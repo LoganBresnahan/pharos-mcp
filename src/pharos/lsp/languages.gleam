@@ -171,21 +171,80 @@ fn typescript() -> LanguageConfig {
     // typescript-language-server gates publishDiagnostics on
     // `workspace/didChangeConfiguration` arriving post-`initialized`
     // and on `workspace/configuration` server-pull requests being
-    // answered. Stage 0C wires both routes by attaching a per-language
-    // workspace_configuration here. The two top-level keys
-    // (`typescript`, `javascript`) match what the server requests in
-    // its `workspace/configuration` items[].section. Empty objects are
-    // sufficient to unlock diagnostics; richer settings (preferences,
-    // format, suggest) can be added incrementally if dogfood needs
-    // them.
+    // answered. Empty section objects (Stage 0C) were not enough.
+    // Stage 2 #3 expands to the minimum non-empty payload that VSCode
+    // sends: declare `preferences`, `suggest`, `format` for both
+    // language scopes, plus `diagnostics.ignoredCodes` and
+    // `tsserver.useSyntaxServer` so the server has all the
+    // configuration keys it expects to find.
     workspace_configuration: Some(
       dict.from_list([
-        #("typescript", json.object([])),
-        #("javascript", json.object([])),
+        #("typescript", typescript_section_settings()),
+        #("javascript", typescript_section_settings()),
+        #(
+          "completions",
+          json.object([#("completeFunctionCalls", json.bool(False))]),
+        ),
+        #(
+          "diagnostics",
+          json.object([
+            #("ignoredCodes", json.preprocessed_array([])),
+          ]),
+        ),
       ]),
     ),
     readiness_token: None,
   )
+}
+
+/// Shared body of the `typescript` and `javascript` sections of
+/// typescript-language-server's workspace_configuration. The same
+/// shape works for both because the server treats them
+/// symmetrically (typescript settings apply to .ts files, the
+/// javascript ones apply to .js).
+fn typescript_section_settings() -> Json {
+  json.object([
+    #(
+      "preferences",
+      json.object([
+        #(
+          "importModuleSpecifier",
+          json.string("shortest"),
+        ),
+        #(
+          "quoteStyle",
+          json.string("auto"),
+        ),
+      ]),
+    ),
+    #(
+      "suggest",
+      json.object([
+        #("completeFunctionCalls", json.bool(False)),
+      ]),
+    ),
+    #(
+      "format",
+      json.object([
+        #("enable", json.bool(True)),
+      ]),
+    ),
+    #(
+      "tsserver",
+      json.object([
+        #("useSyntaxServer", json.string("auto")),
+        #("experimental", json.object([])),
+      ]),
+    ),
+    #(
+      "implementationsCodeLens",
+      json.object([#("enabled", json.bool(True))]),
+    ),
+    #(
+      "referencesCodeLens",
+      json.object([#("enabled", json.bool(True))]),
+    ),
+  ])
 }
 
 fn python() -> LanguageConfig {
