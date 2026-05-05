@@ -29,6 +29,7 @@ import pharos/tools/tier2/format_document
 import pharos/tools/tier2/goto_implementation
 import pharos/tools/tier2/goto_type_definition
 import pharos/tools/tier2/lsp_request_raw
+import pharos/tools/tier4
 import pharos/tools/tier2/rename_preview
 import pharos/tools/tier2/signature_help
 
@@ -170,6 +171,7 @@ fn tools_list_response(id: Id) -> String {
             format_document_tool_definition(),
             code_actions_tool_definition(),
             lsp_request_raw_tool_definition(),
+            ..tier4.definitions()
           ],
           of: fn(t) { t },
         ),
@@ -616,8 +618,14 @@ fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
     Ok(#("lsp_request_raw", arguments)) ->
       handle_lsp_request_raw(pool, id, arguments)
 
-    Ok(#(name, _)) ->
-      error_response(Some(id), -32_602, "Unknown tool: " <> name)
+    Ok(#(name, arguments)) ->
+      case tier4.dispatch(pool, name, arguments) {
+        Some(Ok(payload)) ->
+          success_response(id, fn() { tool_text_result(payload, False) })
+        Some(Error(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        None -> error_response(Some(id), -32_602, "Unknown tool: " <> name)
+      }
 
     Error(reason) ->
       error_response(Some(id), -32_602, "Invalid tools/call params: " <> reason)

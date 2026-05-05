@@ -80,6 +80,14 @@ pub opaque type Msg {
   /// `reason` is included for diagnostic logging; pool just evicts
   /// the cache entry regardless of why.
   ProcDown(monitor_ref: process.Monitor, reason: dynamic.Dynamic)
+  /// Operator-requested kill via `kill_lsp/3`. Same mechanics as
+  /// `Evict` but synchronous so the caller learns whether the
+  /// (language, workspace) was cached.
+  KillLsp(
+    language: String,
+    workspace: String,
+    reply_to: Subject(KillStatus),
+  )
 }
 
 pub type EnsureOpenError {
@@ -137,6 +145,28 @@ pub fn evict(pool: Pool, language: String, workspace: String) -> Nil {
   actor.send(subject, Evict(language, workspace))
 }
 
+pub type KillStatus {
+  Killed
+  NotFound
+}
+
+/// Operator-requested kill of one LSP. Identical mechanics to
+/// `evict/3` (close the Proc, drop the cache entry) but routed
+/// through a sync call so the caller can confirm whether anything
+/// was actually killed. Used by the `runtime_kill_lsp` MCP tool;
+/// the LLM gets a meaningful "killed" vs "no such cached LSP"
+/// response instead of a fire-and-forget cast.
+pub fn kill_lsp(
+  pool: Pool,
+  language: String,
+  workspace: String,
+) -> KillStatus {
+  let Pool(subject) = pool
+  actor.call(subject, default_call_timeout_ms, fn(reply) {
+    KillLsp(language, workspace, reply)
+  })
+}
+
 /// Close every cached LSP. Called on graceful shutdown.
 pub fn close_all(pool: Pool) -> Nil {
   let Pool(subject) = pool
@@ -186,6 +216,42 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
     ProcDown(monitor_ref:, reason: _reason) ->
       handle_proc_down(state, monitor_ref)
+
+    KillLsp(language, workspace, reply_to) ->
+      handle_kill_lsp(state, language, workspace, reply_to)
+  }
+}
+
+fn handle_kill_lsp(
+  state: State,
+  language: String,
+  workspace: String,
+  reply: Subject(KillStatus),
+) -> actor.Next(State, Msg) {
+  let key = #(language, workspace)
+  case dict.get(state.cache, key) {
+    Error(_) -> {
+      process.send(reply, NotFound)
+      actor.continue(state)
+    }
+    Ok(spawned) -> {
+      proc.close(spawned)
+      let cache = dict.delete(state.cache, key)
+      let opened =
+        set.filter(state.opened, fn(triple) {
+          let #(l, w, _) = triple
+          !{ l == language && w == workspace }
+        })
+      log.warn_at(
+        "pharos/lsp/pool",
+        "operator-requested kill of lsp_proc for "
+        <> language
+        <> " / "
+        <> workspace,
+      )
+      process.send(reply, Killed)
+      actor.continue(State(cache: cache, monitors: state.monitors, opened: opened))
+    }
   }
 }
 

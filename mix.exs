@@ -37,6 +37,7 @@ defmodule Pharos.MixProject do
       {:gleam_http, "~> 4.0"},
       {:mist, "~> 6.0"},
       {:pollux, "~> 1.0"},
+      {:recon, "~> 2.5"},
       {:gleeunit, "~> 1.10", only: [:dev, :test], runtime: false},
       {:qcheck, "~> 1.0", only: [:dev, :test], runtime: false},
       {:burrito, "~> 1.5", runtime: false}

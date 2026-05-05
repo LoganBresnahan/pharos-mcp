@@ -23,6 +23,7 @@ import pharos/log/entry.{
   type Level, Critical, Debug, Info, LogEntry, Warn,
 }
 import pharos/log/filter
+import pharos/log/ring
 import pharos/log/writer.{type Writer}
 
 const default_target: String = "pharos"
@@ -152,6 +153,36 @@ pub fn correlation_id() -> Option(String) {
     Ok(id) -> Some(id)
     Error(_) -> None
   }
+}
+
+/// Adjust the writer's filter for one target at runtime. `level =
+/// None` silences the target. Used by the `runtime_log_level` MCP
+/// tool.
+pub fn set_target_level(
+  target_prefix: String,
+  level: Option(Level),
+) -> Result(Nil, Nil) {
+  writer.set_target_global(target_prefix, level)
+}
+
+/// Read N most-recent ring buffer entries newest-first, optionally
+/// filtered to lines containing `substring_filter`. Returns the
+/// raw `(level, line)` tuples ready for serialization. Empty
+/// `substring_filter` disables filtering.
+pub fn ring_tail(
+  n: Int,
+  substring_filter: String,
+) -> List(#(Level, String)) {
+  ring.tail(n, substring_filter)
+}
+
+/// Reset the ring buffer.
+pub fn ring_clear() -> Nil {
+  ring.clear()
+}
+
+pub fn ring_size() -> Int {
+  ring.size()
 }
 
 // -- Internal

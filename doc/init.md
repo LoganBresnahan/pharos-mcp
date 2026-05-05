@@ -602,11 +602,17 @@ Logging + tracing tools (depend on Part A's ring buffer + Part B's tracer):
 - `runtime_log_level(target, level)` — runtime-adjust verbosity (e.g. crank `pharos/lsp/proc` to debug for the duration of a debugging session)
 - `runtime_trace_lsp(language, duration_ms)` — turn the tracer on for one LSP for a fixed window, return the captured trace lines
 
-Write-ish (gated behind env var or per-call confirmation):
-- `runtime_trace_module(module, duration_ms)` — `:dbg.tracer` + `:dbg.tpl` for a window, return collected calls
-- `runtime_kill_pid(pid)` — destructive, off by default
+Scoped destructive (always available, safe by design):
+- `runtime_kill_lsp(language, workspace)` — terminate one LSP via `pool.kill_lsp` → `supervisor.terminate_child(lsp_dyn_sup, pid)`. The pool evicts the cache entry; next tool call to the same key spawns a fresh worker via the standard cache-miss path. Cannot kill anything other than supervised LSP workers.
 
-Risks captured in a forthcoming ADR:
+Powerful tracing (gated behind `PHAROS_RUNTIME_TRACE_ENABLED=1`):
+- `runtime_trace_calls(module, function?, duration_ms, max_events)` — thin Gleam wrapper over `recon_trace.calls/2`. recon enforces max-events trip, time-limit trip, and automatic `:dbg` cleanup. Handler hard-caps `duration_ms` at 30000 and `max_events` at 5000, refuses to trace specific hot modules (`erlang`, `ets`, `gleam@otp@actor`, `gleam@erlang@process`), and wraps the body in `try ... after :recon_trace.clear() end` so any crash path still removes BEAM trace flags.
+
+Cut from scope (see ADR-014):
+- `runtime_kill_pid` — no use case `runtime_kill_lsp` does not cover; raw kill of arbitrary BEAM pids has too many ways to break the system in ways the LLM cannot recover from.
+- Raw `:dbg`-based `runtime_trace_module` — superseded by `runtime_trace_calls` via recon.
+
+Risks captured in ADR-014:
 - Pid serialization stability across restarts (use names where possible; pids text-only)
 - Output volume on busy nodes (clip at 100 processes default, raise via `limit`)
 - Distributed-Erlang multi-node observer is out of scope (pharos is single-node)

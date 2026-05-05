@@ -115,6 +115,23 @@ pub fn set_target(
   process.send(writer.subject, SetTarget(target_prefix, level))
 }
 
+/// Globally-addressable target override. Looks up the writer via
+/// the persistent_term registration and casts `SetTarget` directly.
+/// Used by `log.set_target_level/2` and the `runtime_log_level`
+/// MCP tool. Returns `Error(Nil)` when the writer is not running.
+pub fn set_target_global(
+  target_prefix: String,
+  level: Option(Level),
+) -> Result(Nil, Nil) {
+  case lookup_subject() {
+    Error(_) -> Error(Nil)
+    Ok(subject) -> {
+      process.send(subject, SetTarget(target_prefix, level))
+      Ok(Nil)
+    }
+  }
+}
+
 pub fn stop(writer: Writer) -> Nil {
   process.send(writer.subject, Stop)
 }
