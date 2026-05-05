@@ -263,7 +263,9 @@ fn find_references_tool_definition() -> Json {
           <> "the verbatim list of LSP Locations (zero-based "
           <> "positions). Set `include_declaration` (default true) to "
           <> "include or exclude the symbol's definition site from the "
-          <> "result.",
+          <> "result. Default per-call timeout is 60s; raise via "
+          <> "`timeout_ms` when scanning a workspace-wide type whose "
+          <> "rust-analyzer reference walk exceeds the default.",
       ),
     ),
     #(
@@ -294,6 +296,18 @@ fn find_references_tool_definition() -> Json {
                   json.string(
                     "Whether to include the definition site in the "
                       <> "results. Defaults to true.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "timeout_ms",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Per-call timeout in milliseconds. Default 60000.",
                   ),
                 ),
               ]),
@@ -673,8 +687,17 @@ fn handle_find_references(
         -32_602,
         "Invalid find_references params: " <> reason,
       )
-    Ok(#(uri, line, character, include_decl)) ->
-      case find_references.handle(pool, uri, line, character, include_decl) {
+    Ok(#(uri, line, character, include_decl, timeout_ms)) ->
+      case
+        find_references.handle(
+          pool,
+          uri,
+          line,
+          character,
+          include_decl,
+          timeout_ms,
+        )
+      {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(find_references.SessionFailed(reason)) ->
@@ -1353,7 +1376,7 @@ fn decode_position_arguments(
 
 fn decode_find_references_arguments(
   args: Option(Dynamic),
-) -> Result(#(String, Int, Int, Bool), String) {
+) -> Result(#(String, Int, Int, Bool, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
@@ -1364,12 +1387,18 @@ fn decode_find_references_arguments(
       True,
       decode.bool,
     )
-    decode.success(#(uri, line, character, include_decl))
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      find_references.default_timeout_ms,
+      decode.int,
+    )
+    decode.success(#(uri, line, character, include_decl, timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
     "expected `uri: string`, `line: int`, `character: int`, "
-    <> "optional `include_declaration: bool`"
+    <> "optional `include_declaration: bool`, "
+    <> "optional `timeout_ms: int`"
   })
 }
 

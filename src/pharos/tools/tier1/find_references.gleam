@@ -31,7 +31,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
 
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 60_000
 
 const content_modified_retry_delay_ms: Int = 1000
 
@@ -48,12 +48,13 @@ pub fn handle(
   line: Int,
   character: Int,
   include_declaration: Bool,
+  timeout_ms: Int,
 ) -> Result(String, FindReferencesError) {
   case session.prepare(pool, file_uri) {
     Error(err) -> Error(SessionFailed(describe_session_error(err)))
     Ok(lsp) -> {
       let params = build_params(file_uri, line, character, include_declaration)
-      attempt(lsp, params, retries_left: 1)
+      attempt(lsp, params, timeout_ms, retries_left: 1)
     }
   }
 }
@@ -88,6 +89,7 @@ fn build_params(
 fn attempt(
   lsp: client.Client,
   params: json.Json,
+  timeout_ms: Int,
   retries_left retries_left: Int,
 ) -> Result(String, FindReferencesError) {
   case
@@ -96,7 +98,7 @@ fn attempt(
       "textDocument/references",
       params,
       tool_helpers.next_id(),
-      default_timeout_ms,
+      timeout_ms,
     )
   {
     Ok(#(_lsp, result_value)) -> Ok(tool_helpers.json_encode(result_value))
@@ -108,7 +110,7 @@ fn attempt(
       // rust-analyzer doing background indexing. Sleep briefly so
       // the server reaches a steady state, then try again.
       process.sleep(content_modified_retry_delay_ms)
-      attempt(lsp, params, retries_left: retries_left - 1)
+      attempt(lsp, params, timeout_ms, retries_left: retries_left - 1)
     }
 
     Error(err) ->
