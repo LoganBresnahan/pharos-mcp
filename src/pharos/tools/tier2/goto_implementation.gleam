@@ -7,13 +7,17 @@
 //// response shape as `goto_definition`: Location, list of Location,
 //// list of LocationLink, or null.
 
+import gleam/int
 import gleam/json
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
+import pharos/tools/clip
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
 
 const default_timeout_ms: Int = 5000
+
+pub const default_limit: Int = 50
 
 pub type GotoImplementationError {
   SessionFailed(reason: String)
@@ -25,6 +29,7 @@ pub fn handle(
   file_uri: String,
   line: Int,
   character: Int,
+  limit: Int,
 ) -> Result(String, GotoImplementationError) {
   case session.prepare(pool, file_uri) {
     Error(err) -> Error(SessionFailed(describe_session_error(err)))
@@ -52,11 +57,24 @@ pub fn handle(
       {
         Error(err) ->
           Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(#(_lsp, result_value)) -> Ok(tool_helpers.json_encode(result_value))
+        Ok(#(_lsp, result_value)) -> {
+          let clipped = clip.clip_array(result_value, limit)
+          case clipped.truncated_by {
+            0 -> Ok(clipped.json_text)
+            n ->
+              Ok(
+                clipped.json_text
+                <> "\n\n(truncated "
+                <> int.to_string(n)
+                <> " more implementation site(s); pass `limit` to raise)",
+              )
+          }
+        }
       }
     }
   }
 }
+
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {

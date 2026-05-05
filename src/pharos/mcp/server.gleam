@@ -764,15 +764,15 @@ fn handle_goto_implementation(
   id: Id,
   arguments: Option(Dynamic),
 ) -> String {
-  case decode_position_arguments(arguments) {
+  case decode_goto_implementation_arguments(arguments) {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid goto_implementation params: " <> reason,
       )
-    Ok(#(uri, line, character)) ->
-      case goto_implementation.handle(pool, uri, line, character) {
+    Ok(#(uri, line, character, limit)) ->
+      case goto_implementation.handle(pool, uri, line, character, limit) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(goto_implementation.SessionFailed(reason)) ->
@@ -959,12 +959,80 @@ fn goto_implementation_tool_definition() -> Json {
       json.string(
         "Find concrete implementation site(s) for the trait/interface "
           <> "method or abstract symbol at a position. Wraps LSP "
-          <> "`textDocument/implementation`. Returns each `impl` block "
-          <> "(or equivalent in other languages) that provides this "
-          <> "symbol's behavior. Same response shape as goto_definition.",
+          <> "`textDocument/implementation`. Returns up to `limit` "
+          <> "Locations / LocationLinks; default 50, raise via the "
+          <> "`limit` arg if you need more (results past the cap are "
+          <> "trimmed with a trailing `(truncated N more ...)` "
+          <> "annotation). Calling on a stdlib trait method like "
+          <> "`Default::default` can otherwise return thousands of "
+          <> "sites and exceed the MCP host's per-tool token budget.",
       ),
     ),
-    #("inputSchema", position_arg_schema()),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of the source file. Example: "
+                    <> "file:///home/user/project/src/main.rs",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "line",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string("Zero-based line, per LSP spec."),
+                ),
+              ]),
+            ),
+            #(
+              "character",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string("Zero-based UTF-16 offset, per LSP spec."),
+                ),
+              ]),
+            ),
+            #(
+              "limit",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Maximum number of implementation sites to return. "
+                    <> "Default 50.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.preprocessed_array([
+            json.string("uri"),
+            json.string("line"),
+            json.string("character"),
+          ]),
+        ),
+      ]),
+    ),
   ])
 }
 
@@ -1351,6 +1419,28 @@ fn decode_code_actions_arguments(
   |> result.map_error(fn(_) {
     "expected `uri: string`, `start_line/start_character: int`, "
     <> "`end_line/end_character: int`"
+  })
+}
+
+fn decode_goto_implementation_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int, Int, Int), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use line <- decode.field("line", decode.int)
+    use character <- decode.field("character", decode.int)
+    use limit <- decode.optional_field(
+      "limit",
+      goto_implementation.default_limit,
+      decode.int,
+    )
+    decode.success(#(uri, line, character, limit))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, `line: int`, `character: int`, "
+    <> "optional `limit: int`"
   })
 }
 
