@@ -20,6 +20,7 @@ import gleam/erlang/process.{type Pid}
 import pharos/lsp/framing
 import pharos/lsp/port
 import pharos/lsp/server_request_handlers.{type Registry}
+import pharos/lsp/trace
 
 pub opaque type Client {
   Client(
@@ -75,6 +76,7 @@ pub fn handlers(client: Client) -> Registry {
 /// Content-Length framing automatically.
 pub fn send_body(client: Client, body: BitArray) -> Result(Nil, Error) {
   let framed = framing.encode(body)
+  trace.out(framed)
   case port.send(client.port, framed) {
     Ok(Nil) -> Ok(Nil)
     Error(send_err) -> Error(PortSendError(send_err))
@@ -105,6 +107,7 @@ fn read_until_message(
     Error(receive_err) -> Error(PortReceiveError(receive_err))
 
     Ok(bytes) -> {
+      trace.incoming(bytes)
       let new_buffer = bit_array.append(client.buffer, bytes)
       case framing.parse(new_buffer) {
         Error(framing_err) -> Error(FramingError(framing_err))
@@ -133,6 +136,7 @@ fn read_until_message(
 /// blocking `next_message` path. Returns the updated Client; any
 /// complete frames now sit in `queue` ready for `drain_one_frame`.
 pub fn feed_bytes(client: Client, bytes: BitArray) -> Client {
+  trace.incoming(bytes)
   let new_buffer = bit_array.append(client.buffer, bytes)
   case framing.parse(new_buffer) {
     Error(_) ->

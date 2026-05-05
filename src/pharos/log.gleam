@@ -34,6 +34,10 @@ const default_target: String = "pharos"
 ///
 /// Configuration:
 ///   - `PHAROS_LOG` — RUST_LOG-style spec; default `info`.
+///   - `PHAROS_TRACE_LSP` — convenience flag. When set to anything
+///     other than empty/`0`/`off`, the boot filter is augmented
+///     with `pharos/lsp/trace=debug` so wire traces are emitted
+///     without having to spell out the full `PHAROS_LOG` form.
 ///   - `PHAROS_LOG_RING` — `0`/`off` disables the ring buffer sink;
 ///     anything else (or unset) keeps it on.
 ///   - `PHAROS_LOG_STDERR` — `0`/`off` disables stderr; default on.
@@ -43,9 +47,20 @@ pub fn start_default() -> Result(Writer, writer.StartError) {
     Some(value) -> value
   }
   let parsed_filter = filter.parse_spec(spec)
+  let with_trace = case read_bool_env("PHAROS_TRACE_LSP", default_value: False) {
+    False -> parsed_filter
+    True ->
+      filter.Filter(
+        default: parsed_filter.default,
+        overrides: [
+          filter.Override("pharos/lsp/trace", option.Some(Debug)),
+          ..parsed_filter.overrides
+        ],
+      )
+  }
   let ring_enabled = read_bool_env("PHAROS_LOG_RING", default_value: True)
   let stderr_enabled = read_bool_env("PHAROS_LOG_STDERR", default_value: True)
-  writer.start(parsed_filter, ring_enabled, stderr_enabled)
+  writer.start(with_trace, ring_enabled, stderr_enabled)
 }
 
 fn read_bool_env(name: String, default_value default: Bool) -> Bool {

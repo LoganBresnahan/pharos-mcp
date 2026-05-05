@@ -33,7 +33,8 @@
     writer_register_subject/1,
     writer_subject/0,
     mailbox_len/1,
-    direct_stderr/1
+    direct_stderr/1,
+    render_trace_body/1
 ]).
 
 -define(RING_TABLE, pharos_log_ring).
@@ -203,3 +204,21 @@ mailbox_len(Pid) when is_pid(Pid) ->
 direct_stderr(Line) when is_binary(Line) ->
     io:format(standard_error, "~ts~n", [Line]),
     nil.
+
+%% Convert raw LSP wire bytes into a single-line printable string
+%% suitable for a `body=...` log field. Control characters and
+%% non-ASCII bytes become escapes (`\\r`, `\\n`, `\\t`, `\\xNN`)
+%% so the entry stays on one line and the JSON envelope reads
+%% cleanly. Caller has already truncated to a safe length.
+render_trace_body(Bytes) when is_binary(Bytes) ->
+    << <<(escape_trace_byte(B))/binary>> || <<B>> <= Bytes >>.
+
+escape_trace_byte($\r) -> <<"\\r">>;
+escape_trace_byte($\n) -> <<"\\n">>;
+escape_trace_byte($\t) -> <<"\\t">>;
+escape_trace_byte($\\) -> <<"\\\\">>;
+escape_trace_byte(B) when B < 32 ->
+    list_to_binary(io_lib:format("\\x~2.16.0b", [B]));
+escape_trace_byte(B) when B > 126 ->
+    list_to_binary(io_lib:format("\\x~2.16.0b", [B]));
+escape_trace_byte(B) -> <<B>>.
