@@ -9,13 +9,17 @@
 //// which LSP to query. Caller passes a URI of any file inside the
 //// workspace, or the workspace root itself as a `file://` URI.
 
+import gleam/int
 import gleam/json
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
+import pharos/tools/clip
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
 
 const default_timeout_ms: Int = 10_000
+
+pub const default_limit: Int = 20
 
 pub type WorkspaceSymbolsError {
   SessionFailed(reason: String)
@@ -26,6 +30,7 @@ pub fn handle(
   pool: Pool,
   workspace_uri_hint: String,
   query: String,
+  limit: Int,
 ) -> Result(String, WorkspaceSymbolsError) {
   case session.prepare_workspace(pool, workspace_uri_hint) {
     Error(err) -> Error(SessionFailed(describe_session_error(err)))
@@ -43,7 +48,21 @@ pub fn handle(
       {
         Error(err) ->
           Error(RequestFailed(tool_helpers.describe_request_error(err)))
-        Ok(#(_lsp, result_value)) -> Ok(tool_helpers.json_encode(result_value))
+        Ok(#(_lsp, result_value)) -> {
+          let clipped = clip.clip_array(result_value, limit)
+          case clipped.truncated_by {
+            0 -> Ok(clipped.json_text)
+            n ->
+              Ok(
+                clipped.json_text
+                <> "\n\n(truncated "
+                <> int.to_string(n)
+                <> " more symbol(s); pass `limit` to raise. gopls "
+                <> "in particular fuzzy-matches across the Go stdlib "
+                <> "and can flood the result.)",
+              )
+          }
+        }
       }
     }
   }

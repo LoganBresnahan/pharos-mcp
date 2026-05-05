@@ -367,10 +367,13 @@ fn workspace_symbols_tool_definition() -> Json {
       json.string(
         "Search across the workspace for symbols whose name "
           <> "matches a query. Wraps LSP `workspace/symbol`. Returns "
-          <> "the verbatim list of `SymbolInformation` or "
-          <> "`WorkspaceSymbol` (LSP 3.17+). Caller must pass any "
-          <> "file:// URI inside the workspace as `workspace_uri_hint` "
-          <> "so the bridge knows which LSP to query.",
+          <> "up to `limit` `SymbolInformation` / `WorkspaceSymbol` "
+          <> "entries; default 20, raise via `limit` if a query is "
+          <> "expected to return more. Excess results trim with a "
+          <> "trailing truncation annotation. gopls in particular "
+          <> "fuzzy-matches across the Go stdlib and can flood the "
+          <> "result for short queries — the cap protects the MCP "
+          <> "host's per-tool token budget.",
       ),
     ),
     #(
@@ -402,6 +405,18 @@ fn workspace_symbols_tool_definition() -> Json {
                   json.string(
                     "Substring to match against symbol names. Empty "
                       <> "string returns all symbols (potentially many).",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "limit",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Max symbols to return. Default 20.",
                   ),
                 ),
               ]),
@@ -764,8 +779,8 @@ fn handle_workspace_symbols(
         -32_602,
         "Invalid workspace_symbols params: " <> reason,
       )
-    Ok(#(workspace_uri_hint, query)) ->
-      case workspace_symbols.handle(pool, workspace_uri_hint, query) {
+    Ok(#(workspace_uri_hint, query, limit)) ->
+      case workspace_symbols.handle(pool, workspace_uri_hint, query, limit) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(workspace_symbols.SessionFailed(reason)) ->
@@ -1646,16 +1661,22 @@ fn decode_lsp_request_raw_arguments(
 
 fn decode_workspace_symbols_arguments(
   args: Option(Dynamic),
-) -> Result(#(String, String), String) {
+) -> Result(#(String, String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use hint <- decode.field("workspace_uri_hint", decode.string)
     use query <- decode.field("query", decode.string)
-    decode.success(#(hint, query))
+    use limit <- decode.optional_field(
+      "limit",
+      workspace_symbols.default_limit,
+      decode.int,
+    )
+    decode.success(#(hint, query, limit))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
-    "expected `workspace_uri_hint: string`, `query: string`"
+    "expected `workspace_uri_hint: string`, `query: string`, "
+    <> "optional `limit: int`"
   })
 }
 
