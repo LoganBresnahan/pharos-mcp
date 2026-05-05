@@ -149,6 +149,8 @@ fn tools_list_response(id: Id) -> String {
             goto_implementation_tool_definition(),
             signature_help_tool_definition(),
             call_hierarchy_prepare_tool_definition(),
+            call_hierarchy_incoming_calls_tool_definition(),
+            call_hierarchy_outgoing_calls_tool_definition(),
             rename_preview_tool_definition(),
             format_document_tool_definition(),
             code_actions_tool_definition(),
@@ -554,6 +556,24 @@ fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
     Ok(#("call_hierarchy_prepare", arguments)) ->
       handle_call_hierarchy_prepare(pool, id, arguments)
 
+    Ok(#("call_hierarchy_incoming_calls", arguments)) ->
+      handle_call_hierarchy_calls(
+        pool,
+        id,
+        arguments,
+        call_hierarchy.incoming_calls,
+        "call_hierarchy_incoming_calls",
+      )
+
+    Ok(#("call_hierarchy_outgoing_calls", arguments)) ->
+      handle_call_hierarchy_calls(
+        pool,
+        id,
+        arguments,
+        call_hierarchy.outgoing_calls,
+        "call_hierarchy_outgoing_calls",
+      )
+
     Ok(#("rename_preview", arguments)) ->
       handle_rename_preview(pool, id, arguments)
 
@@ -850,6 +870,36 @@ fn handle_call_hierarchy_prepare(
           success_response(id, fn() { tool_text_result(reason, True) })
         Error(call_hierarchy.RequestFailed(reason)) ->
           success_response(id, fn() { tool_text_result(reason, True) })
+        Error(call_hierarchy.InvalidItem(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_call_hierarchy_calls(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+  call: fn(Pool, Dynamic) -> Result(String, call_hierarchy.CallHierarchyError),
+  tool_name: String,
+) -> String {
+  case decode_call_hierarchy_item_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid " <> tool_name <> " params: " <> reason,
+      )
+    Ok(item) ->
+      case call(pool, item) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(call_hierarchy.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(call_hierarchy.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(call_hierarchy.InvalidItem(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
       }
   }
 }
@@ -1092,6 +1142,60 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
       ),
     ),
     #("inputSchema", position_arg_schema()),
+  ])
+}
+
+fn call_hierarchy_incoming_calls_tool_definition() -> Json {
+  call_hierarchy_calls_tool_definition(
+    "call_hierarchy_incoming_calls",
+    "Returns who calls into the supplied `CallHierarchyItem`. Wraps "
+      <> "LSP `callHierarchy/incomingCalls`. Pass an item returned by "
+      <> "`call_hierarchy_prepare` verbatim.",
+  )
+}
+
+fn call_hierarchy_outgoing_calls_tool_definition() -> Json {
+  call_hierarchy_calls_tool_definition(
+    "call_hierarchy_outgoing_calls",
+    "Returns who the supplied `CallHierarchyItem` calls. Wraps LSP "
+      <> "`callHierarchy/outgoingCalls`. Pass an item returned by "
+      <> "`call_hierarchy_prepare` verbatim.",
+  )
+}
+
+fn call_hierarchy_calls_tool_definition(
+  name: String,
+  description: String,
+) -> Json {
+  json.object([
+    #("name", json.string(name)),
+    #("description", json.string(description)),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "item",
+              json.object([
+                #(
+                  "description",
+                  json.string(
+                    "A `CallHierarchyItem` previously returned by "
+                    <> "`call_hierarchy_prepare`. Round-trip the "
+                    <> "object verbatim — pharos does not re-derive "
+                    <> "it from positional arguments.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #("required", json.preprocessed_array([json.string("item")])),
+      ]),
+    ),
   ])
 }
 
@@ -1470,6 +1574,21 @@ fn decode_goto_implementation_arguments(
   |> result.map_error(fn(_) {
     "expected `uri: string`, `line: int`, `character: int`, "
     <> "optional `limit: int`"
+  })
+}
+
+fn decode_call_hierarchy_item_arguments(
+  args: Option(Dynamic),
+) -> Result(Dynamic, String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use item <- decode.field("item", decode.dynamic)
+    decode.success(item)
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `item: <CallHierarchyItem>` "
+    <> "(round-trip an object returned by call_hierarchy_prepare)"
   })
 }
 
