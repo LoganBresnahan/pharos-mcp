@@ -241,6 +241,28 @@ pub fn send_notification(
   actor.call(subject, 5000, fn(reply) { SendNotification(body, reply) })
 }
 
+/// Send `$/cancelRequest` for a previously-issued LSP request id.
+/// Per LSP spec the server makes a best-effort attempt to abort
+/// the in-flight work. Phase C of ADR-013 wires this to the MCP
+/// host's `notifications/cancelled` so an LLM-side cancellation
+/// propagates through to the LSP server. The wiring at the MCP
+/// boundary lands in a follow-up alongside session-id tracking
+/// for HTTP transport; this helper is the proc-side primitive.
+pub fn cancel(proc: Proc, lsp_request_id: Int) -> Result(Nil, client.Error) {
+  let body =
+    "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":"
+    <> int_to_text(lsp_request_id)
+    <> "}}"
+
+  send_notification(proc, bit_array_from_string(body))
+}
+
+@external(erlang, "erlang", "integer_to_binary")
+fn int_to_text(value: Int) -> String
+
+@external(erlang, "erlang", "list_to_binary")
+fn bit_array_from_string(text: String) -> BitArray
+
 /// Drain inbound notifications inside the proc actor (where the
 /// Port owner lives) until either:
 ///   - a `textDocument/publishDiagnostics` for `target_uri` arrives
