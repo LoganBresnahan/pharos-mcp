@@ -23,6 +23,7 @@ import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import pharos/lsp/client.{type Client}
+import pharos/lsp/diagnostics_cache
 import pharos/lsp/port
 import pharos/lsp/server_request_handlers.{type Handler, ErrorReply, Reply}
 
@@ -327,6 +328,28 @@ fn progress_token_and_kind_decoder() -> decode.Decoder(#(String, String)) {
   decode.success(#(token, kind))
 }
 
+/// Side-effect for `Notification` classifications: when the server
+/// emits `textDocument/publishDiagnostics`, store the params keyed
+/// by URI so the get_diagnostics tool can read them on subsequent
+/// calls instead of waiting for a re-emit that never comes (pool's
+/// didOpen-once policy means servers do not re-publish for the same
+/// version). All other notification methods are dropped here; the
+/// caller's loop continues draining.
+fn cache_publish_diagnostics(method: String, params: Dynamic) -> Nil {
+  case method {
+    "textDocument/publishDiagnostics" ->
+      case decode.run(params, publish_diagnostics_uri_decoder()) {
+        Ok(uri) -> diagnostics_cache.put(uri, params)
+        Error(_) -> Nil
+      }
+    _ -> Nil
+  }
+}
+
+fn publish_diagnostics_uri_decoder() -> decode.Decoder(String) {
+  decode.field("uri", decode.string, decode.success)
+}
+
 /// Send a JSON-RPC request whose `params` field is supplied as
 /// already-encoded JSON text, await the matching response, and
 /// return the verbatim result Dynamic. Used by the
@@ -464,12 +487,16 @@ fn wait_for_response(
       wait_for_response(client, expected_id, timeout_ms)
     }
 
-    Notification(method: _, params: _) ->
-      // Server-side notification (progress, log, $/showMessage,
-      // publishDiagnostics, etc.). Drain and keep looking. Stage 0F's
+    Notification(method: method, params: params) -> {
+      // Side-effect: cache publishDiagnostics so subsequent
+      // get_diagnostics calls can return immediately even when the
+      // server has stopped re-emitting (didOpen-once flow). Stage 2
+      // second-pass C. Other notifications drain unchanged. Stage 0F's
       // wait_for_ready/3 is the place to consume $/progress
       // selectively when a tool needs to wait for indexing.
+      cache_publish_diagnostics(method, params)
       wait_for_response(client, expected_id, timeout_ms)
+    }
 
     DecodeFailure(reason) -> Error(ResponseDecodeError(reason))
   }

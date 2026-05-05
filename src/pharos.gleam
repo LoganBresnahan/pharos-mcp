@@ -25,6 +25,7 @@ import gleam/option.{None, Some}
 import gleam/string
 import pharos/env
 import pharos/log
+import pharos/lsp/diagnostics_cache
 import pharos/lsp/pool.{type Pool}
 import pharos/mcp/http
 import pharos/mcp/server
@@ -44,6 +45,7 @@ type Transport {
 pub fn main() -> Nil {
   let transport = read_transport()
   log.info("pharos starting (transport=" <> transport_label(transport) <> ")")
+  diagnostics_cache.init()
   case pool.start() {
     Error(_) -> {
       log.error("failed to start LSP pool; exiting")
