@@ -40,10 +40,12 @@ pub fn start_pool_subtree() -> Result(
   |> result_map_error()
 }
 
-/// Spawn the dynamic-supervisor that hosts individual `lsp_proc`
-/// children. Empty in Phase A; Phase B's pool.spawn_lsp_proc adds
-/// children dynamically via `static_supervisor.start_child_callback`
-/// (the equivalent of OTP's `:simple_one_for_one` start_child).
+/// Spawn the dynamic-supervisor that would host individual
+/// `lsp_proc` children. ADR-017 v1 keeps it structural — empty
+/// — and lets `proc.start`'s spawn_link to the pool actor handle
+/// the cleanup-on-pool-crash via Erlang link cascade. Promoting
+/// workers to real children of this supervisor (so individual
+/// crashes auto-restart in place) lands in ADR-017a.
 pub fn start_lsp_dyn_sup() -> Result(
   actor.Started(supervisor.Supervisor),
   StartError,
@@ -52,6 +54,19 @@ pub fn start_lsp_dyn_sup() -> Result(
   |> supervisor.restart_tolerance(intensity: 5, period: 60)
   |> supervisor.start()
   |> result_map_error()
+}
+
+/// Supervised entry point. Same as `start_lsp_dyn_sup/0` but
+/// returns the underlying `actor.StartError` so the parent
+/// supervisor's child spec consumes the result without an extra
+/// error-type bridge.
+pub fn start_lsp_dyn_sup_supervised() -> Result(
+  actor.Started(supervisor.Supervisor),
+  actor.StartError,
+) {
+  supervisor.new(supervisor.OneForOne)
+  |> supervisor.restart_tolerance(intensity: 5, period: 60)
+  |> supervisor.start()
 }
 
 fn result_map_error(

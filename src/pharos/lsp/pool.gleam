@@ -123,6 +123,34 @@ const default_call_timeout_ms: Int = 60_000
 /// gleam_otp's outer loop discards DOWN messages as "unexpected"
 /// and the cache never auto-evicts.
 pub fn start() -> Result(Pool, StartError) {
+  start_internal()
+  |> result.map(fn(started) {
+    let pool = Pool(subject: started.data)
+    register_global(started.data)
+    pool
+  })
+  |> result.map_error(StartFailedActor)
+}
+
+/// Supervised entry point — spawns the pool with the same wiring
+/// as `start/0` but returns the `actor.Started` shape that
+/// `static_supervisor.add(supervision.worker(...))` consumes
+/// (ADR-017). Registers the Subject in `persistent_term` so
+/// `pool.global/0` finds it.
+pub fn start_supervised() -> Result(
+  actor.Started(Subject(Msg)),
+  actor.StartError,
+) {
+  case start_internal() {
+    Ok(started) -> {
+      register_global(started.data)
+      Ok(started)
+    }
+    Error(e) -> Error(e)
+  }
+}
+
+fn start_internal() -> Result(actor.Started(Subject(Msg)), actor.StartError) {
   let initialise = fn(self) {
     let selector =
       process.new_selector()
@@ -149,9 +177,24 @@ pub fn start() -> Result(Pool, StartError) {
   actor.new_with_initialiser(default_call_timeout_ms, initialise)
   |> actor.on_message(handle_message)
   |> actor.start()
-  |> result.map(fn(started) { Pool(subject: started.data) })
-  |> result.map_error(StartFailedActor)
 }
+
+/// Read the supervised pool's Subject from persistent_term. Tool
+/// callers use this in place of being passed the `Pool` from main
+/// (ADR-017). Returns an error if the pool has not been started
+/// yet (e.g. tests bypassing the supervisor entirely).
+pub fn global() -> Result(Pool, Nil) {
+  case lookup_global() {
+    Ok(subject) -> Ok(Pool(subject: subject))
+    Error(_) -> Error(Nil)
+  }
+}
+
+@external(erlang, "pharos_runtime_ffi", "pool_register")
+fn register_global(subject: Subject(Msg)) -> Nil
+
+@external(erlang, "pharos_runtime_ffi", "pool_lookup")
+fn lookup_global() -> Result(Subject(Msg), Nil)
 
 @external(erlang, "pharos_runtime_ffi", "as_dynamic")
 fn coerce_to_dynamic(x: a) -> dynamic.Dynamic

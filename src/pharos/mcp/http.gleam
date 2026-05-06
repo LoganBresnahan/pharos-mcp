@@ -64,6 +64,32 @@ pub fn start(
   port: Int,
   bind: String,
 ) -> Result(actor.Started(supervisor.Supervisor), StartError) {
+  build(pool, sessions, port, bind)
+  |> mist.start()
+  |> result.map_error(fn(err) {
+    ListenFailed("mist listener failed to start: " <> string.inspect(err))
+  })
+}
+
+/// Supervised entry point — same as `start/4` but returns the
+/// underlying `actor.StartError` so supervisor child specs can
+/// consume the result directly.
+pub fn start_supervised(
+  pool: Pool,
+  sessions: Sessions,
+  port: Int,
+  bind: String,
+) -> Result(actor.Started(supervisor.Supervisor), actor.StartError) {
+  build(pool, sessions, port, bind)
+  |> mist.start()
+}
+
+fn build(
+  pool: Pool,
+  sessions: Sessions,
+  port: Int,
+  bind: String,
+) -> mist.Builder(mist.Connection, mist.ResponseData) {
   let handler = fn(req) { route(req, pool, sessions) }
   mist.new(handler)
   |> mist.bind(bind)
@@ -82,10 +108,6 @@ pub fn start(
             <> " on " <> bind <> " (PHAROS_HTTP_PORT=0)",
         )
     }
-  })
-  |> mist.start()
-  |> result.map_error(fn(err) {
-    ListenFailed("mist listener failed to start: " <> string.inspect(err))
   })
 }
 

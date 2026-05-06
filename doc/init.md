@@ -627,6 +627,8 @@ Risks captured in ADR-014:
 - README install instructions verified end-to-end against a clean machine
 - Versioning policy locked (semver, pre-1.0 minor-bump-on-breaking)
 - Gated on the upstream Gleam publish fix landing and `mist` republishing — otherwise the ADR-011 workaround leaks into the public install story
+- **Env var organization** — bespoke umbrella design (TBD by owner). Today's vars accreted feature-by-feature; user wants a coherent scheme before strangers see the surface. Capture every `PHAROS_*` var in one place (probably a `pharos/config.gleam` that owns reads, with the rest of the codebase consuming a typed `Config` record) and document at one URL.
+- **HTTP port discovery** — keep auto-assign (`PHAROS_HTTP_PORT=0`) as default; add `PHAROS_HTTP_PORT_FILE=/path/to/port` so the binary writes the bound port (atomically: write+rename) for headless callers to read. Manual override stays on `PHAROS_HTTP_PORT=<int>` exactly as today. Documented as part of the env var umbrella above.
 
 ### Future / maybe
 - `apply_workspace_edit` tool for auto-apply use cases

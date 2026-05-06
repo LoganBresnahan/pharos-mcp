@@ -37,7 +37,12 @@
     render_trace_body/1,
     file_sink_open/1,
     file_sink_write/2,
-    file_sink_close/1
+    file_sink_close/1,
+    sentinel_set/0,
+    sentinel_clear/0,
+    sentinel_present/0,
+    crash_dump_path/0,
+    crash_dump_write/2
 ]).
 
 -define(RING_TABLE, pharos_log_ring).
@@ -242,6 +247,71 @@ file_sink_write(IoDev, Line) when is_binary(Line) ->
 file_sink_close(IoDev) ->
     catch file:close(IoDev),
     nil.
+
+%% Sentinel — a flag row in pharos_log_ring_meta that the writer
+%% sets on graceful start and clears on graceful stop. If the row
+%% is present at writer init, the previous incarnation died
+%% abnormally and the new writer should dump the tail (ADR-017).
+sentinel_set() ->
+    case ets:info(?RING_META_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:insert(?RING_META_TABLE, {alive, true}),
+            nil
+    end.
+
+sentinel_clear() ->
+    case ets:info(?RING_META_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:delete(?RING_META_TABLE, alive),
+            nil
+    end.
+
+sentinel_present() ->
+    case ets:info(?RING_META_TABLE) of
+        undefined -> false;
+        _ ->
+            case ets:lookup(?RING_META_TABLE, alive) of
+                [{alive, true}] -> true;
+                _ -> false
+            end
+    end.
+
+%% Build the crash-dump file path with a timestamp suffix. Returns
+%% a binary; the Gleam side hands it to crash_dump_write/2.
+crash_dump_path() ->
+    Now = erlang:system_time(millisecond),
+    Secs = Now div 1000,
+    {{Y, Mo, D}, {H, Mi, S}} =
+        calendar:system_time_to_universal_time(Secs, second),
+    Stamp = iolist_to_binary(
+        io_lib:format("~4..0B-~2..0B-~2..0B-~2..0B~2..0B~2..0B",
+                      [Y, Mo, D, H, Mi, S])),
+    Home = case os:getenv("HOME") of
+        false -> <<"/tmp">>;
+        Path  -> list_to_binary(Path)
+    end,
+    <<Home/binary, "/.cache/pharos/log/crash-", Stamp/binary, ".log">>.
+
+%% Write the supplied lines (list of binaries) to a one-shot crash
+%% dump file. Best-effort: ENOSPC, perm denied, etc. fall through
+%% to direct stderr and return without raising.
+crash_dump_write(Path, Lines) when is_binary(Path), is_list(Lines) ->
+    case filelib:ensure_dir(Path) of
+        ok ->
+            case file:open(Path, [write, raw, binary]) of
+                {ok, IoDev} ->
+                    Body = [[L, $\n] || L <- Lines],
+                    file:write(IoDev, Body),
+                    file:close(IoDev),
+                    {ok, Path};
+                {error, R} ->
+                    {error, list_to_binary(io_lib:format("~p", [R]))}
+            end;
+        {error, R} ->
+            {error, list_to_binary(io_lib:format("ensure_dir: ~p", [R]))}
+    end.
 
 escape_trace_byte($\r) -> <<"\\r">>;
 escape_trace_byte($\n) -> <<"\\n">>;

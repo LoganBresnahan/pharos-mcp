@@ -82,15 +82,53 @@ type State {
 /// Spawn the session table actor. The eviction sweep is scheduled on
 /// the actor itself via `process.send_after`.
 pub fn start() -> Result(Sessions, StartError) {
-  actor.new(State(table: dict.new()))
-  |> actor.on_message(handle_message)
-  |> actor.start()
+  start_internal()
   |> result.map(fn(started) {
     schedule_eviction(started.data)
+    register_global(started.data)
     Sessions(subject: started.data)
   })
   |> result.map_error(StartFailedActor)
 }
+
+/// Supervised entry point — spawns the session actor and returns
+/// the `actor.Started` shape supervisor child specs consume
+/// (ADR-017). Registers the Subject in `persistent_term` so the
+/// HTTP listener subtree (which boots after sessions) can read
+/// it via `sessions.global/0`.
+pub fn start_supervised() -> Result(
+  actor.Started(Subject(Msg)),
+  actor.StartError,
+) {
+  case start_internal() {
+    Ok(started) -> {
+      schedule_eviction(started.data)
+      register_global(started.data)
+      Ok(started)
+    }
+    Error(e) -> Error(e)
+  }
+}
+
+fn start_internal() -> Result(actor.Started(Subject(Msg)), actor.StartError) {
+  actor.new(State(table: dict.new()))
+  |> actor.on_message(handle_message)
+  |> actor.start()
+}
+
+/// Read the supervised sessions actor's Subject.
+pub fn global() -> Result(Sessions, Nil) {
+  case lookup_global() {
+    Ok(subject) -> Ok(Sessions(subject: subject))
+    Error(_) -> Error(Nil)
+  }
+}
+
+@external(erlang, "pharos_runtime_ffi", "sessions_register")
+fn register_global(subject: Subject(Msg)) -> Nil
+
+@external(erlang, "pharos_runtime_ffi", "sessions_lookup")
+fn lookup_global() -> Result(Subject(Msg), Nil)
 
 /// Issue a new session. Returns the freshly generated session id.
 /// Caller (typically the HTTP transport on `initialize`) sends the

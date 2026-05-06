@@ -1,41 +1,40 @@
-//// Top-level supervisor tree per ADR-013.
+//// Top-level supervisor tree per ADR-013 + ADR-017.
 ////
-//// Phase A scaffolding: this module exposes a `start/1` builder that
-//// constructs a `static_supervisor` with the topology ADR-013
-//// describes. The current implementation includes child specs for
-//// the LSP subtree (pool actor + lsp_dyn_sup), the sessions actor,
-//// and an optional transport subtree gated on the requested
-//// `Transport`. Phase B switches `pharos:main` over to launching the
-//// supervisor instead of starting children inline.
+//// Boots in this order:
 ////
-//// Phase A keeps `pharos:main` on its current inline path, so the
-//// existence of this module is a no-op at runtime — it only matters
-//// once Phase B's migration lands. Reason: the sub-modules
-//// (`pool.start_supervised`, `lsp/supervisor.start`,
-//// `mcp/sessions.start_supervised`) need additional plumbing to
-//// expose `actor.Started` shapes that supervision specs expect, and
-//// landing that plumbing in one go alongside the topology is
-//// simpler than splitting it across two commits.
+////   pharos_root (one_for_one)
+////     ├─ log_subtree (rest_for_one)
+////     │   ├─ ring_keeper        (permanent)
+////     │   └─ log_writer         (permanent)
+////     ├─ pool_subtree (rest_for_one)
+////     │   ├─ pool_actor         (permanent)
+////     │   └─ lsp_dyn_sup_stub   (permanent — structural only)
+////     ├─ sessions_actor         (permanent)         ◄── HTTP/Both
+////     ├─ http_listener_subtree  (permanent)         ◄── HTTP/Both
+////     └─ stdio_worker           (transient)        ◄── Stdio/Both
 ////
-//// Restart strategies (locked in ADR-013):
-////
-////   - root: one_for_one, max 5 restarts in 60s
-////   - pool actor: permanent (always restart)
-////   - lsp_dyn_sup: permanent (Phase B populates dynamically)
-////   - sessions actor: permanent
-////   - stdin reader: transient (EOF = clean exit, do not restart)
-////   - http_listener: permanent when transport=http|both
-////
-//// See `pharos/lsp/supervisor.gleam` for the LSP subtree.
+//// Restart strategies are per ADR-013/017. `intensity 5 / period 60`
+//// applies to every internal supervisor: 5 child failures in 60s
+//// shuts the whole tree down so the BEAM (or external supervisor:
+//// systemd, Burrito wrapper, MCP host) can restart pharos fresh
+//// instead of thrashing.
 
 import gleam/erlang/process
+import gleam/option.{type Option}
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
+import gleam/otp/supervision
 
-/// Transport modes the root supervisor cares about. Drives whether
-/// the http_listener child gets added. Mirrors the enum in
-/// `pharos.gleam` rather than imports it to keep the supervisor
-/// module independent of the entry-point's specifics.
+import pharos/log/filter
+import pharos/log/ring_keeper
+import pharos/log/writer
+import pharos/lsp/pool
+import pharos/lsp/supervisor as lsp_supervisor
+import pharos/mcp/http
+import pharos/mcp/sessions
+import pharos/stdio_worker
+
+/// Transport modes the root supervisor cares about.
 pub type Transport {
   Stdio
   Http
@@ -46,41 +45,98 @@ pub type StartError {
   StartFailed(actor.StartError)
 }
 
-/// Spawn the root supervisor with no children. Intended as the
-/// landing zone Phase B fills in. Returns the supervisor's
-/// `Started` handle so callers can hand the pid to OTP for
-/// monitoring.
-///
-/// Phase A intentionally does not add LSP / sessions / transport
-/// children — those depend on `pool.start_supervised`,
-/// `sessions.start_supervised`, and a stdin worker module that do
-/// not yet exist. Build them in Phase B and add them here via
-/// `static_supervisor.add` before `start`.
+/// Configuration for the supervised tree. Caller (pharos.main)
+/// passes the resolved values; the supervisor does not touch the
+/// environment directly.
+pub type Config {
+  Config(
+    transport: Transport,
+    log_filter: filter.Filter,
+    log_ring_enabled: Bool,
+    log_stderr_enabled: Bool,
+    log_file_path: Option(String),
+    http_port: Int,
+    http_bind: String,
+  )
+}
+
+/// Spawn the root supervisor with the children appropriate for
+/// the requested transport. Returns the supervisor's `Started`
+/// handle so callers can hand the pid to OTP for monitoring.
 pub fn start(
-  _transport: Transport,
+  config: Config,
 ) -> Result(actor.Started(supervisor.Supervisor), StartError) {
-  supervisor.new(supervisor.OneForOne)
-  |> supervisor.restart_tolerance(intensity: 5, period: 60)
-  |> supervisor.start()
-  |> result_map_error()
-}
+  let log_subtree =
+    supervisor.new(supervisor.RestForOne)
+    |> supervisor.restart_tolerance(intensity: 5, period: 60)
+    |> supervisor.add(supervision.worker(ring_keeper.start_supervised))
+    |> supervisor.add(supervision.worker(fn() {
+      writer.start_supervised(
+        config.log_filter,
+        config.log_ring_enabled,
+        config.log_stderr_enabled,
+        config.log_file_path,
+      )
+    }))
 
-/// Public alias of the supervisor's Started.data type so callers
-/// (Phase B's `pharos:main`) can name what they receive.
-pub type Root =
-  supervisor.Supervisor
+  let pool_subtree =
+    supervisor.new(supervisor.RestForOne)
+    |> supervisor.restart_tolerance(intensity: 5, period: 60)
+    |> supervisor.add(supervision.worker(pool.start_supervised))
+    |> supervisor.add(supervision.supervisor(lsp_supervisor.start_lsp_dyn_sup_supervised))
 
-/// Convenience: shut the root supervisor down by sending it a
-/// normal exit. Phase B's `pharos:main` calls this on stdin EOF.
-pub fn shutdown(root: actor.Started(Root)) -> Nil {
-  process.send_exit(root.pid)
-}
+  let root =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.restart_tolerance(intensity: 5, period: 60)
+    |> supervisor.add(supervision.supervisor(fn() { supervisor.start(log_subtree) }))
+    |> supervisor.add(supervision.supervisor(fn() { supervisor.start(pool_subtree) }))
 
-fn result_map_error(
-  r: Result(actor.Started(supervisor.Supervisor), actor.StartError),
-) -> Result(actor.Started(supervisor.Supervisor), StartError) {
-  case r {
+  // HTTP-only children (sessions + listener). Boot order matters:
+  // sessions must register its global before the listener starts
+  // accepting connections that reference it.
+  let root_with_http = case config.transport {
+    Stdio -> root
+    Http | Both ->
+      root
+      |> supervisor.add(supervision.worker(sessions.start_supervised))
+      |> supervisor.add(supervision.worker(fn() {
+        case pool.global(), sessions.global() {
+          Ok(p), Ok(s) ->
+            http.start_supervised(p, s, config.http_port, config.http_bind)
+          _, _ -> Error(actor.InitFailed("pool/sessions global lookup failed"))
+        }
+      }))
+  }
+
+  // stdio_worker is transient — stdin EOF returns actor.stop()
+  // and we want the tree to NOT restart it (clean exit). Also
+  // last in the boot order so pool.global() is populated by the
+  // time the worker's initialiser runs.
+  let root_complete = case config.transport {
+    Http -> root_with_http
+    Stdio | Both ->
+      root_with_http
+      |> supervisor.add(transient_worker(stdio_worker.start_supervised))
+  }
+
+  case supervisor.start(root_complete) {
     Ok(s) -> Ok(s)
     Error(e) -> Error(StartFailed(e))
   }
+}
+
+/// Convenience: shut the root supervisor down by sending it a
+/// normal exit. `pharos.main` calls this on stdin EOF (Stdio
+/// transport's clean-exit signal).
+pub fn shutdown(
+  root: actor.Started(supervisor.Supervisor),
+) -> Nil {
+  process.send_exit(root.pid)
+}
+
+fn transient_worker(
+  start: fn() -> Result(actor.Started(data), actor.StartError),
+) -> supervision.ChildSpecification(data) {
+  supervision.worker(start)
+  |> supervision.restart(supervision.Transient)
 }

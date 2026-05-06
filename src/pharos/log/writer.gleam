@@ -73,6 +73,71 @@ pub fn start(
     False -> Nil
   }
 
+  let initial_state = build_initial_state(
+    filter,
+    ring_enabled,
+    stderr_enabled,
+    file_path,
+  )
+
+  actor.new(initial_state)
+  |> actor.on_message(handle_message)
+  |> actor.start()
+  |> result.map(fn(started) {
+    let subject = started.data
+    register_subject(subject)
+    sentinel_set()
+    Writer(subject: subject)
+  })
+  |> result.map_error(StartFailedActor)
+}
+
+/// Supervised entry point — spawns the writer with the same config
+/// as `start/4` but returns the `actor.Started` shape that the
+/// supervisor's child spec expects (ADR-017). Performs prior-
+/// incarnation crash detection: if a sentinel from a previous
+/// writer is present in the ring meta table when this init runs,
+/// the previous writer died abnormally; tail the ring and dump it
+/// to `~/.cache/pharos/log/crash-<timestamp>.log` before resuming
+/// normal operation.
+pub fn start_supervised(
+  filter: Filter,
+  ring_enabled: Bool,
+  stderr_enabled: Bool,
+  file_path: Option(String),
+) -> Result(actor.Started(Subject(Msg)), actor.StartError) {
+  case ring_enabled {
+    True -> {
+      ring.init(ring.default_capacity)
+      maybe_write_crash_dump()
+    }
+    False -> Nil
+  }
+
+  let initial_state = build_initial_state(
+    filter,
+    ring_enabled,
+    stderr_enabled,
+    file_path,
+  )
+
+  actor.new(initial_state)
+  |> actor.on_message(handle_message)
+  |> actor.start()
+  |> result.map(fn(started) {
+    let subject = started.data
+    register_subject(subject)
+    sentinel_set()
+    started
+  })
+}
+
+fn build_initial_state(
+  filter: Filter,
+  ring_enabled: Bool,
+  stderr_enabled: Bool,
+  file_path: Option(String),
+) -> State {
   let file_handle = case file_path {
     None -> None
     Some(path) ->
@@ -90,22 +155,56 @@ pub fn start(
         }
       }
   }
-
-  actor.new(State(
+  State(
     filter: filter,
     ring_enabled: ring_enabled,
     stderr_enabled: stderr_enabled,
     file_handle: file_handle,
     dropped: 0,
-  ))
-  |> actor.on_message(handle_message)
-  |> actor.start()
-  |> result.map(fn(started) {
-    let subject = started.data
-    register_subject(subject)
-    Writer(subject: subject)
+  )
+}
+
+/// Detect a prior-incarnation crash via the ring sentinel and
+/// dump the current ring tail to a crash file. No-op when the
+/// sentinel is absent (clean prior shutdown or first boot).
+fn maybe_write_crash_dump() -> Nil {
+  case sentinel_present() {
+    False -> Nil
+    True -> {
+      let tail = ring.tail(2000, "")
+      case tail {
+        [] -> Nil
+        rows -> {
+          let path = crash_dump_path()
+          let lines = rows_to_binaries(rows)
+          case crash_dump_write(path, lines) {
+            Ok(written_path) ->
+              direct_stderr(
+                "[pharos/log] previous writer crashed; ring tail dumped to "
+                <> written_path,
+              )
+            Error(reason) ->
+              direct_stderr(
+                "[pharos/log] previous writer crashed; crash-dump write failed: "
+                <> reason,
+              )
+          }
+        }
+      }
+      // Clear the stale sentinel; the new writer's start path will
+      // set a fresh one after subject registration succeeds.
+      sentinel_clear()
+    }
+  }
+}
+
+fn rows_to_binaries(
+  rows: List(#(entry.Level, String)),
+) -> List(String) {
+  list.map(rows, fn(row) {
+    let #(_level, line) = row
+    line
   })
-  |> result.map_error(StartFailedActor)
 }
 
 /// Cast an entry to the writer. Performs the mailbox-depth guard
@@ -206,7 +305,12 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         filter: update_overrides(state.filter, target_prefix, level),
       ))
 
-    Stop -> actor.stop()
+    Stop -> {
+      // Graceful shutdown — clear the sentinel so the next
+      // writer's init does not mistake this for a crash.
+      sentinel_clear()
+      actor.stop()
+    }
   }
 }
 
@@ -264,3 +368,18 @@ fn file_sink_open(path: String) -> Result(FileHandle, String)
 
 @external(erlang, "pharos_log_ffi", "file_sink_write")
 fn file_sink_write(handle: FileHandle, line: String) -> Nil
+
+@external(erlang, "pharos_log_ffi", "sentinel_set")
+fn sentinel_set() -> Nil
+
+@external(erlang, "pharos_log_ffi", "sentinel_clear")
+fn sentinel_clear() -> Nil
+
+@external(erlang, "pharos_log_ffi", "sentinel_present")
+fn sentinel_present() -> Bool
+
+@external(erlang, "pharos_log_ffi", "crash_dump_path")
+fn crash_dump_path() -> String
+
+@external(erlang, "pharos_log_ffi", "crash_dump_write")
+fn crash_dump_write(path: String, lines: List(String)) -> Result(String, String)

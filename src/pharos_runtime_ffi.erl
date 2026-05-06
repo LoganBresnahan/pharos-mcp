@@ -37,8 +37,39 @@
     inflight_insert/3,
     inflight_lookup/1,
     inflight_delete/1,
-    inflight_size/0
+    inflight_size/0,
+    pool_register/1,
+    pool_lookup/0,
+    sessions_register/1,
+    sessions_lookup/0
 ]).
+
+sessions_register(Subject) ->
+    persistent_term:put(pharos_sessions_subject, Subject),
+    nil.
+
+sessions_lookup() ->
+    try
+        Subject = persistent_term:get(pharos_sessions_subject),
+        {ok, Subject}
+    catch
+        error:badarg -> {error, nil}
+    end.
+
+%% Persistent-term backing for the pool's Subject so any process
+%% can call `pool.global/0` without threading the Subject through
+%% function signatures (ADR-017).
+pool_register(Subject) ->
+    persistent_term:put(pharos_pool_subject, Subject),
+    nil.
+
+pool_lookup() ->
+    try
+        Subject = persistent_term:get(pharos_pool_subject),
+        {ok, Subject}
+    catch
+        error:badarg -> {error, nil}
+    end.
 
 %% ETS-backed in-flight request tracker (ADR-016). Keyed by MCP
 %% request id (binary). Value: {ProcSubject, LspRequestId}. Used by
