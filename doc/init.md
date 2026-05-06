@@ -451,6 +451,8 @@ Stages (parallel where independent, sequential where dependent):
 
 ## Roadmap
 
+**Working order (post-M9.5 dogfood):** M10 → M11 → (M12 or M7) → M13. M7 (bridge protocol + reference editor) is parked until owner picks it up; M12 (more languages) and M7 are interchangeable in priority. M13 (public distribution) gates on M10 polish and at least the Tier-1 of M12 coverage. Milestone numbering stays sequential (no renumbering even though M7 may execute after M12) so existing ADR references and commit history remain stable.
+
 ### Milestone 0 — Skeleton
 - Repo structure, build config, doc/adr scaffolding
 - Empty Gleam modules with module-level docs
@@ -620,22 +622,67 @@ Risks captured in ADR-014:
 - Correlation id propagation across actors requires threading through `proc.request`'s call chain — small refactor lands alongside Part A
 - Ring buffer is volatile (lost on BEAM exit); the file sink is the persistent one for post-mortem
 
-### Milestone 10 — Public distribution
+### Milestone 10 — Pre-distribution polish
+
+The dogfood-driven cleanup that has to happen before strangers ever see pharos. M9.5 dogfood (Run 2 in `doc/dogfood.md`) surfaced the items below. Distribution itself moves to M13 — a stranger hitting any of the items below would form an immediate negative impression and the ones we already know about must close before tag-push.
+
+**Release-blocker dogfood follow-ups (from `doc/dogfood.md` Run 2):**
+
+- **README — language/binary install table.** rust-analyzer / gopls / typescript-language-server / pyright-langserver / ruff with per-platform install commands. Extends ADR-018. Pharos does not bundle servers; users install per the table.
+- **Missing-binary negative path.** Strip PATH, hover a `.rs` file, expect `language server binary 'rust-analyzer' not found on PATH ... (ADR-018)` reaching the LLM cleanly. Never tested live in M9.5; ADR-018 wired the typed error but the dogfood didn't exercise the failure mode.
+- **`PHAROS_LSP_REGISTRY` override dogfood.** Override file path is wired (`registry.gleam:57-58`) but never exercised. Test: pin a custom rust-analyzer build via override, confirm pharos uses it instead of the PATH-resolved default.
+- **Cold-start `null` tool description hint.** Append to `hover` / `goto_definition` / `goto_type_definition` descriptions: "rust-analyzer cold-start may return `null` while indexing; retry after 1–2s if you expected an answer." Cheap LLM-side workaround until `wait_for_ready` lands.
+
+**Architectural polish (the M9.5 dogfood promised these would land before public ship):**
+
+- **`runtime_trace_lsp` parallel race fix.** Sync `SetTargetSync` (M9.5) closed most of the race; the residual is when trace_lsp + producer dispatch in parallel and the producer's first emit beats SetTargetSync into the writer's mailbox. Fix shape: pre-filter at emit side via persistent_term — `trace.gleam` reads filter cache before casting `Emit`. ~30 lines.
+- **`wait_for_ready` improvement.** Current implementation returns before rust-analyzer indexing kicks in (noted in `find_references.gleam:21`). Poll the `rustAnalyzer/Indexing` progress token until the `end` notification before serving the FIRST request to a freshly-spawned proc. Eliminates the cold-start `null` failure mode that the description hint above only papers over.
+- **In-flight cancel via per-request worker.** Deferred from M9 (`adr/016-cancel-propagation.md` covers the policy). Spawn a supervised per-request process so MCP `notifications/cancelled` triggers `process.send_exit` immediately instead of waiting on LSP cooperation.
+- **Multi-LSP method routing (ADR-019).** python = pyright + ruff for full coverage (formatting + lint + type-aware in one language). Same architecture covers TypeScript + eslint-language-server, future ruby + solargraph + standardrb-lsp, etc. ~2 days.
+
+**Inherited M10 charter items (still apply, were always M10):**
+
+- **Env var organization** — bespoke umbrella design (TBD by owner). Today's vars accreted feature-by-feature; the surface needs a coherent scheme before strangers see it. Capture every `PHAROS_*` var in one place (probably a `pharos/config.gleam` that owns reads, with the rest of the codebase consuming a typed `Config` record) and document at one URL.
+- **HTTP port discovery** — keep auto-assign (`PHAROS_HTTP_PORT=0`) as default; add `PHAROS_HTTP_PORT_FILE=/path/to/port` so the binary writes the bound port (atomically: write+rename) for headless callers to read. Manual override stays on `PHAROS_HTTP_PORT=<int>` exactly as today. Documented as part of the env var umbrella above.
+- **Config file format (TOML)** — promote `PHAROS_LSP_REGISTRY` from "path env var pointing at JSON" to a first-class XDG config at `~/.config/pharos/pharos.toml` with the env var still working as an override. Resolves init.md open question 1.
+
+### Milestone 11 — Future / maybe (formerly "Future / maybe")
+
+Items that are real but unscheduled. Promote into a milestone when picked up.
+
+- `apply_workspace_edit` tool for auto-apply use cases
+- Tier 3 tools (inlay hints, semantic tokens, type hierarchy)
+- Self-update inside the binary
+- JetBrains plugin variant of the bridge extension
+- Streaming completions (if a use case emerges)
+
+### Milestone 12 — More languages
+
+Owner wants to expand the bundled-language coverage. Each entry below is "add the LSP to `default_registry`, dogfood end-to-end against a tiny test workspace mirroring the existing rust_dev/go_dev/typescript_dev/python_dev pattern, document required binaries in the README install table." Per-language quirks (server-request handlers, configuration sections, readiness tokens) get caught and fixed during dogfood.
+
+Likely candidates (owner picks the cut):
+
+- **Elixir** — `elixir-ls` (most coverage), `lexical` (Lexical Labs server, faster cold start). Owner has Elixir history; high-value for dogfood.
+- **Gleam** — `gleam lsp` (built into the gleam compiler). Trivial config; 100% type-aware.
+- **Ruby** — `ruby-lsp` (Shopify, modern, supersedes solargraph for most users). May want `standardrb-lsp` layered for lint + format under ADR-019 routing.
+- **Zig** — `zls`. Niche but interesting to test with non-mainstream package managers.
+- **C / C++** — `clangd`. Complicated by `compile_commands.json` discovery.
+- **Java / Kotlin / Scala** — JVM ecosystem, separate language servers (`jdtls`, `kotlin-lsp`, `metals`). Each is heavy on init and config; defer.
+- **Lua** — `lua-language-server`. Easy.
+- **Bash** — `bash-language-server`.
+
+Out of scope until M11 promotes them: Tier 3 tools (semantic tokens, inlay hints) — coverage matters more than depth at this stage.
+
+### Milestone 13 — Public distribution (formerly M10)
+
+Now that M10 + M11 + M12 give pharos a polished surface and broad coverage, ship it.
+
 - Multi-target Burrito matrix (linux_x64, linux_arm64, darwin_x64, darwin_arm64, win_x64)
 - GitHub Actions release workflow green on tag push
 - First npm publish with optional-deps pattern
 - README install instructions verified end-to-end against a clean machine
 - Versioning policy locked (semver, pre-1.0 minor-bump-on-breaking)
 - Gated on the upstream Gleam publish fix landing and `mist` republishing — otherwise the ADR-011 workaround leaks into the public install story
-- **Env var organization** — bespoke umbrella design (TBD by owner). Today's vars accreted feature-by-feature; user wants a coherent scheme before strangers see the surface. Capture every `PHAROS_*` var in one place (probably a `pharos/config.gleam` that owns reads, with the rest of the codebase consuming a typed `Config` record) and document at one URL.
-- **HTTP port discovery** — keep auto-assign (`PHAROS_HTTP_PORT=0`) as default; add `PHAROS_HTTP_PORT_FILE=/path/to/port` so the binary writes the bound port (atomically: write+rename) for headless callers to read. Manual override stays on `PHAROS_HTTP_PORT=<int>` exactly as today. Documented as part of the env var umbrella above.
-
-### Future / maybe
-- `apply_workspace_edit` tool for auto-apply use cases
-- Tier 3 tools (inlay hints, semantic tokens, type hierarchy)
-- Self-update inside the binary
-- JetBrains plugin variant of the bridge extension
-- Streaming completions (if a use case emerges)
 
 ## Open questions
 

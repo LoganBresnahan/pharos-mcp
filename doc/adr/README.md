@@ -38,6 +38,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 017 | [Supervision tree wiring](017-supervision-tree-wiring.md) | Accepted |
 | 017a | [lsp_proc under simple_one_for_one](017a-lsp-proc-simple-one-for-one.md) | Accepted |
 | 018 | [LSP binary path resolution](018-lsp-binary-path-resolution.md) | Proposed |
+| 019 | [Multi-LSP method routing per language](019-multi-lsp-method-routing.md) | Proposed |
 
 ## Anticipated future ADRs
 
@@ -45,8 +46,8 @@ Written when the corresponding decision actually arises with tradeoffs — not p
 
 | # | Title | Trigger |
 |---|-------|---------|
-| 019 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
-| 020 | Config file format and location | Override registry promoted to first-class config |
-| 021 | Bridge port discovery mechanism | Extension repo bootstraps |
-| 022 | Workspace root determination | First multi-root project test runs |
-| 023 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
+| 020 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
+| 021 | Config file format and location | Override registry promoted to first-class config |
+| 022 | Bridge port discovery mechanism | Extension repo bootstraps |
+| 023 | Workspace root determination | First multi-root project test runs |
+| 024 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
