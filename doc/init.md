@@ -655,6 +655,7 @@ Items that are real but unscheduled. Promote into a milestone when picked up.
 - Self-update inside the binary
 - JetBrains plugin variant of the bridge extension
 - Streaming completions (if a use case emerges)
+- **`runtime_trace_lsp` parallel-dispatch race — dedicated always-on trace ring.** M10 Group B closed the writer-mailbox-cast race via emit-side persistent_term cache. Sequential issue order works (`runtime_log_level pharos/lsp/trace=debug` then activity then `runtime_log_tail` captures clean). Parallel-issued `runtime_trace_lsp` + producer race remains because the cache update still has to beat the producer's first byte — when the MCP server's concurrent tool dispatch hands hover and trace_lsp to different worker processes at the same instant, hover's first emit can fire before trace_lsp's `process.call` reaches the writer. Fix shape: bypass the global filter entirely for the trace target by maintaining a small bounded ETS ring (last ~100 wire events) that producers write to unconditionally. `runtime_trace_lsp` reads from that ring; no filter toggle, no race. Cost is per-emit ETS write even when nobody's listening — bounded ring keeps memory in check. ~50 lines. Workaround in the meantime: use the runtime_log_level recipe instead of the trace_lsp helper for parallel-issued workflows. Documented in the M10-Run-3 section of `doc/dogfood.md`.
 
 ### Milestone 12 — More languages
 
@@ -683,6 +684,53 @@ Now that M10 + M11 + M12 give pharos a polished surface and broad coverage, ship
 - README install instructions verified end-to-end against a clean machine
 - Versioning policy locked (semver, pre-1.0 minor-bump-on-breaking)
 - Gated on the upstream Gleam publish fix landing and `mist` republishing — otherwise the ADR-011 workaround leaks into the public install story
+
+## Testing that needs to be done
+
+Test surfaces uncovered as work progressed. None blocking on the path the owner is on right now; promote to a milestone task when the corresponding code lands or when release prep starts. Each entry is a pointer to the gap, not a test plan — when picked up the implementer writes the actual harness/script.
+
+### Out-of-band CLI tests (not /mcp-runnable)
+
+These need a fresh pharos boot with mocked environment and cannot run against an already-connected MCP server. Group them into one release-prep dogfood pass.
+
+- **Missing-binary negative path (ADR-018).** Run pharos with `PATH=` (empty PATH), invoke `hover` on a `.rs` file via stdio MCP. Expect the typed `BinaryNotFound(command)` error to surface as the LLM-visible message `language server binary 'rust-analyzer' not found on PATH — install it and ensure it is on PATH, or override 'command' via PHAROS_LSP_REGISTRY (ADR-018)`. Confirms ADR-018's user-facing error path actually reaches the consumer; nothing in M9.5/M10 dogfood exercised it.
+- **Override-file dogfood (ADR-018 + M10 config).** Two scenarios: (a) `PHAROS_LSP_REGISTRY=/tmp/over.json` pointing rust at `/opt/custom/rust-analyzer-nightly`, expect pharos to spawn that binary instead of the PATH-resolved one; (b) override file using a bare command name, expect `os:find_executable/1` to resolve it. Confirms the override merge path (`registry.gleam:57-58`) plus the absolute-vs-bare branch in `resolve_command/1`.
+- **Boot env var matrix.** `PHAROS_TRANSPORT={stdio|http|both}`, `PHAROS_HTTP_PORT={0|3535|fixed}`, `PHAROS_HTTP_BIND={127.0.0.1|0.0.0.0}`, `PHAROS_LOG=info,pharos/lsp/trace=debug`, `PHAROS_TRACE_LSP=1`, `PHAROS_LOG_RING=0`, `PHAROS_LOG_FILE=/tmp/pharos.log`. Confirm each env var is honoured at boot — currently no automated harness covers the env-var read paths. Becomes a fixture for the M10 env-var-umbrella refactor.
+- **`PHAROS_HTTP_PORT_FILE` atomic write+rename.** Once the M10 implementation ships, kill -9 pharos mid-write, expect to find either nothing or a complete file at the configured path — never a half-written file. Confirms the atomic rename invariant.
+- **Application boot idempotency.** `mix start` runs `pharos:boot/0` via app_ffi AND via `pharos:main/0`'s post-boot path. Verify boot/0's idempotency check (`find_root_supervisor/0`) actually short-circuits on the second call rather than starting two trees. Currently inferred-correct from manual /mcp dogfood; never explicitly tested.
+- **`auto_boot: false` test mode.** `mix.exs` passes `auto_boot: false` for `Mix.env() == :test` so gleeunit suites stand up their own scoped components. Confirm a unit test that exercises `pool.start` directly does NOT race the (non-running) global pool spawned by app_ffi. M9.5 test suite passed, but the test was implicit; make it explicit.
+
+### Tracer + observability tests
+
+- **Trace ring memory bound.** With `PHAROS_TRACE_LSP=1` against a workspace generating heavy diagnostics traffic, confirm `pharos_log_ring` ETS size stabilises at the configured cap (1000 entries default per Part A of M9.5) instead of growing unbounded. Sample for ~5 minutes; check `runtime_ets_tables` for ring size.
+- **Log file rotation.** With `PHAROS_LOG_FILE=/tmp/pharos.log` set, write more than 10MB worth of logs (force via debug-level for a busy tool); confirm rotation creates `/tmp/pharos.log.1` etc. and old segments are pruned at the 7-day cutoff. Implementation lives in `log/writer.gleam`'s file_sink path.
+- **Sentinel crash dump on writer crash.** Force the writer actor to crash mid-session (kill its pid via `runtime_pid_info` resolved → `:erlang.exit(pid, kill)`). Confirm the next writer's init detects the prior incarnation's sentinel and writes `~/.cache/pharos/log/crash-<timestamp>.log` containing the ring tail. ADR-017 documents the sentinel pattern; nothing exercises it.
+
+### Multi-root + workspace tests
+
+- **Cargo workspace promotion (ADR-015).** Open a file inside a member crate of a multi-crate Cargo workspace; confirm pharos uses the workspace root (containing `[workspace]`-marked Cargo.toml) for `initialize.rootUri` rather than the member crate. Today's dogfood only tests the single-crate `rust_dev` workspace.
+- **Multi-root non-Cargo monorepos.** Open a TS file in a yarn workspace, a Python file in a uv workspace. Confirm root discovery picks the right marker; document any quirks. init.md open question 5 partially addressed by ADR-015; the non-Cargo case isn't covered.
+
+### Transport tests
+
+- **HTTP transport end-to-end.** With `PHAROS_TRANSPORT=http`, run a curl-driven `initialize` → `tools/list` → `tools/call` flow. Confirm session ids work, that `Mcp-Session-Id` headers are issued and validated, that server-initiated requests route back to the originating client. Validates ADR-012's bidirectional design.
+- **Both transport simultaneously.** With `PHAROS_TRANSPORT=both`, drive stdio AND HTTP at the same time against the same pharos instance with overlapping tool calls. Confirm the in-flight tracker (M9 ADR-016) keys per-session and that cancellation on one transport doesn't disturb the other.
+
+### Tier 1 + Tier 2 regression suite
+
+The current `doc/dogfood.md` plan is the de facto regression. Promote it from a one-off doc to a runnable harness:
+
+- Either a Gleam-side gleeunit suite that drives a fake LSP for hermetic testing, OR a shell script that boots pharos with real LSPs against `rust_dev/go_dev/typescript_dev/python_dev` and asserts on stable response shapes. The latter catches LSP-version-specific regressions; the former is faster and CI-friendly.
+- Either way: must run on a clean checkout with rust-analyzer / gopls / typescript-language-server / pyright-langserver / ruff installed, and exit non-zero on regression.
+
+### Per-language milestone tests (M12)
+
+Each language added to `default_registry` in M12 needs:
+
+- Tiny test workspace in the same shape as the existing four (`<lang>_dev/` with one source file containing a struct/class, a function, an unused local, and one deliberate type/lint error).
+- Tier 1 + Tier 2 dogfood pass against that workspace.
+- README install table entry.
+- Per-language quirks (server-request handlers, configuration sections, readiness tokens) captured in `LanguageConfig` defaults.
 
 ## Open questions
 
