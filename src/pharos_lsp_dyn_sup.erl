@@ -20,7 +20,7 @@
 -module(pharos_lsp_dyn_sup).
 -behaviour(supervisor).
 
--export([start_link/0, start_child/6, terminate_child/1]).
+-export([start_link/0, start_child/8, terminate_child/1]).
 -export([init/1]).
 
 -define(NAME, pharos_lsp_dyn_sup).
@@ -47,9 +47,11 @@ start_link() ->
 %% abnormal exit + automatic restart calls start_link_supervised
 %% with the same (Language, Workspace) — overwriting the bridge
 %% row instead of leaking.
-start_child(Language, Workspace, Cmd, Args, InitParams, TimeoutMs) ->
+start_child(Language, Workspace, Cmd, Args, InitParams, TimeoutMs,
+            ReadinessToken, ReadinessTimeoutMs) ->
     case supervisor:start_child(?NAME,
-            [Language, Workspace, Cmd, Args, InitParams, TimeoutMs]) of
+            [Language, Workspace, Cmd, Args, InitParams, TimeoutMs,
+             ReadinessToken, ReadinessTimeoutMs]) of
         {ok, Pid} -> {ok, Pid};
         {ok, Pid, _Info} -> {ok, Pid};
         {error, {already_started, Pid}} -> {ok, Pid};

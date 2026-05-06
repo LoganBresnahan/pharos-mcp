@@ -48,6 +48,21 @@ pub type SpawnSpec {
     /// JSON the server wants for that scope. `None` means the server
     /// gets neither push nor per-language pull-handler. See ADR-012.
     workspace_configuration: option.Option(dict.Dict(String, json.Json)),
+    /// Optional `$/progress` token the freshly-spawned LSP emits when
+    /// indexing kicks in (rust-analyzer's `rustAnalyzer/Indexing`,
+    /// gopls's `setup`, pyright's `Indexing`). The handshake path
+    /// drains messages until this token's `end` arrives — or the
+    /// budget below expires — before returning the Proc to consumers.
+    /// `None` means "no readiness gate; return as soon as initialize
+    /// completes" (typescript-language-server's path, no progress
+    /// notifications during cold start).
+    readiness_token: option.Option(String),
+    /// Wall-clock cap for the readiness drain. Cold rust-analyzer
+    /// against a large workspace can take 15-25s before
+    /// `rustAnalyzer/Indexing` end fires; budget 30000 covers the
+    /// 99th percentile. Tool-side timeouts continue to apply on top
+    /// of this budget for the request itself.
+    readiness_timeout_ms: Int,
   )
 }
 
@@ -556,6 +571,8 @@ fn spawn_proc(
       spec.args,
       spec.init_params,
       initialize_timeout_ms,
+      spec.readiness_token,
+      spec.readiness_timeout_ms,
     )
   {
     Ok(p) -> Ok(p)
@@ -611,6 +628,8 @@ fn dyn_sup_start_child(
   args: List(String),
   init_params: json.Json,
   initialize_timeout_ms: Int,
+  readiness_token: option.Option(String),
+  readiness_timeout_ms: Int,
 ) -> Result(process.Pid, String)
 
 fn settings_to_json(settings: Dict(String, json.Json)) -> json.Json {

@@ -40,3 +40,6 @@ Thumbs.db
 *.local.exs
 .envrc
 .env
+
+# Notes
+/notes/

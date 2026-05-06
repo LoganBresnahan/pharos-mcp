@@ -47,7 +47,9 @@
     lsp_proc_subjects_lookup/2,
     lsp_proc_subjects_delete/2,
     register_root_supervisor/1,
-    find_root_supervisor/0
+    find_root_supervisor/0,
+    trace_filter_cache_set/1,
+    trace_filter_cache_is_on/0
 ]).
 
 %% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
@@ -550,4 +552,31 @@ find_root_supervisor() ->
     case whereis(pharos_root_supervisor) of
         undefined -> {error, nil};
         Pid -> {ok, Pid}
+    end.
+
+%% Trace-target filter cache (M10 emit-side prefilter, ADR-019 prep).
+%%
+%% `pharos/lsp/trace` is a high-volume target that must NOT be emitted
+%% when the filter would silence it — both for cost and to avoid the
+%% writer-mailbox cast race that left runtime_trace_lsp captures empty
+%% in M9.5 dogfood. Producers (trace.gleam) read this cache before
+%% casting an Emit; SetTargetSync's writer handler updates it in
+%% lockstep so caller sees the new value as soon as set_target_global
+%% returns.
+%%
+%% persistent_term is the right home: O(1) read, GC pressure only on
+%% write (rare — only on filter changes). We store a single boolean
+%% atom `on` | `off` rather than the whole filter struct, since the
+%% only consumer cares about a single yes/no.
+%% Atoms match Gleam's `TraceCacheOn` / `TraceCacheOff` constructors
+%% (Gleam lowercases record-tag atoms).
+trace_filter_cache_set(trace_cache_on) ->
+    persistent_term:put(pharos_trace_filter_on, true), nil;
+trace_filter_cache_set(trace_cache_off) ->
+    persistent_term:put(pharos_trace_filter_on, false), nil.
+
+trace_filter_cache_is_on() ->
+    case persistent_term:get(pharos_trace_filter_on, false) of
+        true -> true;
+        _ -> false
     end.

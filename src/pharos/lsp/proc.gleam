@@ -123,6 +123,8 @@ pub fn start(
   workspace: String,
   init_params: Json,
   initialize_timeout_ms: Int,
+  readiness_token: Option(String),
+  readiness_timeout_ms: Int,
 ) -> Result(Proc, StartError) {
   // Run client.start + lifecycle.initialize INSIDE the actor's
   // initialiser so the Erlang Port is owned by the actor process
@@ -137,6 +139,22 @@ pub fn start(
           Error(e) ->
             Error("initialize handshake failed: " <> describe_lifecycle_error(e))
           Ok(#(c, _capabilities)) -> {
+            // M10: drain `$/progress` notifications until the language's
+            // readiness token reaches `end` (rust-analyzer's
+            // `rustAnalyzer/Indexing`, gopls's `setup`, pyright's
+            // `Indexing`) before the proc accepts requests. Without
+            // this gate, the very first hover/goto returned `null` from
+            // a freshly-spawned rust-analyzer because the analyzer
+            // hadn't indexed yet — server-OK response, useless to the
+            // LLM. wait_for_ready/3 returns Ok after the timeout even
+            // if no progress was seen, so a server with no readiness
+            // token (typescript-language-server) just no-ops here.
+            let c = case
+              lifecycle.wait_for_ready(c, readiness_token, readiness_timeout_ms)
+            {
+              Ok(c) -> c
+              Error(_) -> c
+            }
             // Custom selector accepts both:
             //   - Subject(Msg) messages (Request/RequestRaw/etc.)
             //   - Anything else (Port data + exit_status) wrapped as
@@ -185,8 +203,20 @@ pub fn start_link_supervised(
   args: List(String),
   init_params: Json,
   initialize_timeout_ms: Int,
+  readiness_token: Option(String),
+  readiness_timeout_ms: Int,
 ) -> Result(Pid, String) {
-  case start(command, args, workspace, init_params, initialize_timeout_ms) {
+  case
+    start(
+      command,
+      args,
+      workspace,
+      init_params,
+      initialize_timeout_ms,
+      readiness_token,
+      readiness_timeout_ms,
+    )
+  {
     Error(err) -> Error(describe_start_error(err))
     Ok(handle) -> {
       let Proc(subject) = handle

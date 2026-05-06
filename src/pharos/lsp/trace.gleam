@@ -37,27 +37,43 @@ pub fn incoming(bytes: BitArray) -> Nil {
 }
 
 fn emit(direction: String, bytes: BitArray) -> Nil {
-  let total = bit_array.byte_size(bytes)
-  let truncated = case total > max_body_bytes {
-    True ->
-      case bit_array.slice(bytes, at: 0, take: max_body_bytes) {
-        Ok(prefix) -> prefix
-        Error(_) -> bytes
+  // M10 emit-side prefilter. Without this short-circuit, every wire
+  // chunk in BOTH directions casts an Emit message to the writer
+  // actor, even when the trace target is silenced. A
+  // parallel-issued runtime_trace_lsp + producer race left the very
+  // first emit at the OLD filter (sync filter set in M9.5 closed the
+  // in-actor race but not the at-emitter race). Reading the cache
+  // here means producers see the new filter as soon as
+  // `set_target_global` returns, with no mailbox-ordering dependency.
+  case trace_filter_is_on() {
+    False -> Nil
+    True -> {
+      let total = bit_array.byte_size(bytes)
+      let truncated = case total > max_body_bytes {
+        True ->
+          case bit_array.slice(bytes, at: 0, take: max_body_bytes) {
+            Ok(prefix) -> prefix
+            Error(_) -> bytes
+          }
+        False -> bytes
       }
-    False -> bytes
+      let body = render_bytes(truncated)
+      log.at_with_fields(
+        target,
+        Debug,
+        "lsp wire",
+        [
+          #("direction", direction),
+          #("bytes", int.to_string(total)),
+          #("body", body),
+        ],
+      )
+    }
   }
-  let body = render_bytes(truncated)
-  log.at_with_fields(
-    target,
-    Debug,
-    "lsp wire",
-    [
-      #("direction", direction),
-      #("bytes", int.to_string(total)),
-      #("body", body),
-    ],
-  )
 }
+
+@external(erlang, "pharos_runtime_ffi", "trace_filter_cache_is_on")
+fn trace_filter_is_on() -> Bool
 
 @external(erlang, "pharos_log_ffi", "render_trace_body")
 fn render_bytes(bytes: BitArray) -> String

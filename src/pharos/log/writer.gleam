@@ -24,6 +24,22 @@ import pharos/log/ring
 
 const max_mailbox_depth: Int = 1000
 
+const trace_target: String = "pharos/lsp/trace"
+
+/// Atom-tag passed to the trace-filter cache FFI. Two-state on / off
+/// mirrors the only thing the trace producer needs to know.
+pub type TraceCache {
+  TraceCacheOn
+  TraceCacheOff
+}
+
+const trace_cache_on: TraceCache = TraceCacheOn
+
+const trace_cache_off: TraceCache = TraceCacheOff
+
+@external(erlang, "pharos_runtime_ffi", "trace_filter_cache_set")
+fn trace_filter_cache_set(state: TraceCache) -> Nil
+
 pub type Writer {
   Writer(subject: Subject(Msg))
 }
@@ -84,6 +100,8 @@ pub fn start(
     file_path,
   )
 
+  seed_trace_cache_from_filter(filter)
+
   actor.new(initial_state)
   |> actor.on_message(handle_message)
   |> actor.start()
@@ -94,6 +112,20 @@ pub fn start(
     Writer(subject: subject)
   })
   |> result.map_error(StartFailedActor)
+}
+
+/// Mirror the initial filter's `pharos/lsp/trace` allowed-state into
+/// the persistent_term cache at writer boot. Picks up the case where
+/// `PHAROS_TRACE_LSP=1` was honoured by `pharos.gleam`'s boot-time
+/// filter assembly — without this seed, producers would short-circuit
+/// to "off" at boot even when the override exists, until the first
+/// runtime_log_level call updates the cache.
+fn seed_trace_cache_from_filter(f: Filter) -> Nil {
+  let allowed = filter.allows(f, trace_target, entry.Debug)
+  trace_filter_cache_set(case allowed {
+    True -> trace_cache_on
+    False -> trace_cache_off
+  })
 }
 
 /// Supervised entry point — spawns the writer with the same config
@@ -302,10 +334,22 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(State(..state, filter: new_filter))
 
     SetTargetSync(target_prefix, level, reply) -> {
-      let next = State(
-        ..state,
-        filter: update_overrides(state.filter, target_prefix, level),
-      )
+      let new_filter = update_overrides(state.filter, target_prefix, level)
+      let next = State(..state, filter: new_filter)
+      // Mirror the trace-target's allowed-state into a persistent_term
+      // cache so the high-volume `pharos/lsp/trace` emitter can
+      // short-circuit BEFORE casting an Emit to this actor — that
+      // eliminates the residual race where a parallel-issued
+      // runtime_trace_lsp + producer would still miss the producer's
+      // first emit (sync filter alone closed the in-actor race; this
+      // closes the at-emitter race for high-volume paths). M10 fix.
+      case target_prefix == trace_target {
+        True -> trace_filter_cache_set(case level {
+          Some(_) -> trace_cache_on
+          None -> trace_cache_off
+        })
+        False -> Nil
+      }
       // Reply BEFORE actor.continue so the caller's `process.call` is
       // unblocked. Writer's mailbox order guarantees any subsequent
       // Emit messages will see the new filter — that's the whole point

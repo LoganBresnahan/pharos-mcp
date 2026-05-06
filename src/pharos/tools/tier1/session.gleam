@@ -33,6 +33,14 @@ const content_modified_code: Int = -32_801
 
 const content_modified_retry_delay_ms: Int = 1000
 
+/// Budget the post-handshake `wait_for_ready` drain spends waiting
+/// for the LSP's indexing-progress token to reach `end`. Cold
+/// rust-analyzer against a large workspace consistently emits the
+/// `rustAnalyzer/Indexing` end notification within ~15s; 30s covers
+/// the 99th percentile. Servers without a `readiness_token` skip the
+/// drain entirely.
+const readiness_timeout_ms: Int = 30_000
+
 pub type SessionError {
   NotAFileUri(uri: String)
   WorkspaceNotFound(uri: String)
@@ -388,6 +396,8 @@ fn get_lsp(
       args: config.args,
       init_params: build_initialize_params(workspace, config),
       workspace_configuration: config.workspace_configuration,
+      readiness_token: config.readiness_token,
+      readiness_timeout_ms: readiness_timeout_ms,
     )
   pool.get(pool, config.id, workspace, spec)
   |> result.map_error(fn(err) {
