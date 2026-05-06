@@ -101,7 +101,45 @@ Verifies the ETS bridge + simple_one_for_one supervisor wiring.
 ## Results log
 
 Run 1: 2026-05-06 (initial dogfood — defects + limitations identified).
-Run 2: 2026-05-06 (post-fix regression — verifies fixes shipped).
+Run 2: 2026-05-06 (post-M9.5 regression — first round of fixes shipped).
+Run 3: 2026-05-06 (post-M10 Group A+B regression — wait_for_ready + emit-side prefilter + cold-start hint).
+
+### Run 3 — M10 Group A+B post-fix regression summary
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 0 | PASS | `pharos_root_supervisor` + `pharos_lsp_dyn_sup` visible (limitation 2a still fixed). |
+| 1 — headline cold hover | **PASS** | First hover on freshly-respawned rust LSP returned full `Point` struct hover **on the FIRST call** (Run 2 needed a retry; Run 1 needed two retries plus -32801 absorption). **wait_for_ready post-handshake fix verified live** — eliminates the cold-start `null` failure mode. |
+| 1-rust | PASS | All Tier 1 tools clean. |
+| 1-go | PASS first try | gopls via PATH (ADR-018 still good). |
+| 1-ts | PASS first try | typescript-language-server via PATH. |
+| 1-py | PASS first try | pyright-langserver via PATH. format -32601 + code_actions empty as documented. |
+| 2 | PASS | call_hierarchy_prepare clean. |
+| 3 | PASS | lsp_request_raw passthrough. |
+| 4 | PASS | scheduler_util returns 16 schedulers in 500ms (still fixed via recon). |
+| 5 | **PASS one-shot** | **ADR-017a kill+respawn cycle** now succeeds **on the FIRST hover after kill** — bridge 4→3 then back to 4 with no retry needed. wait_for_ready makes the respawn path indistinguishable from a warm hover at the consumer level. |
+| 6 | PASS | log_tail/level/clear all clean. |
+| 7 | **PARTIAL** | trace_lsp prefilter cache mechanism verified — `runtime_log_level pharos/lsp/trace=debug` followed by hover puts wire traces in the ring (the prefilter is reading the cache on the producer side). **Remaining limitation:** when trace_lsp is dispatched in PARALLEL with hover, the dispatch race can still beat the cache update — hover's wire activity emits before trace_lsp's set_target_global call has propagated. The prefilter closes the writer-mailbox-cast race that Run 2 saw, but it does NOT close the parallel-dispatch race because the cache update still has to win against the hover's first byte. Workaround: use `runtime_log_level=debug` then activity then `runtime_log_tail` instead of `runtime_trace_lsp` for parallel-issued workflows. M11 candidate: dedicated always-on small trace ring (no filter dependency). |
+| Limitation 2b | PASS | dir URI + `language="rust"` returned `Point` (still fixed). |
+| Negative-path tests | DEFERRED | Missing-binary + override-file dogfood require pharos cold-boot with mocked env. Out-of-band CLI test, not /mcp-runnable. Tracked for the dedicated release-prep sprint. |
+
+### Defect status (post-M10 Group A+B)
+
+| # | Defect | Status | Verification |
+|---|--------|--------|--------------|
+| 1 | `runtime_scheduler_util` hang | **FIXED** | Returned in 500ms with utilization data for all 16 schedulers. Implementation switched to `recon:scheduler_usage/1`. |
+| 2 | `runtime_trace_lsp` empty capture | **PARTIALLY FIXED** | Sequential issue order: works (cache=on then activity captures). Parallel issue: still races for the very first emit because cache update has to beat the producer's first wire byte. |
+| 3 | Cold-start race (`null` and `-32801`) | **FIXED** | -32801 absorbed by retry helper; `null` eliminated by post-handshake wait_for_ready that drains `$/progress` until indexing `end`. Verified by one-shot kill+respawn cycle in Phase 5. Cold-start hint added to hover/goto_definition/goto_type_definition tool descriptions (Group A) — kept as belt-and-suspenders for languages not declaring a `readiness_token`. |
+
+### Limitation status (post-M10 Group A+B)
+
+| # | Limitation | Status | Verification |
+|---|------------|--------|--------------|
+| 2a | `runtime_supervision_tree` blind to pharos | **FIXED** (M9.5) | `pharos_root_supervisor` registered at `<0.102.0>` and visible. |
+| 2b | `workspace_symbols` rejects directory URI | **FIXED** (M9.5) | `language="rust"` + dir URI returns `Point`. |
+| 2c | LSP binaries hardcoded to maintainer paths | **FIXED** (M9.5) | Bare names + `os:find_executable/1`. All 4 languages via PATH. |
+| pyright formatting | NOT addressable | Out of scope; ruff-via-multi-LSP planned per ADR-019 in M10. |
+| trace_lsp parallel race | **PARTIAL** | Documented above. M11 candidate. |
 
 ### Run 2 — post-fix regression summary
 
