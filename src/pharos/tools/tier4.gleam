@@ -333,7 +333,9 @@ fn runtime_scheduler_util_definition() -> Json {
       json.string(
         "scheduler:utilization sample over `interval_ms` (default "
           <> "1000). Blocks for the duration. Returns one row per "
-          <> "scheduler plus aggregates.",
+          <> "scheduler plus aggregates. Sampling resolution is one "
+          <> "second — values are floor-divided by 1000 with a "
+          <> "minimum of 1s, so `interval_ms=500` samples for 1s.",
       ),
     ),
     #(

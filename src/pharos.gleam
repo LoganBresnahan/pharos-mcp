@@ -25,7 +25,7 @@
 //// while the binary still runs under `mix start` rather than its
 //// eventual Burrito wrapper.
 
-import gleam/erlang/process
+import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -44,33 +44,15 @@ const default_http_port: Int = 3535
 const default_http_bind: String = "127.0.0.1"
 
 pub fn main() -> Nil {
-  // Pre-supervisor init: idempotent ETS tables that supervised
-  // children read or write. Order does not matter beyond "before
-  // root_supervisor.start".
-  diagnostics_cache.init()
-  registry.init()
-  inflight.init()
-  dyn_sup.init_subjects_bridge()
-
-  let transport = read_transport()
-  let config =
-    root_supervisor.Config(
-      transport: map_transport(transport),
-      log_filter: read_log_filter(),
-      log_ring_enabled: read_bool_env("PHAROS_LOG_RING", default_value: True),
-      log_stderr_enabled: read_bool_env("PHAROS_LOG_STDERR", default_value: True),
-      log_file_path: read_optional_env("PHAROS_LOG_FILE"),
-      http_port: read_http_port(),
-      http_bind: read_http_bind(),
-    )
-
-  case root_supervisor.start(config) {
-    Error(_) -> {
-      log.error("root supervisor failed to start; exiting")
+  case boot() {
+    Error(reason) -> {
+      log.error("root supervisor failed to start: " <> reason)
       Nil
     }
-    Ok(_root) -> {
-      log.info("pharos starting (transport=" <> transport_label(transport) <> ")")
+    Ok(_pid) -> {
+      log.info(
+        "pharos starting (transport=" <> transport_label(read_transport()) <> ")",
+      )
       // Stdio/Both: stdio_worker drives termination via stdin
       // EOF. The supervisor's `transient` restart strategy on
       // stdio_worker means the worker exiting (clean EOF) does
@@ -85,6 +67,60 @@ pub fn main() -> Nil {
     }
   }
 }
+
+/// Idempotent application-bootstrap entry point. Returns the root
+/// supervisor's Pid. Called both from `pharos_app_ffi:start/2` (so
+/// OTP's application_controller treats the supervisor as the
+/// application's primary process — fixes the
+/// `runtime_supervision_tree` blind spot from the M9.5 dogfood) and
+/// from `main/0` (so `mix start` and dev shells produce the same
+/// tree without double-spawning).
+///
+/// Idempotency: a second call when the supervisor is already running
+/// returns the existing Pid via the `pharos_root_supervisor`
+/// registered name without re-running ETS init or
+/// `root_supervisor.start`.
+pub fn boot() -> Result(Pid, String) {
+  case find_root_supervisor() {
+    Ok(pid) -> Ok(pid)
+    Error(_) -> do_boot()
+  }
+}
+
+fn do_boot() -> Result(Pid, String) {
+  // Pre-supervisor init: idempotent ETS tables that supervised
+  // children read or write. Order does not matter beyond "before
+  // root_supervisor.start".
+  diagnostics_cache.init()
+  registry.init()
+  inflight.init()
+  dyn_sup.init_subjects_bridge()
+
+  let config =
+    root_supervisor.Config(
+      transport: map_transport(read_transport()),
+      log_filter: read_log_filter(),
+      log_ring_enabled: read_bool_env("PHAROS_LOG_RING", default_value: True),
+      log_stderr_enabled: read_bool_env("PHAROS_LOG_STDERR", default_value: True),
+      log_file_path: read_optional_env("PHAROS_LOG_FILE"),
+      http_port: read_http_port(),
+      http_bind: read_http_bind(),
+    )
+
+  case root_supervisor.start(config) {
+    Error(_) -> Error("root_supervisor.start returned an error")
+    Ok(started) -> {
+      register_root_supervisor(started.pid)
+      Ok(started.pid)
+    }
+  }
+}
+
+@external(erlang, "pharos_runtime_ffi", "register_root_supervisor")
+fn register_root_supervisor(pid: Pid) -> Nil
+
+@external(erlang, "pharos_runtime_ffi", "find_root_supervisor")
+fn find_root_supervisor() -> Result(Pid, Nil)
 
 fn map_transport(t: Transport) -> root_supervisor.Transport {
   case t {

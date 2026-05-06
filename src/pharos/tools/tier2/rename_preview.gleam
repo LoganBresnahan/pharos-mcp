@@ -70,7 +70,9 @@ pub fn handle(
         "workspace/applyEdit",
         capture_handler,
         fn() {
-          proc.request(lsp, "textDocument/rename", params, default_timeout_ms)
+          session.request_with_content_modified_retry(fn() {
+            proc.request(lsp, "textDocument/rename", params, default_timeout_ms)
+          })
         },
       )
     })

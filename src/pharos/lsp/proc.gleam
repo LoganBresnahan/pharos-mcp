@@ -29,6 +29,7 @@ import pharos/lsp/client.{type Client}
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/inflight
 import pharos/lsp/lifecycle
+import pharos/lsp/port
 import pharos/lsp/server_request_handlers.{type Handler}
 
 pub opaque type Proc {
@@ -245,7 +246,13 @@ fn describe_client_error(err: client.Error) -> String {
     client.PortReceiveError(_) -> "port receive error"
     client.PortSendError(_) -> "port send error"
     client.FramingError(_) -> "framing error"
-    client.SpawnError(_) -> "subprocess spawn error"
+    client.SpawnError(port.BinaryNotFound(command)) ->
+      "language server binary `"
+      <> command
+      <> "` not found on PATH — install it and ensure it is on PATH, or "
+      <> "override `command` via PHAROS_LSP_REGISTRY (ADR-018)"
+    client.SpawnError(port.SpawnFailed(reason)) ->
+      "subprocess spawn failed: " <> reason
   }
 }
 

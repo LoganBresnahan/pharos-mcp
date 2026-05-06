@@ -20,6 +20,13 @@ pub type Port
 
 pub type SpawnError {
   SpawnFailed(reason: String)
+  /// `command` was a bare name (no `/`) and `os:find_executable/1`
+  /// could not resolve it on the current PATH. ADR-018: bundled
+  /// LSP defaults are bare names so anyone with the binary on their
+  /// PATH can run pharos; this surfaces a clean message instead of
+  /// the cryptic open_port crash that absolute-path-required would
+  /// otherwise produce.
+  BinaryNotFound(command: String)
 }
 
 pub type ReceiveError {

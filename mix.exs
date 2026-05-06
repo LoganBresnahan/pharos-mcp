@@ -23,7 +23,14 @@ defmodule Pharos.MixProject do
 
   def application do
     [
-      mod: {:pharos_app_ffi, []},
+      # `auto_boot: false` in :test so gleeunit suites can spin up
+      # their own scoped supervisor / writer / pool instances without
+      # racing the application's own root tree. Production and dev
+      # paths boot the supervisor here so OTP application_controller
+      # treats it as the application's primary process — which
+      # `runtime_supervision_tree` walks to render pharos's tree
+      # (limitation 2a from the M9.5 dogfood).
+      mod: {:pharos_app_ffi, [auto_boot: Mix.env() != :test]},
       extra_applications: [:logger]
     ]
   end

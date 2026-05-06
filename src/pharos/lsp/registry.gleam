@@ -76,6 +76,19 @@ pub fn for_uri(uri: String) -> Result(LanguageConfig, LookupError) {
   languages.for_uri(cached(), uri)
 }
 
+/// Resolve a language id (e.g. `"rust"`, `"go"`) through the cached
+/// registry. Used by tools that accept an explicit language argument
+/// instead of inferring it from a file extension — primarily
+/// `workspace_symbols`, where the natural URI is a directory and
+/// extension routing fails. Returns `UnknownLanguage` with the id
+/// echoed back so the caller can render a clear error.
+pub fn for_language(id: String) -> Result(LanguageConfig, LookupError) {
+  case dict.get(cached(), id) {
+    Ok(config) -> Ok(config)
+    Error(_) -> Error(languages.UnknownLanguage(id))
+  }
+}
+
 // -- Persistent-term backing ---------------------------------------------
 
 @external(erlang, "pharos_runtime_ffi", "registry_store")

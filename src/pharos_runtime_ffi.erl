@@ -45,7 +45,9 @@
     lsp_proc_subjects_init/0,
     lsp_proc_subjects_insert/3,
     lsp_proc_subjects_lookup/2,
-    lsp_proc_subjects_delete/2
+    lsp_proc_subjects_delete/2,
+    register_root_supervisor/1,
+    find_root_supervisor/0
 ]).
 
 %% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
@@ -345,18 +347,28 @@ list_applications() ->
 %% ----- scheduler util -----
 
 scheduler_utilization(IntervalMs) when is_integer(IntervalMs) ->
-    %% scheduler:utilization(IntervalMs) blocks for IntervalMs
-    %% sampling, then returns a list of {Type, Id, Util} tuples plus
-    %% one "total" tuple. Treat each entry uniformly.
-    Samples = scheduler:utilization(IntervalMs),
+    %% Use recon:scheduler_usage/1 (millisecond-accurate, returns
+    %% [{SchedId, Usage}]) instead of scheduler:utilization/1.
+    %% The latter hung indefinitely in M9.5 dogfood — likely an OTP
+    %% scheduler-API quirk with the runtime_tools-style sampling. recon
+    %% wraps scheduler:sample_all + diff over a sleep window in pure
+    %% Erlang code, which behaves predictably.
+    Clamped = max(1, IntervalMs),
+    Samples = recon:scheduler_usage(Clamped),
     [format_scheduler_sample(S) || S <- Samples].
 
-format_scheduler_sample({Type, Id, Util}) ->
+format_scheduler_sample({Type, Id, Util}) when is_atom(Type) ->
     {scheduler_sample,
         atom_to_binary(Type, utf8),
         format_id(Id),
         ensure_float(Util)};
-format_scheduler_sample({Type, Util}) ->
+format_scheduler_sample({SchedId, Util}) when is_integer(SchedId) ->
+    %% recon:scheduler_usage/1 shape: {SchedId, Usage}.
+    {scheduler_sample,
+        <<"normal">>,
+        integer_to_binary(SchedId),
+        ensure_float(Util)};
+format_scheduler_sample({Type, Util}) when is_atom(Type) ->
     {scheduler_sample,
         atom_to_binary(Type, utf8),
         <<>>,
@@ -511,4 +523,31 @@ collect_loop(Owner, Acc) ->
         drain -> Owner ! {drained, lists:reverse(Acc)}
     after 30_000 ->
         Owner ! {drained, lists:reverse(Acc)}
+    end.
+
+%% Root supervisor registration (limitation 2a fix). Registers the
+%% pharos root supervisor pid under the name `pharos_root_supervisor`
+%% so OTP application_controller can walk the tree from the
+%% application's primary process. Without this, runtime_supervision_tree
+%% reports kernel/sasl/elixir only because pharos_app_ffi:start/2 used
+%% to return a plain spawn_link pid that app_controller could not
+%% introspect.
+%%
+%% Idempotent: re-registering the same pid (e.g. from a second
+%% pharos:boot/0 call inside the same BEAM) is a no-op.
+register_root_supervisor(Pid) when is_pid(Pid) ->
+    case whereis(pharos_root_supervisor) of
+        undefined ->
+            try register(pharos_root_supervisor, Pid) catch _:_ -> ok end;
+        Existing when Existing =:= Pid ->
+            ok;
+        _ ->
+            ok
+    end,
+    nil.
+
+find_root_supervisor() ->
+    case whereis(pharos_root_supervisor) of
+        undefined -> {error, nil};
+        Pid -> {ok, Pid}
     end.

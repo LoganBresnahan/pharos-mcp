@@ -23,29 +23,55 @@ decode_port_data(Payload) when is_tuple(Payload), tuple_size(Payload) =:= 2 ->
 decode_port_data(_) ->
     {error, nil}.
 
-%% Spawn a subprocess. `Command` is the absolute path or PATH-resolved
-%% binary name; `Args` is a list of binary arguments; `Cwd` is the
-%% working directory the subprocess inherits.
+%% Spawn a subprocess. `Command` is either an absolute path
+%% (starts with `/`) or a bare name resolved against the current
+%% PATH via `os:find_executable/1` (ADR-018). `Args` is a list of
+%% binary arguments; `Cwd` is the working directory the subprocess
+%% inherits.
 %%
 %% Returns:
-%%   {ok, Port}                  — Port opened
-%%   {error, {spawn_failed, R}}  — open_port raised
+%%   {ok, Port}                       — Port opened
+%%   {error, {binary_not_found, Cmd}} — bare name not on PATH
+%%   {error, {spawn_failed, R}}       — open_port raised
 spawn(Command, Args, Cwd) ->
-    try
-        Port = erlang:open_port({spawn_executable, binary_to_list(Command)}, [
-            {args, [binary_to_list(A) || A <- Args]},
-            binary,
-            use_stdio,
-            exit_status,
-            stream,
-            hide,
-            {cd, binary_to_list(Cwd)}
-        ]),
-        {ok, Port}
-    catch
-        error:Reason ->
-            {error,
-                {spawn_failed, list_to_binary(io_lib:format("~p", [Reason]))}}
+    case resolve_command(Command) of
+        {error, not_found} ->
+            {error, {binary_not_found, Command}};
+        {ok, Resolved} ->
+            try
+                Port = erlang:open_port({spawn_executable, Resolved}, [
+                    {args, [binary_to_list(A) || A <- Args]},
+                    binary,
+                    use_stdio,
+                    exit_status,
+                    stream,
+                    hide,
+                    {cd, binary_to_list(Cwd)}
+                ]),
+                {ok, Port}
+            catch
+                error:Reason ->
+                    {error,
+                        {spawn_failed,
+                            list_to_binary(io_lib:format("~p", [Reason]))}}
+            end
+    end.
+
+%% Resolve a command to an absolute filesystem path. Absolute
+%% commands (starting with `/`) are passed through. Bare names go
+%% through `os:find_executable/1` which consults `$PATH`. Returns
+%% `{ok, StringPath}` (Erlang string, not binary, since open_port's
+%% spawn_executable wants a string) or `{error, not_found}` when no
+%% PATH entry contains a matching executable.
+resolve_command(Command) when is_binary(Command) ->
+    case Command of
+        <<$/, _/binary>> ->
+            {ok, binary_to_list(Command)};
+        _ ->
+            case os:find_executable(binary_to_list(Command)) of
+                false -> {error, not_found};
+                Path -> {ok, Path}
+            end
     end.
 
 %% Write raw bytes to the subprocess's stdin. The framing layer

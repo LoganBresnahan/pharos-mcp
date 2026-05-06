@@ -24,6 +24,9 @@ pub type DiscoveryError {
 @external(erlang, "pharos_fs_ffi", "is_regular_file")
 fn is_regular_file(path: String) -> Bool
 
+@external(erlang, "pharos_fs_ffi", "is_directory")
+fn is_directory(path: String) -> Bool
+
 @external(erlang, "pharos_fs_ffi", "dirname")
 fn dirname(path: String) -> String
 
@@ -67,6 +70,26 @@ pub fn discover_from_uri(
   case uri_to_path(uri) {
     Error(err) -> Error(err)
     Ok(path) -> ascend(dirname(path), markers)
+  }
+}
+
+/// Like `discover_from_uri/2` but tolerant of directory URIs. If the
+/// URI's path resolves to an existing directory we ascend from the
+/// directory itself; otherwise we fall back to the file-style
+/// `dirname`-then-ascend behaviour. Used by `workspace_symbols` so
+/// callers can pass either a workspace root URI (`file:///proj/`) or
+/// a file URI inside the workspace.
+pub fn discover_from_uri_or_dir(
+  uri: String,
+  markers: List(String),
+) -> Result(String, DiscoveryError) {
+  case uri_to_path(uri) {
+    Error(err) -> Error(err)
+    Ok(path) ->
+      case is_directory(path) {
+        True -> ascend(path, markers)
+        False -> ascend(dirname(path), markers)
+      }
   }
 }
 

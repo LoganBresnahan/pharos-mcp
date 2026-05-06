@@ -205,7 +205,11 @@ fn pull_diagnostics(
       #("textDocument", json.object([#("uri", json.string(file_uri))])),
     ])
 
-  case proc.request(lsp, "textDocument/diagnostic", params, timeout_ms) {
+  case
+    session.request_with_content_modified_retry(fn() {
+      proc.request(lsp, "textDocument/diagnostic", params, timeout_ms)
+    })
+  {
     Error(err) ->
       Error(TransportFailed(tool_helpers.describe_request_error(err)))
 

@@ -32,6 +32,12 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 011 | [Local Mix.Task workaround for hex package name vs OTP application name mismatch](011-mix-app-name-symlink-workaround.md) | Accepted |
 | 012 | [Bidirectional LSP server-request handling: registry, sessions, and SSE](012-bidirectional-lsp-and-sse.md) | Accepted |
 | 013 | [Supervisor tree and per-LSP worker process](013-supervisor-tree-and-lsp-worker.md) | Accepted |
+| 014 | [Runtime introspection tools](014-runtime-introspection-tools.md) | Accepted |
+| 015 | [Multi-root rust-analyzer](015-multi-root-rust-analyzer.md) | Accepted |
+| 016 | [Cancel propagation](016-cancel-propagation.md) | Accepted |
+| 017 | [Supervision tree wiring](017-supervision-tree-wiring.md) | Accepted |
+| 017a | [lsp_proc under simple_one_for_one](017a-lsp-proc-simple-one-for-one.md) | Accepted |
+| 018 | [LSP binary path resolution](018-lsp-binary-path-resolution.md) | Proposed |
 
 ## Anticipated future ADRs
 
@@ -39,9 +45,8 @@ Written when the corresponding decision actually arises with tradeoffs — not p
 
 | # | Title | Trigger |
 |---|-------|---------|
-| 014 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
-| 015 | Config file format and location | Language-registry config gets implemented |
-| 016 | LSP lifecycle policy: kept-warm vs spawn-per-call | rust-analyzer cold-start hits in real use |
-| 017 | Bridge port discovery mechanism | Extension repo bootstraps |
-| 018 | Workspace root determination | First multi-root project test runs |
-| 019 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
+| 019 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
+| 020 | Config file format and location | Override registry promoted to first-class config |
+| 021 | Bridge port discovery mechanism | Extension repo bootstraps |
+| 022 | Workspace root determination | First multi-root project test runs |
+| 023 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |

@@ -9,10 +9,13 @@
 %% Returns Gleam-friendly tagged tuples shaped as Result(t, e).
 
 -module(pharos_fs_ffi).
--export([is_regular_file/1, dirname/1, read_file/1, shell/1, encode_json/1]).
+-export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1]).
 
 is_regular_file(Path) ->
     filelib:is_regular(binary_to_list(Path)).
+
+is_directory(Path) ->
+    filelib:is_dir(binary_to_list(Path)).
 
 dirname(Path) ->
     list_to_binary(filename:dirname(binary_to_list(Path))).

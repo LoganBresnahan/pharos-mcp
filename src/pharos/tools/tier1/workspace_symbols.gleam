@@ -11,6 +11,7 @@
 
 import gleam/int
 import gleam/json
+import gleam/option.{type Option, None, Some}
 import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/clip
@@ -31,14 +32,29 @@ pub fn handle(
   workspace_uri_hint: String,
   query: String,
   limit: Int,
+  language: Option(String),
 ) -> Result(String, WorkspaceSymbolsError) {
   let params = json.object([#("query", json.string(query))])
 
-  case
-    session.with_workspace_session_and_retry(pool, workspace_uri_hint, fn(lsp) {
+  let body = fn(lsp) {
+    session.request_with_content_modified_retry(fn() {
       proc.request(lsp, "workspace/symbol", params, default_timeout_ms)
     })
-  {
+  }
+
+  let request_result = case language {
+    Some(lang) ->
+      session.with_workspace_session_and_retry_by_language(
+        pool,
+        lang,
+        workspace_uri_hint,
+        body,
+      )
+    None ->
+      session.with_workspace_session_and_retry(pool, workspace_uri_hint, body)
+  }
+
+  case request_result {
     Ok(result_value) -> {
       let clipped = clip.clip_array(result_value, limit)
       case clipped.truncated_by {

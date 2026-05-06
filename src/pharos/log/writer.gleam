@@ -36,7 +36,11 @@ pub opaque type Msg {
   Emit(LogEntry)
   NoteDrop
   SetFilter(Filter)
-  SetTarget(target_prefix: String, level: Option(Level))
+  SetTargetSync(
+    target_prefix: String,
+    level: Option(Level),
+    reply: Subject(Nil),
+  )
   Stop
 }
 
@@ -235,30 +239,28 @@ pub fn set_filter(writer: Writer, new_filter: Filter) -> Nil {
   process.send(writer.subject, SetFilter(new_filter))
 }
 
-/// Override one target's level at runtime. `level = None` silences
-/// the target.
-pub fn set_target(
-  writer: Writer,
-  target_prefix: String,
-  level: Option(Level),
-) -> Nil {
-  process.send(writer.subject, SetTarget(target_prefix, level))
-}
-
 /// Globally-addressable target override. Looks up the writer via
-/// the persistent_term registration and casts `SetTarget` directly.
-/// Used by `log.set_target_level/2` and the `runtime_log_level`
-/// MCP tool. Returns `Error(Nil)` when the writer is not running.
+/// the persistent_term registration and synchronously updates the
+/// filter. Synchronous (process.call) on purpose: a cast lets the
+/// caller race ahead of the actor's mailbox, so any in-flight Emit
+/// messages from other producers can be processed under the OLD
+/// filter before this one applies — runtime_trace_lsp captured
+/// empty results that way. Returns `Error(Nil)` when the writer is
+/// not running or the call times out.
 pub fn set_target_global(
   target_prefix: String,
   level: Option(Level),
 ) -> Result(Nil, Nil) {
   case lookup_subject() {
     Error(_) -> Error(Nil)
-    Ok(subject) -> {
-      process.send(subject, SetTarget(target_prefix, level))
-      Ok(Nil)
-    }
+    Ok(subject) ->
+      case
+        process.call(subject, 1000, fn(reply) {
+          SetTargetSync(target_prefix, level, reply)
+        })
+      {
+        Nil -> Ok(Nil)
+      }
   }
 }
 
@@ -299,11 +301,19 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     SetFilter(new_filter) ->
       actor.continue(State(..state, filter: new_filter))
 
-    SetTarget(target_prefix, level) ->
-      actor.continue(State(
+    SetTargetSync(target_prefix, level, reply) -> {
+      let next = State(
         ..state,
         filter: update_overrides(state.filter, target_prefix, level),
-      ))
+      )
+      // Reply BEFORE actor.continue so the caller's `process.call` is
+      // unblocked. Writer's mailbox order guarantees any subsequent
+      // Emit messages will see the new filter — that's the whole point
+      // of the sync variant (avoids the cast race that left
+      // runtime_trace_lsp captures empty under load).
+      process.send(reply, Nil)
+      actor.continue(next)
+    }
 
     Stop -> {
       // Graceful shutdown — clear the sentinel so the next

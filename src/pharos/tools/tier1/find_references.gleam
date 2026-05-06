@@ -23,20 +23,13 @@
 //// past wait_for_ready's idle-bail threshold). Keep it available for
 //// future use; rely on the retry path here.
 
-import gleam/dynamic
-import gleam/erlang/process
 import gleam/json
-import pharos/lsp/proc.{type Proc}
-import pharos/lsp/lifecycle
+import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
 
 pub const default_timeout_ms: Int = 60_000
-
-const content_modified_retry_delay_ms: Int = 1000
-
-const content_modified_code: Int = -32_801
 
 pub type FindReferencesError {
   SessionFailed(reason: String)
@@ -54,7 +47,9 @@ pub fn handle(
   let params = build_params(file_uri, line, character, include_declaration)
   case
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
-      attempt(lsp, params, timeout_ms, retries_left: 1)
+      session.request_with_content_modified_retry(fn() {
+        proc.request(lsp, "textDocument/references", params, timeout_ms)
+      })
     })
   {
     Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
@@ -90,29 +85,6 @@ fn build_params(
       ]),
     ),
   ])
-}
-
-fn attempt(
-  lsp: Proc,
-  params: json.Json,
-  timeout_ms: Int,
-  retries_left retries_left: Int,
-) -> Result(dynamic.Dynamic, lifecycle.RequestError) {
-  case proc.request(lsp, "textDocument/references", params, timeout_ms) {
-    Ok(result_value) -> Ok(result_value)
-
-    Error(lifecycle.ServerError(code, _message))
-      if code == content_modified_code && retries_left > 0
-    -> {
-      // Content state changed during the request — usually
-      // rust-analyzer doing background indexing. Sleep briefly so
-      // the server reaches a steady state, then try again.
-      process.sleep(content_modified_retry_delay_ms)
-      attempt(lsp, params, timeout_ms, retries_left: retries_left - 1)
-    }
-
-    Error(err) -> Error(err)
-  }
 }
 
 fn describe_session_error(err: session.SessionError) -> String {

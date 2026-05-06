@@ -456,7 +456,12 @@ fn workspace_symbols_tool_definition() -> Json {
           <> "trailing truncation annotation. gopls in particular "
           <> "fuzzy-matches across the Go stdlib and can flood the "
           <> "result for short queries — the cap protects the MCP "
-          <> "host's per-tool token budget.",
+          <> "host's per-tool token budget. "
+          <> "`workspace_uri_hint` may be a file URI inside the "
+          <> "workspace OR the workspace root directory itself "
+          <> "(e.g. `file:///proj/`); when a directory is given pass "
+          <> "`language` to pick the LSP since extension routing has "
+          <> "no extension to read.",
       ),
     ),
     #(
@@ -474,7 +479,7 @@ fn workspace_symbols_tool_definition() -> Json {
                   "description",
                   json.string(
                     "file:// URI of any file inside the workspace, or "
-                      <> "the workspace root itself.",
+                      <> "of the workspace root directory itself.",
                   ),
                 ),
               ]),
@@ -500,6 +505,22 @@ fn workspace_symbols_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Max symbols to return. Default 20.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "language",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "Optional language id (e.g. `rust`, `go`, "
+                      <> "`typescript`, `python`). Required when "
+                      <> "`workspace_uri_hint` is a directory URI. "
+                      <> "When omitted, language is inferred from "
+                      <> "the URI's file extension.",
                   ),
                 ),
               ]),
@@ -871,8 +892,16 @@ fn handle_workspace_symbols(
         -32_602,
         "Invalid workspace_symbols params: " <> reason,
       )
-    Ok(#(workspace_uri_hint, query, limit)) ->
-      case workspace_symbols.handle(pool, workspace_uri_hint, query, limit) {
+    Ok(#(workspace_uri_hint, query, limit, language)) ->
+      case
+        workspace_symbols.handle(
+          pool,
+          workspace_uri_hint,
+          query,
+          limit,
+          language,
+        )
+      {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(workspace_symbols.SessionFailed(reason)) ->
@@ -1753,7 +1782,7 @@ fn decode_lsp_request_raw_arguments(
 
 fn decode_workspace_symbols_arguments(
   args: Option(Dynamic),
-) -> Result(#(String, String, Int), String) {
+) -> Result(#(String, String, Int, Option(String)), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use hint <- decode.field("workspace_uri_hint", decode.string)
@@ -1763,12 +1792,17 @@ fn decode_workspace_symbols_arguments(
       workspace_symbols.default_limit,
       decode.int,
     )
-    decode.success(#(hint, query, limit))
+    use language <- decode.optional_field(
+      "language",
+      None,
+      decode.map(decode.string, Some),
+    )
+    decode.success(#(hint, query, limit, language))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
     "expected `workspace_uri_hint: string`, `query: string`, "
-    <> "optional `limit: int`"
+    <> "optional `limit: int`, optional `language: string`"
   })
 }
 

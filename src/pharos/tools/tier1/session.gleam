@@ -16,6 +16,7 @@
 //// params and rendering the response.
 
 import gleam/bit_array
+import gleam/erlang/process
 import gleam/json
 import gleam/result
 import pharos/log
@@ -28,6 +29,10 @@ import pharos/lsp/proc.{type Proc}
 import pharos/lsp/registry
 import pharos/workspace_root
 
+const content_modified_code: Int = -32_801
+
+const content_modified_retry_delay_ms: Int = 1000
+
 pub type SessionError {
   NotAFileUri(uri: String)
   WorkspaceNotFound(uri: String)
@@ -39,6 +44,30 @@ pub type SessionError {
 pub type RetryError {
   RetrySessionError(SessionError)
   RetryRequestError(lifecycle.RequestError)
+}
+
+/// Wrap a single LSP `proc.request` call with a retry-once-on-
+/// content-modified policy. rust-analyzer emits `ServerError(-32801,
+/// "content modified")` mid-indexing; gopls / pyright /
+/// typescript-language-server do not, so the retry is a no-op for
+/// them. Sleeps `content_modified_retry_delay_ms` between attempts
+/// so the analyzer reaches a steady state before the second try.
+///
+/// Tools call this from inside `with_session_and_retry`'s body so
+/// the cold-start race that surfaced as `null` / `-32801` user-facing
+/// errors during the M9 dogfood becomes invisible after one retry.
+pub fn request_with_content_modified_retry(
+  request: fn() -> Result(a, lifecycle.RequestError),
+) -> Result(a, lifecycle.RequestError) {
+  case request() {
+    Error(lifecycle.ServerError(code, _))
+      if code == content_modified_code
+    -> {
+      process.sleep(content_modified_retry_delay_ms)
+      request()
+    }
+    other -> other
+  }
 }
 
 /// Run `body` against a freshly-prepared Proc, and on a transport-
@@ -141,6 +170,66 @@ pub fn with_workspace_session_and_retry(
   }
 }
 
+/// Like `with_workspace_session_and_retry/3` but routes by an
+/// explicit language id rather than parsing the URI's extension.
+/// Used when the caller wants to operate on a workspace without
+/// knowing or supplying a representative file (`workspace_symbols`
+/// with a directory hint).
+pub fn with_workspace_session_and_retry_by_language(
+  pool: Pool,
+  language: String,
+  workspace_uri_hint: String,
+  body: fn(Proc) -> Result(a, lifecycle.RequestError),
+) -> Result(a, RetryError) {
+  case prepare_workspace_for_language(pool, language, workspace_uri_hint) {
+    Error(err) -> Error(RetrySessionError(err))
+    Ok(lsp) ->
+      case body(lsp) {
+        Ok(value) -> Ok(value)
+        Error(lifecycle.ClientFailure(_)) -> {
+          log.warn_at(
+            "pharos/tools/tier1/session",
+            "workspace transport error (by-language); evicting and retrying once",
+          )
+          retry_workspace_for_language_after_evict(
+            pool,
+            language,
+            workspace_uri_hint,
+            body,
+          )
+        }
+        Error(other) -> Error(RetryRequestError(other))
+      }
+  }
+}
+
+fn retry_workspace_for_language_after_evict(
+  pool: Pool,
+  language: String,
+  workspace_uri_hint: String,
+  body: fn(Proc) -> Result(a, lifecycle.RequestError),
+) -> Result(a, RetryError) {
+  case lookup_config_by_language(language) {
+    Error(err) -> Error(RetrySessionError(err))
+    Ok(config) ->
+      case discover_workspace_or_dir(workspace_uri_hint, config.root_markers) {
+        Error(err) -> Error(RetrySessionError(err))
+        Ok(raw_workspace) -> {
+          let workspace = promote_root(raw_workspace, config)
+          pool.evict(pool, config.id, workspace)
+          case prepare_workspace_for_language(pool, language, workspace_uri_hint) {
+            Error(err) -> Error(RetrySessionError(err))
+            Ok(lsp) ->
+              case body(lsp) {
+                Ok(value) -> Ok(value)
+                Error(other) -> Error(RetryRequestError(other))
+              }
+          }
+        }
+      }
+  }
+}
+
 fn retry_workspace_after_evict(
   pool: Pool,
   workspace_uri_hint: String,
@@ -193,7 +282,26 @@ pub fn prepare_workspace(
   workspace_uri_hint: String,
 ) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(workspace_uri_hint))
-  use raw_workspace <- result.try(discover_workspace(
+  use raw_workspace <- result.try(discover_workspace_or_dir(
+    workspace_uri_hint,
+    config.root_markers,
+  ))
+  let workspace = promote_root(raw_workspace, config)
+  get_lsp(pool, config, workspace)
+}
+
+/// Like `prepare_workspace/2` but the language id is supplied
+/// explicitly instead of inferred from the URI's extension. Used
+/// when the natural URI is a directory (no extension to parse).
+/// Workspace discovery is dir-tolerant — see
+/// `workspace_root.discover_from_uri_or_dir/2`.
+pub fn prepare_workspace_for_language(
+  pool: Pool,
+  language: String,
+  workspace_uri_hint: String,
+) -> Result(Proc, SessionError) {
+  use config <- result.try(lookup_config_by_language(language))
+  use raw_workspace <- result.try(discover_workspace_or_dir(
     workspace_uri_hint,
     config.root_markers,
   ))
@@ -221,6 +329,18 @@ fn lookup_config(uri: String) -> Result(LanguageConfig, SessionError) {
   })
 }
 
+fn lookup_config_by_language(
+  language: String,
+) -> Result(LanguageConfig, SessionError) {
+  registry.for_language(language)
+  |> result.map_error(fn(err) {
+    case err {
+      languages.NotAFileUri(u) -> NotAFileUri(u)
+      languages.UnknownLanguage(u) -> UnsupportedFileType(u)
+    }
+  })
+}
+
 fn discover_workspace(
   file_uri: String,
   markers: List(String),
@@ -230,6 +350,19 @@ fn discover_workspace(
     case err {
       workspace_root.NotAFileUri(uri) -> NotAFileUri(uri)
       workspace_root.NoMarkerFound -> WorkspaceNotFound(file_uri)
+    }
+  })
+}
+
+fn discover_workspace_or_dir(
+  uri: String,
+  markers: List(String),
+) -> Result(String, SessionError) {
+  workspace_root.discover_from_uri_or_dir(uri, markers)
+  |> result.map_error(fn(err) {
+    case err {
+      workspace_root.NotAFileUri(u) -> NotAFileUri(u)
+      workspace_root.NoMarkerFound -> WorkspaceNotFound(uri)
     }
   })
 }

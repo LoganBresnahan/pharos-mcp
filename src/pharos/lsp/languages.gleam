@@ -144,7 +144,7 @@ pub fn for_uri(
 fn rust() -> LanguageConfig {
   LanguageConfig(
     id: "rust",
-    command: "/home/oof/.cargo/bin/rust-analyzer",
+    command: "rust-analyzer",
     args: [],
     file_extensions: [".rs"],
     root_markers: ["Cargo.toml", "rust-project.json"],
@@ -163,7 +163,7 @@ fn rust() -> LanguageConfig {
 fn go() -> LanguageConfig {
   LanguageConfig(
     id: "go",
-    command: "/home/oof/.asdf/shims/gopls",
+    command: "gopls",
     args: [],
     file_extensions: [".go"],
     root_markers: ["go.mod", "go.work"],
@@ -181,7 +181,7 @@ fn go() -> LanguageConfig {
 fn typescript() -> LanguageConfig {
   LanguageConfig(
     id: "typescript",
-    command: "/home/oof/.nvm/versions/node/v25.4.0/bin/typescript-language-server",
+    command: "typescript-language-server",
     args: ["--stdio"],
     file_extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
     root_markers: ["tsconfig.json", "jsconfig.json", "package.json"],
@@ -272,7 +272,7 @@ fn typescript_section_settings() -> Json {
 fn python() -> LanguageConfig {
   LanguageConfig(
     id: "python",
-    command: "/home/oof/.nvm/versions/node/v25.4.0/bin/pyright-langserver",
+    command: "pyright-langserver",
     args: ["--stdio"],
     file_extensions: [".py", ".pyi"],
     root_markers: [

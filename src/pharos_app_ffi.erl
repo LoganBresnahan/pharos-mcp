@@ -1,53 +1,38 @@
 %% OTP application start callback.
 %%
 %% Mix release / Burrito boot the BEAM and start :pharos via the OTP
-%% application controller, which calls this module's start/2. Without
-%% it, the application loads with no top-level process and the binary
-%% exits or hangs immediately because pharos:main/0 (the stdin reader
-%% loop) is never invoked.
+%% application controller, which calls this module's start/2. We
+%% delegate to `pharos:boot/0` (Gleam) which is idempotent and
+%% returns the root supervisor's pid. Returning that pid (instead of
+%% the previous spawn_link'd plain process) makes the supervisor the
+%% application's primary process, which is what
+%% `runtime_supervision_tree` walks via application_controller —
+%% fixes limitation 2a from the M9.5 dogfood.
 %%
-%% Linked spawn: when main/0 returns (EOF on stdin, or fatal error),
-%% the linked process exits, the application controller observes the
-%% exit, and the release shuts the BEAM down. That matches the dev
-%% wrapper's behavior of `erl -eval "pharos:main(), halt(0)."`.
+%% Test-time flag: gleeunit suites pass `auto_boot: false` via the
+%% application env in mix.exs so each test can stand up its own
+%% scoped writer / pool without racing the global root tree. In
+%% that mode we revert to the prior idle-child behaviour so the
+%% application still has a primary process to satisfy the OTP
+%% protocol.
 %%
-%% Wired in mix.exs's application/0 via `mod: {pharos_app_ffi, []}`.
+%% Wired in mix.exs's application/0 via
+%% `mod: {pharos_app_ffi, [auto_boot: ...]}`.
 
 -module(pharos_app_ffi).
 -behaviour(application).
 -export([start/2, stop/1]).
 
-start(_Type, _Args) ->
-    %% Gate on the __BURRITO env var (set by Burrito's launcher) to
-    %% decide whether the application's start callback owns the
-    %% MCP-stdio main loop. Burrito sets it; nothing else does. The
-    %% other entry paths invoke pharos:main/0 themselves: bin/pharos-dev
-    %% via `erl -eval`, `mix start` via the `run -e ":pharos.main()"`
-    %% alias. gleeunit-driven tests (via `mix gleam.test`) do not need
-    %% main at all and would crash the BEAM mid-suite if main ran here
-    %% (its stdin loop hits EOF immediately and calls init:stop/0).
-    case os:getenv("__BURRITO") of
+start(_Type, Args) ->
+    case proplists:get_value(auto_boot, Args, true) of
         false ->
-            %% Spawn an idle child process so OTP has something to
-            %% supervise as the application's primary; the application
-            %% boots successfully and idles until the BEAM is brought
-            %% down by whatever invoked main externally.
             Pid = spawn_link(fun idle/0),
             {ok, Pid};
-        _ ->
-            Pid = spawn_link(fun() ->
-                pharos:main(),
-                %% Explicitly halt instead of letting the spawn_link'd
-                %% process die. Mix release sets :pharos to
-                %% start_permanent in :prod, so normal termination of
-                %% the application's primary process would otherwise
-                %% crash the BEAM with a "Kernel pid terminated"
-                %% notice and an erl_crash.dump in cwd. init:stop/1
-                %% closes applications gracefully and exits with the
-                %% given status code, no dump.
-                init:stop(0)
-            end),
-            {ok, Pid}
+        true ->
+            case 'pharos':boot() of
+                {ok, Pid} -> {ok, Pid};
+                {error, Reason} -> {error, Reason}
+            end
     end.
 
 idle() ->

@@ -72,7 +72,9 @@ pub fn handle(
 
   case
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
-      proc.request(lsp, "textDocument/codeAction", params, default_timeout_ms)
+      session.request_with_content_modified_retry(fn() {
+        proc.request(lsp, "textDocument/codeAction", params, default_timeout_ms)
+      })
     })
   {
     Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
