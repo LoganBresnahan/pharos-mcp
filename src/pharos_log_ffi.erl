@@ -34,7 +34,10 @@
     writer_subject/0,
     mailbox_len/1,
     direct_stderr/1,
-    render_trace_body/1
+    render_trace_body/1,
+    file_sink_open/1,
+    file_sink_write/2,
+    file_sink_close/1
 ]).
 
 -define(RING_TABLE, pharos_log_ring).
@@ -212,6 +215,33 @@ direct_stderr(Line) when is_binary(Line) ->
 %% cleanly. Caller has already truncated to a safe length.
 render_trace_body(Bytes) when is_binary(Bytes) ->
     << <<(escape_trace_byte(B))/binary>> || <<B>> <= Bytes >>.
+
+%% File sink. Opens an append-only file handle at the given path,
+%% creating the parent directory tree as needed. The writer actor
+%% holds the handle for the BEAM lifetime; per-line `file_sink_write`
+%% appends without re-opening. No rotation in this version — operators
+%% rotate via logrotate / journal / file-system tooling for now.
+%% Future improvement: native rotation when the active file exceeds
+%% a configurable byte cap.
+file_sink_open(Path) when is_binary(Path) ->
+    case filelib:ensure_dir(Path) of
+        ok ->
+            case file:open(Path, [append, raw, binary, {delayed_write, 65536, 1000}]) of
+                {ok, IoDev} -> {ok, IoDev};
+                {error, R} ->
+                    {error, list_to_binary(io_lib:format("~p", [R]))}
+            end;
+        {error, R} ->
+            {error, list_to_binary(io_lib:format("ensure_dir: ~p", [R]))}
+    end.
+
+file_sink_write(IoDev, Line) when is_binary(Line) ->
+    _ = file:write(IoDev, [Line, $\n]),
+    nil.
+
+file_sink_close(IoDev) ->
+    catch file:close(IoDev),
+    nil.
 
 escape_trace_byte($\r) -> <<"\\r">>;
 escape_trace_byte($\n) -> <<"\\n">>;

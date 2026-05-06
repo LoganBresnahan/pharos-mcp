@@ -45,26 +45,57 @@ type State {
     filter: Filter,
     ring_enabled: Bool,
     stderr_enabled: Bool,
+    file_handle: Option(FileHandle),
     dropped: Int,
   )
 }
 
+/// Opaque file handle from `pharos_log_ffi:file_sink_open/1`. Erlang
+/// IO device; never inspected on the Gleam side.
+pub type FileHandle
+
 /// Spawn the writer. Stores its Subject in persistent_term so
 /// producers can locate it. Re-registering replaces any prior pid.
+///
+/// `file_path = Some(path)` opens an append-only file sink at
+/// `path`. Parent directories are created if missing. Open failure
+/// is logged via direct stderr and the writer continues without
+/// the file sink — startup is never blocked by a logging
+/// configuration error.
 pub fn start(
   filter: Filter,
   ring_enabled: Bool,
   stderr_enabled: Bool,
+  file_path: Option(String),
 ) -> Result(Writer, StartError) {
   case ring_enabled {
     True -> ring.init(ring.default_capacity)
     False -> Nil
   }
 
+  let file_handle = case file_path {
+    None -> None
+    Some(path) ->
+      case file_sink_open(path) {
+        Ok(handle) -> Some(handle)
+        Error(reason) -> {
+          direct_stderr(
+            "[pharos/log] file sink open failed for "
+            <> path
+            <> ": "
+            <> reason
+            <> " (continuing without file sink)",
+          )
+          None
+        }
+      }
+  }
+
   actor.new(State(
     filter: filter,
     ring_enabled: ring_enabled,
     stderr_enabled: stderr_enabled,
+    file_handle: file_handle,
     dropped: 0,
   ))
   |> actor.on_message(handle_message)
@@ -188,6 +219,10 @@ fn fan_out(state: State, line: String, level: Level) -> Nil {
     True -> ring.insert(line, level)
     False -> Nil
   }
+  case state.file_handle {
+    None -> Nil
+    Some(handle) -> file_sink_write(handle, line)
+  }
 }
 
 fn update_overrides(
@@ -223,3 +258,9 @@ fn now_ms() -> String
 
 @external(erlang, "erlang", "integer_to_binary")
 fn int_to_string(n: Int) -> String
+
+@external(erlang, "pharos_log_ffi", "file_sink_open")
+fn file_sink_open(path: String) -> Result(FileHandle, String)
+
+@external(erlang, "pharos_log_ffi", "file_sink_write")
+fn file_sink_write(handle: FileHandle, line: String) -> Nil

@@ -21,13 +21,15 @@
 import gleam/dynamic/decode
 import gleam/json
 import gleam/option
+import pharos/log
 import pharos/lsp/client
 import pharos/lsp/diagnostics_cache
-import pharos/lsp/languages.{Pull, Push}
+import pharos/lsp/languages.{type LanguageConfig, Pull, Push}
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
+import pharos/workspace_root
 
 const default_drain_window_ms: Int = 8000
 
@@ -78,22 +80,59 @@ pub fn handle(
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
   case session.config_for_uri(file_uri) {
     Error(err) -> Error(map_session_error(err))
+    Ok(config) -> attempt(pool, file_uri, config, timeout_ms, retries_left: 1)
+  }
+}
 
-    Ok(config) ->
-      case session.prepare(pool, file_uri) {
-        Error(err) -> Error(map_session_error(err))
-        Ok(lsp) ->
-          case lookup_cached(file_uri) {
-            option.Some(body_json) ->
-              Ok(Diagnostics(uri: file_uri, body_json: body_json))
+/// Single attempt at diagnostics extraction. On `TransportFailed`
+/// (proc actor dead, Port closed mid-drain), evict the pool entry
+/// for this language+workspace and recurse once with a fresh
+/// session. Other error variants (NotAFileUri, WorkspaceNotFound,
+/// SpawnFailed, HandshakeFailed, UnsupportedFileType) propagate
+/// without retry — they would not be fixed by a fresh proc.
+fn attempt(
+  pool: Pool,
+  file_uri: String,
+  config: LanguageConfig,
+  timeout_ms: Int,
+  retries_left retries_left: Int,
+) -> Result(DiagnosticsResult, DiagnosticsError) {
+  case session.prepare(pool, file_uri) {
+    Error(err) -> Error(map_session_error(err))
+    Ok(lsp) ->
+      case lookup_cached(file_uri) {
+        option.Some(body_json) ->
+          Ok(Diagnostics(uri: file_uri, body_json: body_json))
 
-            option.None ->
-              case config.diagnostics_mode {
-                Push -> push_drain(lsp, file_uri, timeout_ms)
-                Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
-              }
+        option.None -> {
+          let result = case config.diagnostics_mode {
+            Push -> push_drain(lsp, file_uri, timeout_ms)
+            Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
           }
+          case result, retries_left > 0 {
+            Error(TransportFailed(_)), True -> {
+              log.warn_at(
+                "pharos/tools/tier1/diagnostics",
+                "transport error during diagnostics; evicting and retrying once",
+              )
+              evict_for_uri(pool, file_uri, config)
+              attempt(pool, file_uri, config, timeout_ms, retries_left: retries_left - 1)
+            }
+            _, _ -> result
+          }
+        }
       }
+  }
+}
+
+fn evict_for_uri(
+  pool: Pool,
+  file_uri: String,
+  config: LanguageConfig,
+) -> Nil {
+  case workspace_root.discover_from_uri(file_uri, config.root_markers) {
+    Error(_) -> Nil
+    Ok(workspace) -> pool.evict(pool, config.id, workspace)
   }
 }
 

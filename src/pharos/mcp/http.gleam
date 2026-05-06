@@ -23,6 +23,7 @@ import gleam/bytes_tree
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http.{Get, Post}
+import gleam/int
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response, Response}
 import gleam/json
@@ -51,6 +52,12 @@ pub type StartError {
 /// `POST /mcp` to the shared MCP server with `pool`. The `sessions`
 /// table issues a session id on the first `initialize` POST and
 /// validates `Mcp-Session-Id` on every subsequent request.
+///
+/// Pass `port = 0` to ask the OS for a free TCP port. mist's
+/// `after_start` callback logs the actually-bound port to stderr
+/// so headless callers (Claude Code spawning pharos as an HTTP
+/// transport, CI runners, etc.) can discover it without a
+/// coordination side channel.
 pub fn start(
   pool: Pool,
   sessions: Sessions,
@@ -61,6 +68,21 @@ pub fn start(
   mist.new(handler)
   |> mist.bind(bind)
   |> mist.port(port)
+  |> mist.after_start(fn(bound_port, _scheme, _interface) {
+    case port == bound_port {
+      True ->
+        log.info_at(
+          "pharos/mcp/http",
+          "HTTP listener bound to " <> bind <> ":" <> int.to_string(bound_port),
+        )
+      False ->
+        log.info_at(
+          "pharos/mcp/http",
+          "HTTP listener auto-assigned port " <> int.to_string(bound_port)
+            <> " on " <> bind <> " (PHAROS_HTTP_PORT=0)",
+        )
+    }
+  })
   |> mist.start()
   |> result.map_error(fn(err) {
     ListenFailed("mist listener failed to start: " <> string.inspect(err))

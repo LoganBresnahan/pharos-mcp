@@ -42,6 +42,10 @@ const default_target: String = "pharos"
 ///   - `PHAROS_LOG_RING` — `0`/`off` disables the ring buffer sink;
 ///     anything else (or unset) keeps it on.
 ///   - `PHAROS_LOG_STDERR` — `0`/`off` disables stderr; default on.
+///   - `PHAROS_LOG_FILE` — path to an append-only log file. Parent
+///     dirs are created if missing. No rotation in this version;
+///     operators rotate via logrotate / journal / fs tooling. Off
+///     by default; set the env var to opt in.
 pub fn start_default() -> Result(Writer, writer.StartError) {
   let spec = case env.get("PHAROS_LOG") {
     None -> ""
@@ -61,7 +65,15 @@ pub fn start_default() -> Result(Writer, writer.StartError) {
   }
   let ring_enabled = read_bool_env("PHAROS_LOG_RING", default_value: True)
   let stderr_enabled = read_bool_env("PHAROS_LOG_STDERR", default_value: True)
-  writer.start(with_trace, ring_enabled, stderr_enabled)
+  let file_path = case env.get("PHAROS_LOG_FILE") {
+    None -> None
+    Some(raw) ->
+      case raw {
+        "" -> None
+        path -> Some(path)
+      }
+  }
+  writer.start(with_trace, ring_enabled, stderr_enabled, file_path)
 }
 
 fn read_bool_env(name: String, default_value default: Bool) -> Bool {
