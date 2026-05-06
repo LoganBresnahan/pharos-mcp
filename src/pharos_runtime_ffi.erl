@@ -41,8 +41,65 @@
     pool_register/1,
     pool_lookup/0,
     sessions_register/1,
-    sessions_lookup/0
+    sessions_lookup/0,
+    lsp_proc_subjects_init/0,
+    lsp_proc_subjects_insert/3,
+    lsp_proc_subjects_lookup/2,
+    lsp_proc_subjects_delete/2
 ]).
+
+%% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
+%% to the Gleam-side Subject for the lsp_proc actor handling that
+%% pair. (Language, Workspace) is the pool's natural cache key,
+%% and using it here means a supervisor-driven worker restart
+%% (which spawns a new actor with the same args) overwrites the
+%% same ETS row. The pool's cache-miss path reads this table as
+%% its first move so a restarted worker's new Subject is found
+%% without spawning a duplicate via supervisor:start_child.
+%%
+%% Public, set, named_table so any process can read; concurrent
+%% readers benefit from read_concurrency.
+-define(LSP_PROC_SUBJECTS_TABLE, pharos_lsp_proc_subjects).
+
+lsp_proc_subjects_init() ->
+    case ets:info(?LSP_PROC_SUBJECTS_TABLE) of
+        undefined ->
+            ets:new(?LSP_PROC_SUBJECTS_TABLE, [
+                named_table, public, set, {read_concurrency, true}
+            ]);
+        _ -> ?LSP_PROC_SUBJECTS_TABLE
+    end,
+    nil.
+
+lsp_proc_subjects_insert(Language, Workspace, Subject)
+        when is_binary(Language), is_binary(Workspace) ->
+    case ets:info(?LSP_PROC_SUBJECTS_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:insert(?LSP_PROC_SUBJECTS_TABLE,
+                {{Language, Workspace}, Subject}),
+            nil
+    end.
+
+lsp_proc_subjects_lookup(Language, Workspace)
+        when is_binary(Language), is_binary(Workspace) ->
+    case ets:info(?LSP_PROC_SUBJECTS_TABLE) of
+        undefined -> {error, nil};
+        _ ->
+            case ets:lookup(?LSP_PROC_SUBJECTS_TABLE, {Language, Workspace}) of
+                [{_Key, Subject}] -> {ok, Subject};
+                [] -> {error, nil}
+            end
+    end.
+
+lsp_proc_subjects_delete(Language, Workspace)
+        when is_binary(Language), is_binary(Workspace) ->
+    case ets:info(?LSP_PROC_SUBJECTS_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:delete(?LSP_PROC_SUBJECTS_TABLE, {Language, Workspace}),
+            nil
+    end.
 
 sessions_register(Subject) ->
     persistent_term:put(pharos_sessions_subject, Subject),

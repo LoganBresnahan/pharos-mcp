@@ -319,6 +319,7 @@ fn handle_kill_lsp(
     }
     Ok(spawned) -> {
       proc.close(spawned)
+      proc.forget_subject(language, workspace)
       let cache = dict.delete(state.cache, key)
       let opened =
         set.filter(state.opened, fn(triple) {
@@ -354,22 +355,42 @@ fn handle_get(
     }
 
     Error(_) ->
-      case spawn_proc(spec, workspace) {
-        Ok(spawned) -> {
-          // Auto-evict on proc exit per ADR-013. Pool monitors the
-          // proc actor's pid; on DOWN, lookup ref→key and remove.
-          let monitor_ref = process.monitor(proc.pid(spawned))
-          process.send(reply, Ok(spawned))
-          let cache = dict.insert(state.cache, key, spawned)
+      // ADR-017a: cache-miss path. Try the ETS bridge first —
+      // a supervisor-driven restart of an existing worker would
+      // have overwritten the row with a new Subject before our
+      // monitor's DOWN message reached us, so reading it directly
+      // avoids the duplicate-spawn race.
+      case proc.recover_subject(language, workspace) {
+        Ok(subject) -> {
+          let recovered = proc.from_subject(subject)
+          let monitor_ref = process.monitor(proc.pid(recovered))
+          process.send(reply, Ok(recovered))
+          let cache = dict.insert(state.cache, key, recovered)
           let monitors = dict.insert(state.monitors, monitor_ref, key)
           actor.continue(
             State(cache: cache, monitors: monitors, opened: state.opened),
           )
         }
-        Error(err) -> {
-          process.send(reply, Error(err))
-          actor.continue(state)
-        }
+        Error(_) ->
+          case spawn_proc(language, workspace, spec) {
+            Ok(spawned) -> {
+              // Auto-evict on proc exit per ADR-013. Pool monitors
+              // the proc actor's pid; on DOWN, lookup ref→key and
+              // remove. Acts as belt-and-suspenders alongside the
+              // supervisor's auto-restart.
+              let monitor_ref = process.monitor(proc.pid(spawned))
+              process.send(reply, Ok(spawned))
+              let cache = dict.insert(state.cache, key, spawned)
+              let monitors = dict.insert(state.monitors, monitor_ref, key)
+              actor.continue(
+                State(cache: cache, monitors: monitors, opened: state.opened),
+              )
+            }
+            Error(err) -> {
+              process.send(reply, Error(err))
+              actor.continue(state)
+            }
+          }
       }
   }
 }
@@ -383,6 +404,7 @@ fn handle_evict(
   case dict.get(state.cache, key) {
     Ok(spawned) -> {
       proc.close(spawned)
+      proc.forget_subject(language, workspace)
       let cache = dict.delete(state.cache, key)
       // Drop opened-doc entries for this (language, workspace) — when
       // a fresh LSP spawns later it will not know about previously
@@ -515,19 +537,42 @@ fn close_each(procs: List(Proc)) -> Nil {
 }
 
 fn spawn_proc(
-  spec: SpawnSpec,
+  language: String,
   workspace: String,
+  spec: SpawnSpec,
 ) -> Result(Proc, GetError) {
-  use spawned <- result.try(
-    proc.start(
+  // ADR-017a: spawn the lsp_proc actor as a child of the
+  // `pharos_lsp_dyn_sup` simple_one_for_one supervisor. The
+  // supervisor's start_child returns the actor's Pid; the
+  // matching Subject is recovered from the
+  // `pharos_lsp_proc_subjects` ETS bridge table the worker's
+  // `start_link_supervised` wrapper populated keyed by
+  // (language, workspace) before returning to the supervisor.
+  use _spawned_pid <- result.try(case
+    dyn_sup_start_child(
+      language,
+      workspace,
       spec.command,
       spec.args,
-      workspace,
       spec.init_params,
       initialize_timeout_ms,
     )
-    |> result.map_error(describe_proc_start_error),
-  )
+  {
+    Ok(p) -> Ok(p)
+    Error(reason) ->
+      Error(ProcStartFailed("lsp_dyn_sup.start_child failed: " <> reason))
+  })
+
+  use subject <- result.try(case proc.recover_subject(language, workspace) {
+    Ok(s) -> Ok(s)
+    Error(_) ->
+      Error(ProcStartFailed(
+        "ETS bridge missing entry for spawned lsp_proc; "
+        <> "(ADR-017a invariant violation)",
+      ))
+  })
+
+  let spawned = proc.from_subject(subject)
 
   // Per-language workspace_configuration (Stage 0C). Install a
   // workspace/configuration handler on the proc and push
@@ -558,16 +603,15 @@ fn spawn_proc(
   Ok(spawned)
 }
 
-fn describe_proc_start_error(err: proc.StartError) -> GetError {
-  case err {
-    proc.ClientStartFailed(_) ->
-      ProcStartFailed("LSP subprocess could not be spawned")
-    proc.HandshakeFailed(_) ->
-      ProcStartFailed("LSP initialize handshake failed")
-    proc.ActorStartFailed(_) ->
-      ProcStartFailed("lsp_proc actor failed to start")
-  }
-}
+@external(erlang, "pharos_lsp_dyn_sup", "start_child")
+fn dyn_sup_start_child(
+  language: String,
+  workspace: String,
+  command: String,
+  args: List(String),
+  init_params: json.Json,
+  initialize_timeout_ms: Int,
+) -> Result(process.Pid, String)
 
 fn settings_to_json(settings: Dict(String, json.Json)) -> json.Json {
   settings

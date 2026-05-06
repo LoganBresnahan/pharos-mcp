@@ -34,6 +34,7 @@ import pharos/log
 import pharos/log/entry
 import pharos/log/filter
 import pharos/lsp/diagnostics_cache
+import pharos/lsp/dyn_sup
 import pharos/lsp/inflight
 import pharos/lsp/registry
 import pharos/supervisor as root_supervisor
@@ -49,6 +50,7 @@ pub fn main() -> Nil {
   diagnostics_cache.init()
   registry.init()
   inflight.init()
+  dyn_sup.init_subjects_bridge()
 
   let transport = read_transport()
   let config =

@@ -28,8 +28,8 @@ import gleam/otp/supervision
 import pharos/log/filter
 import pharos/log/ring_keeper
 import pharos/log/writer
+import pharos/lsp/dyn_sup
 import pharos/lsp/pool
-import pharos/lsp/supervisor as lsp_supervisor
 import pharos/mcp/http
 import pharos/mcp/sessions
 import pharos/stdio_worker
@@ -83,7 +83,7 @@ pub fn start(
     supervisor.new(supervisor.RestForOne)
     |> supervisor.restart_tolerance(intensity: 5, period: 60)
     |> supervisor.add(supervision.worker(pool.start_supervised))
-    |> supervisor.add(supervision.supervisor(lsp_supervisor.start_lsp_dyn_sup_supervised))
+    |> supervisor.add(supervision.supervisor(dyn_sup.start_link_supervised))
 
   let root =
     supervisor.new(supervisor.OneForOne)

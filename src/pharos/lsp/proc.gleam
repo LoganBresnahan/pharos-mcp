@@ -166,6 +166,77 @@ pub fn start(
   |> result.map_error(ActorStartFailed)
 }
 
+/// Wrapper consumed by `pharos_lsp_dyn_sup` (ADR-017a). Erlang's
+/// `:supervisor` protocol expects `{ok, Pid}` from a child's start
+/// function; gleam_otp's `actor.start` returns
+/// `actor.Started{Pid, Subject}`. This wrapper bridges the two:
+/// runs `start/5`, inserts the resulting Subject into the
+/// `pharos_lsp_proc_subjects` ETS table keyed by
+/// `(language, workspace)` so the pool can recover it after
+/// `supervisor:start_child/2` returns. On supervisor-driven
+/// restart the same args are passed back here, so the ETS row is
+/// overwritten with the new Subject — avoiding the duplicate-spawn
+/// race that a Pid-keyed bridge would have.
+pub fn start_link_supervised(
+  language: String,
+  workspace: String,
+  command: String,
+  args: List(String),
+  init_params: Json,
+  initialize_timeout_ms: Int,
+) -> Result(Pid, String) {
+  case start(command, args, workspace, init_params, initialize_timeout_ms) {
+    Error(err) -> Error(describe_start_error(err))
+    Ok(handle) -> {
+      let Proc(subject) = handle
+      let p = pid(handle)
+      lsp_proc_subjects_insert(language, workspace, subject)
+      Ok(p)
+    }
+  }
+}
+
+/// Wrap a Subject (recovered from the ETS bridge by the pool) in
+/// the opaque `Proc` record. Counterpart to `start_link_supervised`
+/// — used after `supervisor:start_child` returns a Pid and the
+/// pool reads the matching Subject from the bridge table.
+pub fn from_subject(subject: Subject(Msg)) -> Proc {
+  Proc(subject: subject)
+}
+
+fn describe_start_error(err: StartError) -> String {
+  case err {
+    ClientStartFailed(c) -> "client start failed: " <> describe_client_error(c)
+    HandshakeFailed(l) ->
+      "initialize handshake failed: " <> describe_lifecycle_error(l)
+    ActorStartFailed(_) -> "actor start failed"
+  }
+}
+
+@external(erlang, "pharos_runtime_ffi", "lsp_proc_subjects_insert")
+fn lsp_proc_subjects_insert(
+  language: String,
+  workspace: String,
+  subject: Subject(Msg),
+) -> Nil
+
+/// Remove the ETS bridge row for `(language, workspace)`. Called
+/// by pool's evict / kill_lsp paths after `proc.close` so the
+/// `pharos_lsp_proc_subjects` table does not retain a stale
+/// Subject pointing at a closed worker. No-op when the row is
+/// already absent.
+@external(erlang, "pharos_runtime_ffi", "lsp_proc_subjects_delete")
+pub fn forget_subject(language: String, workspace: String) -> Nil
+
+/// Read the ETS bridge row for `(language, workspace)`. Pool
+/// reads via this on cache-miss to recover from a supervisor-
+/// driven restart that overwrote the row with a new Subject.
+@external(erlang, "pharos_runtime_ffi", "lsp_proc_subjects_lookup")
+pub fn recover_subject(
+  language: String,
+  workspace: String,
+) -> Result(Subject(Msg), Nil)
+
 fn describe_client_error(err: client.Error) -> String {
   // Lossy string for the initialiser error path. Caller only sees
   // "ActorStartFailed(...)" anyway; preserves intent without
@@ -378,10 +449,22 @@ pub fn wait_for_publish_diagnostics(
 
 /// Tear down the proc. Sends `Close`; the actor exits and the
 /// underlying `Client` (and its Port) is closed. Idempotent.
+///
+/// When the worker is supervised (ADR-017a), this also asks
+/// `pharos_lsp_dyn_sup` to terminate the child so the supervisor's
+/// transient strategy does not auto-restart. The ETS bridge row
+/// is keyed by `(language, workspace)`, which proc does NOT know —
+/// pool's evict / kill_lsp paths handle the bridge cleanup since
+/// pool has the key.
 pub fn close(proc: Proc) -> Nil {
+  let p = pid(proc)
+  let _ = dyn_sup_terminate_child(p)
   let Proc(subject) = proc
   actor.send(subject, Close)
 }
+
+@external(erlang, "pharos_lsp_dyn_sup", "terminate_child")
+fn dyn_sup_terminate_child(pid: Pid) -> Nil
 
 /// Return the proc actor's pid for `process.monitor/1`. Pool uses
 /// this to wire auto-eviction when the proc dies.
