@@ -19,7 +19,9 @@ import gleam/bit_array
 import gleam/json
 import gleam/result
 import pharos/log
-import pharos/lsp/languages.{type LanguageConfig}
+import pharos/lsp/languages.{
+  type LanguageConfig, CargoWorkspacePromotion, NoPromotion,
+}
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc.{type Proc}
@@ -82,7 +84,8 @@ fn retry_after_evict(
     Ok(config) ->
       case discover_workspace(file_uri, config.root_markers) {
         Error(err) -> Error(RetrySessionError(err))
-        Ok(workspace) -> {
+        Ok(raw_workspace) -> {
+          let workspace = promote_root(raw_workspace, config)
           pool.evict(pool, config.id, workspace)
           case prepare(pool, file_uri) {
             Error(err) -> Error(RetrySessionError(err))
@@ -148,7 +151,8 @@ fn retry_workspace_after_evict(
     Ok(config) ->
       case discover_workspace(workspace_uri_hint, config.root_markers) {
         Error(err) -> Error(RetrySessionError(err))
-        Ok(workspace) -> {
+        Ok(raw_workspace) -> {
+          let workspace = promote_root(raw_workspace, config)
           pool.evict(pool, config.id, workspace)
           case prepare_workspace(pool, workspace_uri_hint) {
             Error(err) -> Error(RetrySessionError(err))
@@ -170,7 +174,11 @@ fn retry_workspace_after_evict(
 /// session for this (language, workspace, uri) triple.
 pub fn prepare(pool: Pool, file_uri: String) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(file_uri))
-  use workspace <- result.try(discover_workspace(file_uri, config.root_markers))
+  use raw_workspace <- result.try(discover_workspace(
+    file_uri,
+    config.root_markers,
+  ))
+  let workspace = promote_root(raw_workspace, config)
   use lsp <- result.try(get_lsp(pool, config, workspace))
   let _ = ensure_doc_opened(pool, config, workspace, file_uri)
   Ok(lsp)
@@ -185,10 +193,11 @@ pub fn prepare_workspace(
   workspace_uri_hint: String,
 ) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(workspace_uri_hint))
-  use workspace <- result.try(discover_workspace(
+  use raw_workspace <- result.try(discover_workspace(
     workspace_uri_hint,
     config.root_markers,
   ))
+  let workspace = promote_root(raw_workspace, config)
   get_lsp(pool, config, workspace)
 }
 
@@ -223,6 +232,16 @@ fn discover_workspace(
       workspace_root.NoMarkerFound -> WorkspaceNotFound(file_uri)
     }
   })
+}
+
+/// Apply the language's `root_promotion` strategy to a discovered
+/// workspace root. Per ADR-015. Pure function; no IO when the
+/// strategy is `NoPromotion`.
+fn promote_root(raw: String, config: LanguageConfig) -> String {
+  case config.root_promotion {
+    NoPromotion -> raw
+    CargoWorkspacePromotion -> workspace_root.promote_to_cargo_workspace(raw)
+  }
 }
 
 fn get_lsp(

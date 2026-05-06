@@ -132,7 +132,17 @@ fn evict_for_uri(
 ) -> Nil {
   case workspace_root.discover_from_uri(file_uri, config.root_markers) {
     Error(_) -> Nil
-    Ok(workspace) -> pool.evict(pool, config.id, workspace)
+    Ok(raw_workspace) -> {
+      // Apply the same root-promotion the prepare path uses
+      // (ADR-015) so we evict the actual cache key, not the
+      // un-promoted innermost crate dir.
+      let workspace = case config.root_promotion {
+        languages.NoPromotion -> raw_workspace
+        languages.CargoWorkspacePromotion ->
+          workspace_root.promote_to_cargo_workspace(raw_workspace)
+      }
+      pool.evict(pool, config.id, workspace)
+    }
   }
 }
 

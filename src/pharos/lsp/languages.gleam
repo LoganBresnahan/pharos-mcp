@@ -35,6 +35,21 @@ pub type DiagnosticsMode {
   Pull
 }
 
+/// Post-discovery root promotion strategy. After
+/// `workspace_root.discover_from_uri` finds the innermost ancestor
+/// containing one of `root_markers`, we may want to walk further up
+/// to land at a "true" workspace root. Per ADR-015.
+pub type RootPromotion {
+  /// Use whatever `discover_from_uri` returns. Default for most
+  /// languages.
+  NoPromotion
+  /// Walk up looking for a Cargo.toml whose `[workspace]` heading
+  /// is present, and promote to its directory. Falls back to the
+  /// originally-discovered root if no ancestor workspace is found.
+  /// Default for rust.
+  CargoWorkspacePromotion
+}
+
 pub type LanguageConfig {
   LanguageConfig(
     /// LSP-spec language identifier sent in `textDocument/didOpen`'s
@@ -74,6 +89,10 @@ pub type LanguageConfig {
     /// emit progress (tsserver) or the wait is not needed for any
     /// known tool. Per ADR-012 stage 0F.
     readiness_token: Option(String),
+    /// Post-discovery root promotion. Defaults to `NoPromotion`.
+    /// Per ADR-015. Rust uses `CargoWorkspacePromotion` so
+    /// sibling-crate files share one rust-analyzer.
+    root_promotion: RootPromotion,
   )
 }
 
@@ -137,6 +156,7 @@ fn rust() -> LanguageConfig {
     diagnostics_mode: Push,
     workspace_configuration: None,
     readiness_token: Some("rustAnalyzer/Indexing"),
+    root_promotion: CargoWorkspacePromotion,
   )
 }
 
@@ -154,6 +174,7 @@ fn go() -> LanguageConfig {
     diagnostics_mode: Push,
     workspace_configuration: None,
     readiness_token: Some("setup"),
+    root_promotion: NoPromotion,
   )
 }
 
@@ -194,6 +215,7 @@ fn typescript() -> LanguageConfig {
       ]),
     ),
     readiness_token: None,
+    root_promotion: NoPromotion,
   )
 }
 
@@ -268,5 +290,6 @@ fn python() -> LanguageConfig {
     diagnostics_mode: Pull,
     workspace_configuration: None,
     readiness_token: Some("Indexing"),
+    root_promotion: NoPromotion,
   )
 }

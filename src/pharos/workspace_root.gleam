@@ -9,6 +9,7 @@
 //// Pure-style API at the Gleam level. The Erlang FFI in
 //// `pharos_fs_ffi` does the actual disk checks.
 
+import gleam/bit_array
 import gleam/list
 import gleam/string
 
@@ -96,5 +97,51 @@ fn join_path(dir: String, basename: String) -> String {
   case string.ends_with(dir, "/") {
     True -> dir <> basename
     False -> dir <> "/" <> basename
+  }
+}
+
+/// Cargo workspace promotion (ADR-015). Given a starting directory
+/// (typically the result of `discover_from_uri` for a `.rs` file),
+/// walk upwards looking for any Cargo.toml whose `[workspace]`
+/// heading is present. Promotes to the outermost match. Returns the
+/// original dir unchanged if no ancestor workspace is found.
+///
+/// The check is a line-scan for `[workspace]` or `[workspace.`,
+/// which matches both `[workspace]` itself and any
+/// `[workspace.metadata]` / `[workspace.dependencies]` subtable.
+/// Both shapes only appear in the workspace root Cargo.toml; member
+/// crates reference workspace deps via `dep.workspace = true` in
+/// `[dependencies]`, not via `[workspace.*]` headings.
+pub fn promote_to_cargo_workspace(start_dir: String) -> String {
+  promote_walk(start_dir, start_dir)
+}
+
+fn promote_walk(current: String, best: String) -> String {
+  let updated_best = case is_cargo_workspace_root(current) {
+    True -> current
+    False -> best
+  }
+  let parent = dirname(current)
+  case parent == current {
+    True -> updated_best
+    False -> promote_walk(parent, updated_best)
+  }
+}
+
+fn is_cargo_workspace_root(dir: String) -> Bool {
+  let path = join_path(dir, "Cargo.toml")
+  case is_regular_file(path) {
+    False -> False
+    True ->
+      case read_file(path) {
+        Error(_) -> False
+        Ok(bytes) ->
+          case bit_array.to_string(bytes) {
+            Error(_) -> False
+            Ok(text) ->
+              string.contains(text, "[workspace]")
+              || string.contains(text, "[workspace.")
+          }
+      }
   }
 }

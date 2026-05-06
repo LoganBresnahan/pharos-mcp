@@ -47,7 +47,7 @@ import pharos/env
 import pharos/log
 import pharos/lsp/languages.{
   type DiagnosticsMode, type LanguageConfig, type LookupError,
-  LanguageConfig, Pull, Push,
+  LanguageConfig, NoPromotion, Pull, Push,
 }
 
 /// Load the effective registry into `persistent_term`. Call once at
@@ -255,6 +255,7 @@ fn partial_to_full(key: String, partial: PartialConfig) -> LanguageConfig {
     diagnostics_mode: option.unwrap(partial.diagnostics_mode, Push),
     workspace_configuration: None,
     readiness_token: partial.readiness_token,
+    root_promotion: NoPromotion,
   )
 }
 
@@ -307,5 +308,6 @@ fn merge_one(default: LanguageConfig, override: LanguageConfig) -> LanguageConfi
       None -> default.readiness_token
       Some(_) -> override.readiness_token
     },
+    root_promotion: default.root_promotion,
   )
 }
