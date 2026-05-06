@@ -30,8 +30,24 @@
     trace_calls_clear/0,
     wildcard/0,
     int_to_dynamic/1,
-    as_dynamic/1
+    as_dynamic/1,
+    registry_store/1,
+    registry_load/0
 ]).
+
+%% Persistent-term backing for the language registry. One slot,
+%% replaced on every `init/0`. Reads are O(1) and lock-free.
+registry_store(Registry) ->
+    persistent_term:put(pharos_language_registry, Registry),
+    nil.
+
+registry_load() ->
+    try
+        Registry = persistent_term:get(pharos_language_registry),
+        {ok, Registry}
+    catch
+        error:badarg -> {error, nil}
+    end.
 
 %% Identity for an integer — used by Gleam's tier4 module to pass
 %% integer arity through `Dynamic` typed parameters into recon.

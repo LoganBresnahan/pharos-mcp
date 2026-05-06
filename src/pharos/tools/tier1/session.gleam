@@ -23,6 +23,7 @@ import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc.{type Proc}
+import pharos/lsp/registry
 import pharos/workspace_root
 
 pub type SessionError {
@@ -202,7 +203,7 @@ pub fn config_for_uri(uri: String) -> Result(LanguageConfig, SessionError) {
 // -- Internals ----------------------------------------------------------
 
 fn lookup_config(uri: String) -> Result(LanguageConfig, SessionError) {
-  languages.for_uri(languages.default_registry(), uri)
+  registry.for_uri(uri)
   |> result.map_error(fn(err) {
     case err {
       languages.NotAFileUri(u) -> NotAFileUri(u)

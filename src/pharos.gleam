@@ -27,6 +27,7 @@ import pharos/env
 import pharos/log
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/registry
 import pharos/mcp/http
 import pharos/mcp/server
 import pharos/mcp/sessions
@@ -47,6 +48,7 @@ pub fn main() -> Nil {
   let transport = read_transport()
   log.info("pharos starting (transport=" <> transport_label(transport) <> ")")
   diagnostics_cache.init()
+  registry.init()
   case pool.start() {
     Error(_) -> {
       log.error("failed to start LSP pool; exiting")
