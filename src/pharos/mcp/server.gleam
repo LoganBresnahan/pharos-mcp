@@ -313,7 +313,11 @@ fn hover_tool_definition() -> Json {
           <> "Returns the verbatim LSP `Hover` result as JSON: "
           <> "`{contents: ..., range?: ...}`. `contents` may be "
           <> "MarkupContent, plain string, or a list of MarkedString — "
-          <> "the LLM reads whichever shape the server sends.",
+          <> "the LLM reads whichever shape the server sends. "
+          <> "Cold-start note: a freshly-spawned rust-analyzer may "
+          <> "return `null` for the first 5-15s while it indexes the "
+          <> "workspace; retry once after a 1-2s pause if you "
+          <> "expected a hit at a known symbol position.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -330,7 +334,11 @@ fn goto_definition_tool_definition() -> Json {
           <> "LSP `textDocument/definition`. Returns the verbatim LSP "
           <> "result: a single Location, a list of Location, a list of "
           <> "LocationLink (3.14+), or null if no definition. Each "
-          <> "Location has `uri` plus `range` (zero-based positions).",
+          <> "Location has `uri` plus `range` (zero-based positions). "
+          <> "Cold-start note: a freshly-spawned rust-analyzer may "
+          <> "return `null` for the first 5-15s while it indexes the "
+          <> "workspace; retry once after a 1-2s pause if you "
+          <> "expected a hit at a known symbol position.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1153,7 +1161,11 @@ fn goto_type_definition_tool_definition() -> Json {
           <> "`let x: Foo = ...`, calling on `x` returns where `Foo` "
           <> "is declared, not where `x` is bound. Same response shape "
           <> "as goto_definition (Location | Location[] | "
-          <> "LocationLink[] | null).",
+          <> "LocationLink[] | null). Cold-start note: a freshly-"
+          <> "spawned rust-analyzer may return `null` for the first "
+          <> "5-15s while it indexes the workspace; retry once after "
+          <> "a 1-2s pause if you expected a hit at a known symbol "
+          <> "position.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
