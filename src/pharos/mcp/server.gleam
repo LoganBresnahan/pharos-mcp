@@ -15,7 +15,9 @@ import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import pharos/log
+import pharos/lsp/inflight
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/mcp/content_block
 import pharos/tools/tier1/diagnostics
 import pharos/tools/tier1/document_symbols
@@ -124,17 +126,11 @@ fn id_to_text(id: Id) -> String {
   }
 }
 
-/// Log MCP-host-initiated cancellations for visibility. Full
-/// in-flight propagation (route to the matching proc, send
-/// `$/cancelRequest`) requires async dispatch — currently each
-/// `tools/call` blocks the stdio reader until the LSP responds, so
-/// a `notifications/cancelled` arriving on the same stream cannot
-/// be acted on until after the request it cancels is already done.
-/// HTTP transport handles requests on per-connection processes so
-/// the cancellation can be acted on; that wiring lands alongside
-/// the in-flight tracking table in a follow-up. For now the log
-/// line surfaces the intent so dogfood can spot whether clients
-/// actually use it.
+/// Handle MCP `notifications/cancelled` (ADR-016). Look up the
+/// cancelled MCP id in the inflight table; on hit, send
+/// `$/cancelRequest` via the matched proc actor for the matched
+/// LSP id. On miss, the request has already completed (stdio's
+/// blocking dispatcher) or never tracked; logged either way.
 fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
   let id_text = case params {
     None -> "<no params>"
@@ -144,11 +140,31 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
         Error(_) -> "<unparseable>"
       }
   }
-  log.info_at(
-    "pharos/mcp/server",
-    "notifications/cancelled received for id=" <> id_text
-      <> " (best-effort; full propagation pending async dispatch)",
-  )
+  case id_text {
+    "<no params>" | "<unparseable>" ->
+      log.warn_at(
+        "pharos/mcp/server",
+        "notifications/cancelled with malformed/missing requestId",
+      )
+    cid ->
+      case inflight.lookup(cid) {
+        Error(_) ->
+          log.info_at(
+            "pharos/mcp/server",
+            "notifications/cancelled id=" <> cid
+              <> " (no in-flight match; request already completed or untracked)",
+          )
+        Ok(#(proc_subject_dynamic, lsp_id)) -> {
+          log.info_at(
+            "pharos/mcp/server",
+            "notifications/cancelled id=" <> cid
+              <> " → forwarding $/cancelRequest for lsp_id=" <> int.to_string(lsp_id),
+          )
+          proc.cancel_by_dynamic_subject(proc_subject_dynamic, lsp_id)
+          Nil
+        }
+      }
+  }
 }
 
 fn cancel_id_decoder() -> decode.Decoder(String) {

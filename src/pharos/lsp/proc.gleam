@@ -27,6 +27,7 @@ import gleam/otp/actor
 import gleam/result
 import pharos/lsp/client.{type Client}
 import pharos/lsp/diagnostics_cache
+import pharos/lsp/inflight
 import pharos/lsp/lifecycle
 import pharos/lsp/server_request_handlers.{type Handler}
 
@@ -56,12 +57,19 @@ pub opaque type Msg {
     method: String,
     params: Json,
     timeout_ms: Int,
+    /// Optional MCP request id (correlation id). Threaded so the
+    /// actor can register the in-flight LSP id against this MCP
+    /// id in the inflight table for cancel routing (ADR-016).
+    /// Empty string skips tracking (caller is not within an MCP
+    /// request boundary).
+    cid: String,
     reply_to: Subject(Result(Dynamic, lifecycle.RequestError)),
   )
   RequestRaw(
     method: String,
     params_text: String,
     timeout_ms: Int,
+    cid: String,
     reply_to: Subject(Result(Dynamic, lifecycle.RequestError)),
   )
   AddHandler(method: String, handler: Handler)
@@ -96,7 +104,12 @@ pub opaque type Msg {
 }
 
 type State {
-  State(client: Client)
+  /// `self_subject` is the actor's own Subject — captured in the
+  /// initialiser so handle_request can stash it in the inflight
+  /// table for cancel routing (ADR-016). gleam_otp surfaces `self`
+  /// to the initialiser closure but not to handler invocations,
+  /// hence the need to keep it in state.
+  State(client: Client, self_subject: Subject(Msg))
 }
 
 /// Spawn a fresh LSP via `client.start`, run the initialize +
@@ -135,7 +148,7 @@ pub fn start(
               |> process.select(self)
               |> process.select_other(PortMessage)
             Ok(
-              actor.initialised(State(client: c))
+              actor.initialised(State(client: c, self_subject: self))
               |> actor.selecting(selector)
               |> actor.returning(self),
             )
@@ -184,11 +197,12 @@ pub fn request(
   timeout_ms: Int,
 ) -> Result(Dynamic, lifecycle.RequestError) {
   let Proc(subject) = proc
+  let cid = current_cid()
   // Add a margin to the actor.call timeout so the LSP transport
   // timeout fires first and surfaces a meaningful RequestError.
   let call_timeout = timeout_ms + 5000
   actor.call(subject, call_timeout, fn(reply) {
-    Request(method, params, timeout_ms, reply)
+    Request(method, params, timeout_ms, cid, reply)
   })
 }
 
@@ -202,11 +216,25 @@ pub fn request_raw(
   timeout_ms: Int,
 ) -> Result(Dynamic, lifecycle.RequestError) {
   let Proc(subject) = proc
+  let cid = current_cid()
   let call_timeout = timeout_ms + 5000
   actor.call(subject, call_timeout, fn(reply) {
-    RequestRaw(method, params_text, timeout_ms, reply)
+    RequestRaw(method, params_text, timeout_ms, cid, reply)
   })
 }
+
+/// Read the calling process's correlation id (mcp request id) from
+/// the process dictionary. Empty string when no MCP context is set
+/// (boot-time calls, smoke tests, etc.).
+fn current_cid() -> String {
+  case cid_get() {
+    Ok(id) -> id
+    Error(_) -> ""
+  }
+}
+
+@external(erlang, "pharos_log_ffi", "cid_get")
+fn cid_get() -> Result(String, Nil)
 
 /// Add (or replace) a server-request handler for the proc's
 /// underlying registry. The change is permanent for the lifetime
@@ -300,6 +328,26 @@ pub fn cancel(proc: Proc, lsp_request_id: Int) -> Result(Nil, client.Error) {
   send_notification(proc, bit_array_from_string(body))
 }
 
+/// Cancel-by-dynamic-Subject for callers (e.g.
+/// `mcp/server.log_cancel_notification`) that pulled the proc's
+/// Subject out of the inflight ETS table as a `Dynamic`. The cast
+/// back to `Subject(Msg)` is unsafe in the type-system sense but
+/// safe in practice because `inflight.insert` only ever stores
+/// `Subject(Msg)` values from inside this module.
+///
+/// Result is dropped (Nil) — cancel is best-effort. If the cast
+/// fails or the proc is gone the cancel quietly no-ops.
+pub fn cancel_by_dynamic_subject(
+  subject_dynamic: Dynamic,
+  lsp_request_id: Int,
+) -> Nil {
+  let _ = cancel(Proc(subject: cast_subject(subject_dynamic)), lsp_request_id)
+  Nil
+}
+
+@external(erlang, "pharos_runtime_ffi", "as_dynamic")
+fn cast_subject(dyn: Dynamic) -> Subject(Msg)
+
 @external(erlang, "erlang", "integer_to_binary")
 fn int_to_text(value: Int) -> String
 
@@ -352,11 +400,11 @@ pub fn pid(proc: Proc) -> Pid {
 
 fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
-    Request(method:, params:, timeout_ms:, reply_to:) ->
-      handle_request(state, method, params, timeout_ms, reply_to)
+    Request(method:, params:, timeout_ms:, cid:, reply_to:) ->
+      handle_request(state, method, params, timeout_ms, cid, reply_to)
 
-    RequestRaw(method:, params_text:, timeout_ms:, reply_to:) ->
-      handle_request_raw(state, method, params_text, timeout_ms, reply_to)
+    RequestRaw(method:, params_text:, timeout_ms:, cid:, reply_to:) ->
+      handle_request_raw(state, method, params_text, timeout_ms, cid, reply_to)
 
     AddHandler(method:, handler:) -> {
       let updated_client =
@@ -368,7 +416,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
             handler,
           ),
         )
-      actor.continue(State(client: updated_client))
+      actor.continue(State(..state, client: updated_client))
     }
 
     WaitForReady(maybe_token:, timeout_ms:, reply_to:) -> {
@@ -376,7 +424,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       case result {
         Ok(updated_client) -> {
           process.send(reply_to, Ok(Nil))
-          actor.continue(State(client: updated_client))
+          actor.continue(State(..state, client: updated_client))
         }
         Error(err) -> {
           process.send(reply_to, Error(err))
@@ -434,8 +482,9 @@ fn handle_port_message(
       // Append raw bytes to the Client's framing buffer, parse out
       // any complete frames, and process each.
       let updated = client.feed_bytes(state.client, bytes)
-      let State(client: drained) = drain_buffered_frames(State(client: updated))
-      actor.continue(State(client: drained))
+      let drained =
+        drain_buffered_frames(State(..state, client: updated))
+      actor.continue(drained)
     }
   }
 }
@@ -455,7 +504,7 @@ fn drain_buffered_frames(state: State) -> State {
     Error(_) -> state
     Ok(#(updated, body)) -> {
       let new_client = process_frame(updated, body)
-      drain_buffered_frames(State(client: new_client))
+      drain_buffered_frames(State(..state, client: new_client))
     }
   }
 }
@@ -475,14 +524,19 @@ fn handle_request(
   method: String,
   params: Json,
   timeout_ms: Int,
+  cid: String,
   reply_to: Subject(Result(Dynamic, lifecycle.RequestError)),
 ) -> actor.Next(State, Msg) {
-  case lifecycle.request(state.client, method, params, next_id(), timeout_ms) {
+  let lsp_id = next_id()
+  track_inflight(cid, state.self_subject, lsp_id)
+  case lifecycle.request(state.client, method, params, lsp_id, timeout_ms) {
     Ok(#(updated_client, result_value)) -> {
+      untrack_inflight(cid)
       process.send(reply_to, Ok(result_value))
-      actor.continue(State(client: updated_client))
+      actor.continue(State(..state, client: updated_client))
     }
     Error(err) -> {
+      untrack_inflight(cid)
       process.send(reply_to, Error(err))
       actor.continue(state)
     }
@@ -494,27 +548,58 @@ fn handle_request_raw(
   method: String,
   params_text: String,
   timeout_ms: Int,
+  cid: String,
   reply_to: Subject(Result(Dynamic, lifecycle.RequestError)),
 ) -> actor.Next(State, Msg) {
+  let lsp_id = next_id()
+  track_inflight(cid, state.self_subject, lsp_id)
   case
     lifecycle.request_raw_params(
       state.client,
       method,
       params_text,
-      next_id(),
+      lsp_id,
       timeout_ms,
     )
   {
     Ok(#(updated_client, result_value)) -> {
+      untrack_inflight(cid)
       process.send(reply_to, Ok(result_value))
-      actor.continue(State(client: updated_client))
+      actor.continue(State(..state, client: updated_client))
     }
     Error(err) -> {
+      untrack_inflight(cid)
       process.send(reply_to, Error(err))
       actor.continue(state)
     }
   }
 }
+
+/// Insert an `(mcp_id → (self_subject, lsp_id))` row into the
+/// inflight tracker. No-op when cid is empty (no MCP context, e.g.
+/// boot-time request from `lifecycle.initialize` or smoke tests).
+/// `self_subject` comes from `State.self_subject`, captured by the
+/// initialiser so the actor knows its own Subject without
+/// gleam_otp surfacing it to handlers.
+fn track_inflight(cid: String, self_subject: Subject(Msg), lsp_id: Int) -> Nil {
+  case cid {
+    "" -> Nil
+    _ -> inflight.insert(cid, erase_subject(self_subject), lsp_id)
+  }
+}
+
+fn untrack_inflight(cid: String) -> Nil {
+  case cid {
+    "" -> Nil
+    _ -> inflight.delete(cid)
+  }
+}
+
+/// Type-erase a `Subject(Msg)` to `Dynamic` for storage in the
+/// inflight table. The cancel handler punts the cast back via
+/// `cancel_by_dynamic_subject/2`.
+@external(erlang, "pharos_runtime_ffi", "as_dynamic")
+fn erase_subject(subject: Subject(Msg)) -> Dynamic
 
 @external(erlang, "erlang", "unique_integer")
 fn unique_integer(opts: List(UniqueIntOption)) -> Int
@@ -542,7 +627,7 @@ fn handle_wait_for_publish(
   case drain_loop(state.client, target_uri, remaining_ms, option.None) {
     Ok(#(updated_client, found)) -> {
       process.send(reply_to, Ok(found))
-      actor.continue(State(client: updated_client))
+      actor.continue(State(..state, client: updated_client))
     }
     Error(err) -> {
       process.send(reply_to, Error(err))

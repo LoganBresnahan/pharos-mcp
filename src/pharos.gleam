@@ -26,6 +26,7 @@ import gleam/string
 import pharos/env
 import pharos/log
 import pharos/lsp/diagnostics_cache
+import pharos/lsp/inflight
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/registry
 import pharos/mcp/http
@@ -49,6 +50,7 @@ pub fn main() -> Nil {
   log.info("pharos starting (transport=" <> transport_label(transport) <> ")")
   diagnostics_cache.init()
   registry.init()
+  inflight.init()
   case pool.start() {
     Error(_) -> {
       log.error("failed to start LSP pool; exiting")

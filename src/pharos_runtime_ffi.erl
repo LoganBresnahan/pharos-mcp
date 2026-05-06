@@ -32,8 +32,60 @@
     int_to_dynamic/1,
     as_dynamic/1,
     registry_store/1,
-    registry_load/0
+    registry_load/0,
+    inflight_init/0,
+    inflight_insert/3,
+    inflight_lookup/1,
+    inflight_delete/1,
+    inflight_size/0
 ]).
+
+%% ETS-backed in-flight request tracker (ADR-016). Keyed by MCP
+%% request id (binary). Value: {ProcSubject, LspRequestId}. Used by
+%% notifications/cancelled to route cancels to the right proc.
+-define(INFLIGHT_TABLE, pharos_inflight).
+
+inflight_init() ->
+    case ets:info(?INFLIGHT_TABLE) of
+        undefined ->
+            ets:new(?INFLIGHT_TABLE, [named_table, public, set,
+                                       {read_concurrency, true},
+                                       {write_concurrency, true}]);
+        _ -> ?INFLIGHT_TABLE
+    end,
+    nil.
+
+inflight_insert(McpId, ProcSubject, LspId) when is_binary(McpId), is_integer(LspId) ->
+    case ets:info(?INFLIGHT_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:insert(?INFLIGHT_TABLE, {McpId, ProcSubject, LspId}),
+            nil
+    end.
+
+inflight_lookup(McpId) when is_binary(McpId) ->
+    case ets:info(?INFLIGHT_TABLE) of
+        undefined -> {error, nil};
+        _ ->
+            case ets:lookup(?INFLIGHT_TABLE, McpId) of
+                [{McpId, ProcSubject, LspId}] -> {ok, {ProcSubject, LspId}};
+                [] -> {error, nil}
+            end
+    end.
+
+inflight_delete(McpId) when is_binary(McpId) ->
+    case ets:info(?INFLIGHT_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:delete(?INFLIGHT_TABLE, McpId),
+            nil
+    end.
+
+inflight_size() ->
+    case ets:info(?INFLIGHT_TABLE, size) of
+        undefined -> 0;
+        N -> N
+    end.
 
 %% Persistent-term backing for the language registry. One slot,
 %% replaced on every `init/0`. Reads are O(1) and lock-free.
