@@ -1766,9 +1766,12 @@ fn type_hierarchy_prepare_tool_definition() -> Json {
           <> "`selectionRange` plus optional `detail`/`tags`/`data`. "
           <> "Pass an item to `type_hierarchy_supertypes` / "
           <> "`type_hierarchy_subtypes` to walk the type relationship "
-          <> "graph. Server support varies: rust-analyzer implements "
-          <> "all three; pyright supports prepare + supertypes; gopls "
-          <> "and tsserver return `-32601 Method not found`.",
+          <> "graph. Server support is sparse at the time of writing: "
+          <> "rust-analyzer, pyright, gopls, and "
+          <> "typescript-language-server all return "
+          <> "`-32601 Method not found` for `prepareTypeHierarchy`. "
+          <> "Tool plumbing ships ahead of LSP support; check your "
+          <> "server's release notes before relying on it.",
       ),
     ),
     #("inputSchema", position_arg_schema()),

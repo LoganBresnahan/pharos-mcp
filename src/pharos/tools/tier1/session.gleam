@@ -453,7 +453,19 @@ pub fn prepare_all_covering_method(
   let servers = languages.servers_covering_method(config, method)
   let prepared =
     list.filter_map(servers, fn(server) {
-      let _ = ensure_doc_opened(pool, config, workspace, file_uri)
+      // M11 fix: didOpen targets THIS server, not the language's
+      // primary. Without per-server didOpen, secondary servers
+      // (ruff in python's pyright+ruff pair) never receive document
+      // state and `textDocument/diagnostic` against them surfaces
+      // as a transport error in the merge path.
+      let _ =
+        ensure_doc_opened_for_server_id(
+          pool,
+          config,
+          workspace,
+          file_uri,
+          server.id,
+        )
       case get_lsp_for_server(pool, config, workspace, server) {
         Ok(proc) -> Ok(#(server, proc))
         Error(err) -> {
@@ -488,7 +500,14 @@ fn prepare_all_with_selector(
   let servers = select_servers(config, method)
   let prepared =
     list.filter_map(servers, fn(server) {
-      let _ = ensure_doc_opened(pool, config, workspace, file_uri)
+      let _ =
+        ensure_doc_opened_for_server_id(
+          pool,
+          config,
+          workspace,
+          file_uri,
+          server.id,
+        )
       case get_lsp_for_server(pool, config, workspace, server) {
         Ok(proc) -> Ok(#(server.id, proc))
         Error(err) -> {
@@ -836,6 +855,26 @@ fn ensure_doc_opened(
   workspace: String,
   file_uri: String,
 ) -> Nil {
+  let server_id = case languages.primary_server(config) {
+    Ok(server) -> server.id
+    Error(_) -> config.id
+  }
+  ensure_doc_opened_for_server_id(pool, config, workspace, file_uri, server_id)
+}
+
+/// Like `ensure_doc_opened/4` but targets one explicit `server_id`
+/// instead of the language's primary. Used by the multi-server merge
+/// path so every covering server receives `didOpen` (M11 fix —
+/// without it, ruff in the python pyright+ruff pair never got the
+/// document state and the merge path's diagnostic request hit a
+/// transport error).
+fn ensure_doc_opened_for_server_id(
+  pool: Pool,
+  config: LanguageConfig,
+  workspace: String,
+  file_uri: String,
+  server_id: String,
+) -> Nil {
   case workspace_root.uri_to_path(file_uri) {
     Error(_) -> Nil
     Ok(path) ->
@@ -845,13 +884,6 @@ fn ensure_doc_opened(
           case bit_array.to_string(content_bytes) {
             Error(_) -> Nil
             Ok(text) -> {
-              // Stage 2 of ADR-019: ensure_open targets the primary
-              // server explicitly. Stage 3 will fan out didOpen
-              // across every server scoped to handle the document.
-              let server_id = case languages.primary_server(config) {
-                Ok(server) -> server.id
-                Error(_) -> config.id
-              }
               let _ =
                 pool.ensure_open(
                   pool,

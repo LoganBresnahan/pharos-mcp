@@ -12,10 +12,12 @@
 //// `uri` to pick the LSP and forward the entire item back via
 //// `proc.request_raw/4`, which accepts pre-encoded JSON params.
 ////
-//// Server support is uneven: rust-analyzer implements all three;
-//// pyright supports prepare + supertypes only; gopls + tsserver do
-//// not implement type-hierarchy at all (returns
-//// `-32601 Method not found`). Surfaces the LSP error verbatim.
+//// Server support is sparse at the time of writing: rust-analyzer,
+//// pyright, gopls, and typescript-language-server all return
+//// `-32601 Method not found` for `prepareTypeHierarchy`. Pharos
+//// surfaces the LSP error verbatim. The tool plumbing ships ahead
+//// of LSP support; verify your server's release notes before
+//// relying on it.
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode

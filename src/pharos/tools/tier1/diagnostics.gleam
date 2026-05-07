@@ -300,8 +300,13 @@ fn pull_items(
 }
 
 /// Pull `params.diagnostics` out of a publishDiagnostics envelope and
-/// return as a JSON string suitable for concatenation. Tolerates
-/// missing/non-array fields by returning `"[]"`.
+/// return as a JSON string suitable for concatenation. Returns an
+/// `Error` on decode failure so the caller can fall back to live fetch
+/// instead of silently contributing `"[]"` to the merged result.
+/// Earlier behaviour returned `Ok("[]")` on every failure, which made
+/// the multi-server merge collapse to empty whenever the cached params
+/// failed to round-trip — surfaced in M11 dogfood Run 4 as
+/// `NoDiagnosticsObserved` for python despite pyright having items.
 fn extract_items_from_envelope(envelope: String) -> Result(String, String) {
   let decoder = {
     use params <- decode.field("params", params_with_diagnostics_decoder())
@@ -309,7 +314,7 @@ fn extract_items_from_envelope(envelope: String) -> Result(String, String) {
   }
   case json.parse(envelope, decoder) {
     Ok(items_json) -> Ok(items_json)
-    Error(_) -> Ok("[]")
+    Error(_) -> Error("publishDiagnostics envelope decode failed")
   }
 }
 
