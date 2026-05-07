@@ -45,8 +45,11 @@ pub fn category_for(name: String) -> ToolCategory {
     | "call_hierarchy_outgoing_calls"
     | "get_diagnostics" -> CatRead
 
-    // -- write (returns WorkspaceEdit data; never auto-applies) --
-    "rename_preview" | "format_document" | "code_actions" -> CatWrite
+    // -- write (returns WorkspaceEdit data; or applies it on demand) --
+    "rename_preview"
+    | "format_document"
+    | "code_actions"
+    | "apply_workspace_edit" -> CatWrite
 
     // -- debug (pharos runtime introspection + sanity) --
     "echo"

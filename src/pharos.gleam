@@ -280,9 +280,12 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 #     call_hierarchy_prepare, call_hierarchy_incoming_calls,
 #     call_hierarchy_outgoing_calls, get_diagnostics
 #
-#   \"write\" — edit-producing LSP tools (3 tools, all return
-#             WorkspaceEdit data; never auto-apply to disk):
-#     rename_preview, format_document, code_actions
+#   \"write\" — edit-producing LSP tools (4 tools). The first three
+#             return `WorkspaceEdit` data; `apply_workspace_edit`
+#             writes a `WorkspaceEdit` to disk on demand
+#             (`dry_run=true` by default):
+#     rename_preview, format_document, code_actions,
+#     apply_workspace_edit
 #
 #   \"debug\" — pharos runtime introspection (14 tools incl. echo):
 #     echo, runtime_processes, runtime_supervision_tree,

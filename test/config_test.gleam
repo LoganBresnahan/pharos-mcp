@@ -17,6 +17,8 @@ pub fn defaults_expose_all_categories_test() {
 
   config.tool_allowed(filter, "hover", CatRead) |> should.be_true
   config.tool_allowed(filter, "rename_preview", CatWrite) |> should.be_true
+  config.tool_allowed(filter, "apply_workspace_edit", CatWrite)
+  |> should.be_true
   config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_true
   config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_true
 }

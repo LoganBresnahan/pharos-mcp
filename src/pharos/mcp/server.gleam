@@ -28,6 +28,7 @@ import pharos/tools/tier1/find_references
 import pharos/tools/tier1/goto_definition
 import pharos/tools/tier1/hover
 import pharos/tools/tier1/workspace_symbols
+import pharos/tools/tier2/apply_workspace_edit
 import pharos/tools/tier2/call_hierarchy
 import pharos/tools/tier2/code_actions
 import pharos/tools/tier2/format_document
@@ -290,6 +291,7 @@ fn allowed_tool_definitions() -> List(Json) {
     #("rename_preview", rename_preview_tool_definition),
     #("format_document", format_document_tool_definition),
     #("code_actions", code_actions_tool_definition),
+    #("apply_workspace_edit", apply_workspace_edit_tool_definition),
     #("lsp_request_raw", lsp_request_raw_tool_definition),
   ]
   list.append(tier1_2, tier4.named_definitions())
@@ -802,6 +804,9 @@ fn dispatch_tool_call(
     Ok(#("code_actions", arguments)) ->
       handle_code_actions(pool, id, arguments)
 
+    Ok(#("apply_workspace_edit", arguments)) ->
+      handle_apply_workspace_edit(id, arguments)
+
     Ok(#("lsp_request_raw", arguments)) ->
       handle_lsp_request_raw(pool, id, arguments)
 
@@ -1213,6 +1218,32 @@ fn handle_code_actions(
   }
 }
 
+fn handle_apply_workspace_edit(
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_apply_workspace_edit_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid apply_workspace_edit params: " <> reason,
+      )
+    Ok(#(edit, dry_run)) ->
+      case apply_workspace_edit.handle(edit, dry_run) {
+        Ok(rendered) ->
+          success_response(id, fn() { tool_text_result(rendered, False) })
+        Error(apply_workspace_edit.DecodeFailed(reason)) ->
+          success_response(
+            id,
+            fn() { tool_text_result("decode failed: " <> reason, True) },
+          )
+        Error(apply_workspace_edit.InvalidUris(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
 fn handle_lsp_request_raw(
   pool: Pool,
   id: Id,
@@ -1574,6 +1605,73 @@ fn format_document_tool_definition() -> Json {
   ])
 }
 
+fn apply_workspace_edit_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("apply_workspace_edit")),
+    #(
+      "description",
+      json.string(
+        "Apply an LSP `WorkspaceEdit` to disk. Companion to "
+          <> "`rename_preview` / `format_document` / `code_actions` "
+          <> "(which return rendered summaries) — pair this with "
+          <> "`lsp_request_raw` to fetch the raw `WorkspaceEdit` JSON, "
+          <> "then call here to write. Defaults to `dry_run=true`: "
+          <> "validates positions and overlap, reports per-file "
+          <> "byte-count delta, but does not write. Re-call with "
+          <> "`dry_run=false` to apply. Per-file atomic writes "
+          <> "(write `.tmp`, rename) so a partial run never leaves a "
+          <> "half-written file. Overlapping edits in the same file "
+          <> "abort the run. `documentChanges` with "
+          <> "`resourceOperations` (CreateFile / RenameFile / "
+          <> "DeleteFile) are not supported in this version. Position "
+          <> "semantics: LSP characters are UTF-16 code units; pharos "
+          <> "approximates via Unicode code points (exact for the "
+          <> "BMP; off-by-one per surrogate-pair char in the unlucky "
+          <> "line).",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "edit",
+              json.object([
+                #("type", json.string("object")),
+                #(
+                  "description",
+                  json.string(
+                    "LSP `WorkspaceEdit`. Must contain `changes` "
+                    <> "(map of URI → TextEdit[]) or `documentChanges` "
+                    <> "(TextDocumentEdit[]). Plain text edits only.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "dry_run",
+              json.object([
+                #("type", json.string("boolean")),
+                #(
+                  "description",
+                  json.string(
+                    "If true (default), validate but do not write. "
+                    <> "Set to false to actually apply.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #("required", json.preprocessed_array([json.string("edit")])),
+      ]),
+    ),
+  ])
+}
+
 fn lsp_request_raw_tool_definition() -> Json {
   json.object([
     #("name", json.string("lsp_request_raw")),
@@ -1862,6 +1960,21 @@ fn decode_call_hierarchy_item_arguments(
   |> result.map_error(fn(_) {
     "expected `item: <CallHierarchyItem>` "
     <> "(round-trip an object returned by call_hierarchy_prepare)"
+  })
+}
+
+fn decode_apply_workspace_edit_arguments(
+  args: Option(Dynamic),
+) -> Result(#(Dynamic, Bool), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use edit <- decode.field("edit", decode.dynamic)
+    use dry_run <- decode.optional_field("dry_run", True, decode.bool)
+    decode.success(#(edit, dry_run))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `edit: <WorkspaceEdit>`, optional `dry_run: bool` (default true)"
   })
 }
 
