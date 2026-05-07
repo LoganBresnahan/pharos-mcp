@@ -181,6 +181,40 @@ Implicitly verified by the fact that the MCP host reconnect now succeeds
 Run 1: 2026-05-06 (initial dogfood — defects + limitations identified).
 Run 2: 2026-05-06 (post-M9.5 regression — first round of fixes shipped).
 Run 3: 2026-05-06 (post-M10 Group A+B regression — wait_for_ready + emit-side prefilter + cold-start hint).
+Run 4: 2026-05-07 (post-M11 — apply_workspace_edit + inlay_hints + semantic_tokens + type_hierarchy + diagnostics-cache rekey + trace-ring fix + stdio held-stdin fix + npm postinstall warmup).
+
+### Run 4 — M11 post-fix regression summary
+
+Pharos rebuilt at e857dce + d570f0e (`MIX_ENV=prod mix release`), cache
+warmed via `node npm/scripts/postinstall.js`, MCP host reconnected.
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 0 | PASS | All ETS tables present incl. new `pharos_request_workers`. |
+| 1 | PASS (rust+python diags deferred to P13) | Hover/goto/refs/symbols/sig/format/code_actions/rename across rust/go/ts/python all clean. |
+| 2 | PASS (after fix d570f0e) | Initial run hit "call hierarchy item missing or non-string `uri` field" — MCP host JSON-stringifying object args without `type: "object"` schema hint. Patched both schema (added `type: "object"`) and decoder (`unstringify_if_needed/1` belt-and-suspenders). |
+| 3 | PASS | `lsp_request_raw textDocument/hover` round-trip identical to typed. |
+| 4 | PASS | `pharos_lsp_proc_subjects` size grew across warm-spawns; mailboxes empty. |
+| 5 | PASS | Kill rust → re-hover transparently re-spawned. ADR-017a wiring solid. |
+| 6 | PASS | log_clear / log_level transitions / log_tail post-clear behave. |
+| 7 | PASS (smoke-only) | trace_calls correctly refused (gated off). trace_lsp empty without parallel traffic — by design (synchronous toggle/sleep/snapshot loop). |
+| 8 | PASS | dry_run reports byte delta without writing. Real apply persists with atomic rename. Overlapping ranges abort with the offending pair surfaced verbatim. EOF-append (line past last \n with char=0) succeeds — graceful per LSP spec. documentChanges form applied identically. |
+| 9 | PASS (rust) | Inlay hints `: &str`, `: Point`, `x:`, `y:` returned for the rust scratch range. python/ts not exercised here — pyright/tsserver hint surfaces depend on workspace config. |
+| 10 | PASS (rust) | Full document = ~78 tokens. Range = ~12 tokens. data array length divisible by 5 in both. resultId returned. |
+| 11 | DEFECT (server-side, not pharos) | Pharos plumbing correct. rust-analyzer AND pyright both return `-32601 Method not found` for `textDocument/prepareTypeHierarchy`. Earlier doc claim (rust-analyzer + pyright support it) was wrong. Fix: update tool description to match actual server matrix. Tool itself ships ahead of LSP support. |
+| 12 | PASS | 6 LSP-method round-trips fired in one MCP message produced 12 trace entries (6 out + 6 in pairs). No `dropped=N` warn. M11 direct-ring-write fix confirmed under realistic load. |
+| 13 | DEFECT — multi-server merge silently empty | `get_diagnostics` on python returns `NoDiagnosticsObserved` even though pyright responds via `lsp_request_raw textDocument/diagnostic` with the type-error item. Trace shows the merge path emits a single `textDocument/diagnostic` request (presumably to ruff per `Only`-first-then-`All` ordering); ruff times out (`LSP transport error`); pyright path silent — either takes a `[]`-returning cache hit or never iterates. Whichever side, the merged result collapses to `[]`. M11 cache-rekey landed but the merge path's error/empty handling needs investigation. |
+| 14 | PASS | 30+ minute session through MCP host with hundreds of round-trips, no `Actor discarding unexpected message` warn, no buffering stall. M11 stdio fix solid. |
+
+### Defect status (post-M11)
+
+- **D-M11-1** (CLOSED — schema fix d570f0e): MCP-host stringification of object-typed tool args without `type: "object"` schema hint. Fixed at the schema layer (`call_hierarchy_*`, `lsp_request_raw`) and at the decoder layer (`unstringify_if_needed/1`).
+- **D-M11-2** (OPEN): `type_hierarchy_*` tool description claims rust-analyzer + pyright support `prepareTypeHierarchy`. Both actually return `-32601`. Update description; tool plumbing correct, ships ahead of LSP support.
+- **D-M11-3** (OPEN): Multi-server diagnostics merge produces empty result on python despite pyright having items. Tracing shows only one outbound `textDocument/diagnostic` per call (ruff), and pyright's contribution is silently `[]`. Suspected: cache-hit path returns empty when pyright cached params decode unexpectedly, OR `prepare_all_covering_method` skips pyright without the warn-log firing. Single-server raw path works (`lsp_request_raw` returns pyright items), so the bug is merge-specific.
+
+### Limitation status (post-M11)
+
+- Cold-start of multi-server python (pyright + ruff) takes >20s through pharos's `wait_for_ready` (pyright doesn't emit the readiness token, falls through to timeout). Tools called within that window return `NoDiagnosticsObserved`. Workaround: warm with a `hover` first, OR raise `timeout_ms` to 45000+. Not blocking; warm-cache calls are fast.
 
 ### Run 3 — M10 Group A+B post-fix regression summary
 
