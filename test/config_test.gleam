@@ -18,6 +18,12 @@ pub fn defaults_expose_all_categories_test() {
   config.tool_allowed(filter, "hover", CatRead) |> should.be_true
   config.tool_allowed(filter, "inlay_hints", CatRead) |> should.be_true
   config.tool_allowed(filter, "semantic_tokens", CatRead) |> should.be_true
+  config.tool_allowed(filter, "type_hierarchy_prepare", CatRead)
+  |> should.be_true
+  config.tool_allowed(filter, "type_hierarchy_supertypes", CatRead)
+  |> should.be_true
+  config.tool_allowed(filter, "type_hierarchy_subtypes", CatRead)
+  |> should.be_true
   config.tool_allowed(filter, "rename_preview", CatWrite) |> should.be_true
   config.tool_allowed(filter, "apply_workspace_edit", CatWrite)
   |> should.be_true

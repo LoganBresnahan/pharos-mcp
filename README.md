@@ -20,7 +20,7 @@ LLM. Bundled languages and the tools they back:
 
 | Category | Tools | LSP method backing |
 |----------|-------|---------------------|
-| **read** (14) | `hover`, `goto_definition`, `goto_type_definition`, `goto_implementation`, `find_references`, `document_symbols`, `workspace_symbols`, `signature_help`, `call_hierarchy_prepare`, `call_hierarchy_incoming_calls`, `call_hierarchy_outgoing_calls`, `get_diagnostics`, `inlay_hints`, `semantic_tokens` | `textDocument/*` queries |
+| **read** (17) | `hover`, `goto_definition`, `goto_type_definition`, `goto_implementation`, `find_references`, `document_symbols`, `workspace_symbols`, `signature_help`, `call_hierarchy_prepare`, `call_hierarchy_incoming_calls`, `call_hierarchy_outgoing_calls`, `get_diagnostics`, `inlay_hints`, `semantic_tokens`, `type_hierarchy_prepare`, `type_hierarchy_supertypes`, `type_hierarchy_subtypes` | `textDocument/*` queries |
 | **write** (4) | `rename_preview`, `format_document`, `code_actions`, `apply_workspace_edit` | First three wrap `textDocument/rename` / `formatting` / `codeAction` and return `WorkspaceEdit` data only. `apply_workspace_edit` writes a `WorkspaceEdit` to disk on demand (`dry_run=true` by default; per-file atomic writes) |
 | **debug** (14) | `echo` + every `runtime_*` tool: `runtime_processes`, `runtime_supervision_tree`, `runtime_ets_tables`, `runtime_memory`, `runtime_applications`, `runtime_scheduler_util`, `runtime_pid_info`, `runtime_log_tail`, `runtime_log_clear`, `runtime_log_level`, `runtime_trace_lsp`, `runtime_trace_calls`, `runtime_kill_lsp` | pharos's own BEAM introspection |
 | **raw** (1) | `lsp_request_raw` | any LSP method as escape hatch |
@@ -371,7 +371,7 @@ Four categories cover every MCP tool pharos exposes:
 
 | Category | Members |
 |----------|---------|
-| `read` | non-mutating LSP queries (hover, goto, references, symbols, diagnostics, signature help, call hierarchy, inlay hints, semantic tokens) — 14 tools |
+| `read` | non-mutating LSP queries (hover, goto, references, symbols, diagnostics, signature help, call/type hierarchy, inlay hints, semantic tokens) — 17 tools |
 | `write` | edit-producing LSP tools (rename_preview, format_document, code_actions return `WorkspaceEdit` data; apply_workspace_edit writes one to disk) — 4 tools |
 | `debug` | pharos runtime introspection (processes, supervision tree, ETS, log tail, kill_lsp, …) — 14 tools incl. `echo` |
 | `raw` | power-user escape hatch (`lsp_request_raw`) — 1 tool |

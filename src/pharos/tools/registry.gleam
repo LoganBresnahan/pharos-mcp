@@ -45,7 +45,10 @@ pub fn category_for(name: String) -> ToolCategory {
     | "call_hierarchy_outgoing_calls"
     | "get_diagnostics"
     | "inlay_hints"
-    | "semantic_tokens" -> CatRead
+    | "semantic_tokens"
+    | "type_hierarchy_prepare"
+    | "type_hierarchy_supertypes"
+    | "type_hierarchy_subtypes" -> CatRead
 
     // -- write (returns WorkspaceEdit data; or applies it on demand) --
     "rename_preview"

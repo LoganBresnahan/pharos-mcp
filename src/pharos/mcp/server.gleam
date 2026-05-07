@@ -41,6 +41,7 @@ import pharos/tools/tier4
 import pharos/tools/tier2/rename_preview
 import pharos/tools/tier2/semantic_tokens
 import pharos/tools/tier2/signature_help
+import pharos/tools/tier2/type_hierarchy
 
 const protocol_version: String = "2024-11-05"
 
@@ -296,6 +297,15 @@ fn allowed_tool_definitions() -> List(Json) {
     #("apply_workspace_edit", apply_workspace_edit_tool_definition),
     #("inlay_hints", inlay_hints_tool_definition),
     #("semantic_tokens", semantic_tokens_tool_definition),
+    #("type_hierarchy_prepare", type_hierarchy_prepare_tool_definition),
+    #(
+      "type_hierarchy_supertypes",
+      type_hierarchy_supertypes_tool_definition,
+    ),
+    #(
+      "type_hierarchy_subtypes",
+      type_hierarchy_subtypes_tool_definition,
+    ),
     #("lsp_request_raw", lsp_request_raw_tool_definition),
   ]
   list.append(tier1_2, tier4.named_definitions())
@@ -817,6 +827,27 @@ fn dispatch_tool_call(
     Ok(#("semantic_tokens", arguments)) ->
       handle_semantic_tokens(pool, id, arguments)
 
+    Ok(#("type_hierarchy_prepare", arguments)) ->
+      handle_type_hierarchy_prepare(pool, id, arguments)
+
+    Ok(#("type_hierarchy_supertypes", arguments)) ->
+      handle_type_hierarchy_calls(
+        pool,
+        id,
+        arguments,
+        type_hierarchy.supertypes,
+        "type_hierarchy_supertypes",
+      )
+
+    Ok(#("type_hierarchy_subtypes", arguments)) ->
+      handle_type_hierarchy_calls(
+        pool,
+        id,
+        arguments,
+        type_hierarchy.subtypes,
+        "type_hierarchy_subtypes",
+      )
+
     Ok(#("lsp_request_raw", arguments)) ->
       handle_lsp_request_raw(pool, id, arguments)
 
@@ -1223,6 +1254,60 @@ fn handle_code_actions(
         Error(code_actions.SessionFailed(reason)) ->
           success_response(id, fn() { tool_text_result(reason, True) })
         Error(code_actions.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_type_hierarchy_prepare(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_position_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid type_hierarchy_prepare params: " <> reason,
+      )
+    Ok(#(uri, line, character)) ->
+      case type_hierarchy.prepare(pool, uri, line, character) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(type_hierarchy.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(type_hierarchy.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(type_hierarchy.InvalidItem(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn handle_type_hierarchy_calls(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+  call: fn(Pool, Dynamic) -> Result(String, type_hierarchy.TypeHierarchyError),
+  tool_name: String,
+) -> String {
+  case decode_call_hierarchy_item_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid " <> tool_name <> " params: " <> reason,
+      )
+    Ok(item) ->
+      case call(pool, item) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(type_hierarchy.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(type_hierarchy.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(type_hierarchy.InvalidItem(reason)) ->
           success_response(id, fn() { tool_text_result(reason, True) })
       }
   }
@@ -1658,6 +1743,81 @@ fn format_document_tool_definition() -> Json {
           ]),
         ),
         #("required", json.preprocessed_array([json.string("uri")])),
+      ]),
+    ),
+  ])
+}
+
+fn type_hierarchy_prepare_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("type_hierarchy_prepare")),
+    #(
+      "description",
+      json.string(
+        "Resolve `TypeHierarchyItem`s for a symbol at a position. "
+          <> "Wraps LSP `textDocument/prepareTypeHierarchy`. Returns "
+          <> "the verbatim LSP result (`TypeHierarchyItem[]`). Each "
+          <> "item carries `name`, `kind`, `uri`, `range`, "
+          <> "`selectionRange` plus optional `detail`/`tags`/`data`. "
+          <> "Pass an item to `type_hierarchy_supertypes` / "
+          <> "`type_hierarchy_subtypes` to walk the type relationship "
+          <> "graph. Server support varies: rust-analyzer implements "
+          <> "all three; pyright supports prepare + supertypes; gopls "
+          <> "and tsserver return `-32601 Method not found`.",
+      ),
+    ),
+    #("inputSchema", position_arg_schema()),
+  ])
+}
+
+fn type_hierarchy_supertypes_tool_definition() -> Json {
+  type_hierarchy_calls_tool_definition(
+    "type_hierarchy_supertypes",
+    "Get supertypes for a `TypeHierarchyItem`. Wraps LSP "
+      <> "`typeHierarchy/supertypes`. Pass the item returned by "
+      <> "`type_hierarchy_prepare` verbatim.",
+  )
+}
+
+fn type_hierarchy_subtypes_tool_definition() -> Json {
+  type_hierarchy_calls_tool_definition(
+    "type_hierarchy_subtypes",
+    "Get subtypes for a `TypeHierarchyItem`. Wraps LSP "
+      <> "`typeHierarchy/subtypes`. Pass the item returned by "
+      <> "`type_hierarchy_prepare` verbatim.",
+  )
+}
+
+fn type_hierarchy_calls_tool_definition(
+  name: String,
+  description: String,
+) -> Json {
+  json.object([
+    #("name", json.string(name)),
+    #("description", json.string(description)),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "item",
+              json.object([
+                #("type", json.string("object")),
+                #(
+                  "description",
+                  json.string(
+                    "A `TypeHierarchyItem` returned by "
+                    <> "`type_hierarchy_prepare`.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #("required", json.preprocessed_array([json.string("item")])),
       ]),
     ),
   ])
