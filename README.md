@@ -12,7 +12,30 @@ Distributed as a single self-contained binary via [Burrito](https://github.com/b
 > Distribution wiring (npm publish + GH release matrix) lands in M13.
 > See [doc/init.md](doc/init.md) for the milestone plan.
 
+## What pharos exposes
+
+Hand-curated MCP tools backed by real LSP analysis. Pharos drives one
+or more language servers per workspace and presents typed tools to the
+LLM. Bundled languages and the tools they back:
+
+| Category | Tools | LSP method backing |
+|----------|-------|---------------------|
+| **read** (12) | `hover`, `goto_definition`, `goto_type_definition`, `goto_implementation`, `find_references`, `document_symbols`, `workspace_symbols`, `signature_help`, `call_hierarchy_prepare`, `call_hierarchy_incoming_calls`, `call_hierarchy_outgoing_calls`, `get_diagnostics` | `textDocument/*` queries |
+| **write** (3) | `rename_preview`, `format_document`, `code_actions` | `textDocument/rename`, `textDocument/formatting`, `textDocument/codeAction` — return `WorkspaceEdit` data, never auto-apply |
+| **debug** (14) | `echo` + every `runtime_*` tool: `runtime_processes`, `runtime_supervision_tree`, `runtime_ets_tables`, `runtime_memory`, `runtime_applications`, `runtime_scheduler_util`, `runtime_pid_info`, `runtime_log_tail`, `runtime_log_clear`, `runtime_log_level`, `runtime_trace_lsp`, `runtime_trace_calls`, `runtime_kill_lsp` | pharos's own BEAM introspection |
+| **raw** (1) | `lsp_request_raw` | any LSP method as escape hatch |
+
+Filter the surface via `tools = [...]` in `pharos.toml` —
+[Tool filter](#tool-filter-tools--).
+
 ## Install
+
+> **Pre-distribution caveat (M10/M13).** npm publish and the GitHub
+> Releases binary matrix are scheduled for M13. The `npx` and direct-
+> download channels below describe the **target UX**; today both
+> resolve to "build from source" (option 3). Once M13 ships the
+> binaries, options 1 and 2 become live without any user-facing
+> change.
 
 Three channels, in order of recommended UX. **All produce the same
 `pharos` binary**; pick whichever fits your workflow.
@@ -113,8 +136,35 @@ Then point your MCP host config at the absolute path:
 
 ### 3. Build from source
 
-See [Development](#development) below. Use this only when iterating on
-pharos itself.
+The path most users take **today** while options 1 and 2 are unfinished.
+Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, rebar3 3.27+ (pinned
+versions in [.tool-versions](.tool-versions); `asdf install` reads them):
+
+```bash
+git clone https://github.com/LoganBresnahan/pharos.git
+cd pharos
+mix archive.install --force github LoganBresnahan/mix_gleam
+mix deps.get
+mix compile
+bin/pharos-dev --doctor       # warm + verify
+```
+
+Then point your MCP host config at the dev wrapper:
+
+```jsonc
+{
+  "mcpServers": {
+    "pharos": {
+      "command": "/absolute/path/to/pharos/bin/pharos-dev"
+    }
+  }
+}
+```
+
+`bin/pharos-dev` runs `mix compile` (silent → stderr) and execs Erlang
+directly so stdout stays reserved for JSON-RPC frames. See
+[Development](#development) for the build-system details and the
+[hpack_erl naming workaround](#build-note-hpack_erl-naming-workaround).
 
 ## Language servers (install separately)
 
