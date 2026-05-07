@@ -43,9 +43,9 @@
     sessions_register/1,
     sessions_lookup/0,
     lsp_proc_subjects_init/0,
-    lsp_proc_subjects_insert/3,
-    lsp_proc_subjects_lookup/2,
-    lsp_proc_subjects_delete/2,
+    lsp_proc_subjects_insert/4,
+    lsp_proc_subjects_lookup/3,
+    lsp_proc_subjects_delete/3,
     register_root_supervisor/1,
     find_root_supervisor/0,
     trace_filter_cache_set/1,
@@ -80,33 +80,38 @@ lsp_proc_subjects_init() ->
     end,
     nil.
 
-lsp_proc_subjects_insert(Language, Workspace, Subject)
-        when is_binary(Language), is_binary(Workspace) ->
+lsp_proc_subjects_insert(Language, Workspace, ServerId, Subject)
+        when is_binary(Language), is_binary(Workspace),
+             is_binary(ServerId) ->
     case ets:info(?LSP_PROC_SUBJECTS_TABLE) of
         undefined -> nil;
         _ ->
             ets:insert(?LSP_PROC_SUBJECTS_TABLE,
-                {{Language, Workspace}, Subject}),
+                {{Language, Workspace, ServerId}, Subject}),
             nil
     end.
 
-lsp_proc_subjects_lookup(Language, Workspace)
-        when is_binary(Language), is_binary(Workspace) ->
+lsp_proc_subjects_lookup(Language, Workspace, ServerId)
+        when is_binary(Language), is_binary(Workspace),
+             is_binary(ServerId) ->
     case ets:info(?LSP_PROC_SUBJECTS_TABLE) of
         undefined -> {error, nil};
         _ ->
-            case ets:lookup(?LSP_PROC_SUBJECTS_TABLE, {Language, Workspace}) of
+            case ets:lookup(?LSP_PROC_SUBJECTS_TABLE,
+                            {Language, Workspace, ServerId}) of
                 [{_Key, Subject}] -> {ok, Subject};
                 [] -> {error, nil}
             end
     end.
 
-lsp_proc_subjects_delete(Language, Workspace)
-        when is_binary(Language), is_binary(Workspace) ->
+lsp_proc_subjects_delete(Language, Workspace, ServerId)
+        when is_binary(Language), is_binary(Workspace),
+             is_binary(ServerId) ->
     case ets:info(?LSP_PROC_SUBJECTS_TABLE) of
         undefined -> nil;
         _ ->
-            ets:delete(?LSP_PROC_SUBJECTS_TABLE, {Language, Workspace}),
+            ets:delete(?LSP_PROC_SUBJECTS_TABLE,
+                       {Language, Workspace, ServerId}),
             nil
     end.
 

@@ -644,10 +644,13 @@ fn runtime_kill_lsp_definition() -> Json {
     #(
       "description",
       json.string(
-        "Terminate one cached LSP worker. Routes through pool so "
-          <> "the next tool call re-spawns transparently — use when "
-          <> "an LSP appears stuck. Cannot kill anything other than "
-          <> "the supervised LSP workers.",
+        "Terminate cached LSP worker(s). Routes through pool so the "
+          <> "next tool call re-spawns transparently — use when an "
+          <> "LSP appears stuck. Cannot kill anything other than the "
+          <> "supervised LSP workers. Pass `server_id` to target one "
+          <> "specific server when a language has multiple (per "
+          <> "ADR-019). Omit `server_id` to kill every server cached "
+          <> "for the (language, workspace) pair.",
       ),
     ),
     #(
@@ -677,6 +680,20 @@ fn runtime_kill_lsp_definition() -> Json {
                 ),
               ]),
             ),
+            #(
+              "server_id",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "Optional. Per-language server id (e.g. `pyright`, "
+                      <> "`ruff`). Omit to kill every server cached for "
+                      <> "the language+workspace pair.",
+                  ),
+                ),
+              ]),
+            ),
           ]),
         ),
         #(
@@ -691,14 +708,28 @@ fn runtime_kill_lsp_definition() -> Json {
 fn handle_kill_lsp(pool: Pool, args: Option(Dynamic)) -> ToolResult {
   use language <- result.try(decode_string_field(args, "language"))
   use workspace <- result.try(decode_string_field(args, "workspace"))
-  case pool.kill_lsp(pool, language, workspace) {
-    pool.Killed ->
+  // Optional server_id arg (ADR-019 Stage 2): when present, kill that
+  // one server. Empty string (the default) kills every server cached
+  // for (language, workspace) — back-compat with single-server
+  // languages where callers never thought about server_id.
+  use server_id <- result.try(decode_string_field_default(
+    args,
+    "server_id",
+    "",
+  ))
+  case pool.kill_lsp(pool, language, workspace, server_id) {
+    pool.Killed(count) ->
       Ok(
-        "{\"killed\":true,\"language\":\""
+        "{\"killed\":true,\"count\":"
+          <> int.to_string(count)
+          <> ",\"language\":\""
           <> language
           <> "\",\"workspace\":\""
           <> workspace
-          <> "\"}",
+          <> case server_id {
+            "" -> "\"}"
+            s -> "\",\"server_id\":\"" <> s <> "\"}"
+          },
       )
     pool.NotFound ->
       Ok(
@@ -706,6 +737,10 @@ fn handle_kill_lsp(pool: Pool, args: Option(Dynamic)) -> ToolResult {
           <> language
           <> ", "
           <> workspace
+          <> case server_id {
+            "" -> ""
+            s -> ", " <> s
+          }
           <> ")\"}",
       )
   }

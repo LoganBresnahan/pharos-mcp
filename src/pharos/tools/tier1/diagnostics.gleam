@@ -149,7 +149,7 @@ fn evict_for_uri(
         languages.CargoWorkspacePromotion ->
           workspace_root.promote_to_cargo_workspace(raw_workspace)
       }
-      pool.evict(pool, config.id, workspace)
+      pool.evict_all_servers(pool, config.id, workspace)
     }
   }
 }

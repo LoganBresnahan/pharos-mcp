@@ -123,7 +123,7 @@ fn retry_after_evict(
         Error(err) -> Error(RetrySessionError(err))
         Ok(raw_workspace) -> {
           let workspace = promote_root(raw_workspace, config)
-          pool.evict(pool, config.id, workspace)
+          pool.evict_all_servers(pool, config.id, workspace)
           case prepare(pool, file_uri) {
             Error(err) -> Error(RetrySessionError(err))
             Ok(lsp) ->
@@ -224,7 +224,7 @@ fn retry_workspace_for_language_after_evict(
         Error(err) -> Error(RetrySessionError(err))
         Ok(raw_workspace) -> {
           let workspace = promote_root(raw_workspace, config)
-          pool.evict(pool, config.id, workspace)
+          pool.evict_all_servers(pool, config.id, workspace)
           case prepare_workspace_for_language(pool, language, workspace_uri_hint) {
             Error(err) -> Error(RetrySessionError(err))
             Ok(lsp) ->
@@ -250,7 +250,7 @@ fn retry_workspace_after_evict(
         Error(err) -> Error(RetrySessionError(err))
         Ok(raw_workspace) -> {
           let workspace = promote_root(raw_workspace, config)
-          pool.evict(pool, config.id, workspace)
+          pool.evict_all_servers(pool, config.id, workspace)
           case prepare_workspace(pool, workspace_uri_hint) {
             Error(err) -> Error(RetrySessionError(err))
             Ok(lsp) ->
@@ -400,6 +400,7 @@ fn get_lsp(
     Ok(server) -> {
       let spec =
         pool.SpawnSpec(
+          server_id: server.id,
           command: server.command,
           args: server.args,
           init_params: build_initialize_params(workspace, config, server),
@@ -623,11 +624,19 @@ fn ensure_doc_opened(
           case bit_array.to_string(content_bytes) {
             Error(_) -> Nil
             Ok(text) -> {
+              // Stage 2 of ADR-019: ensure_open targets the primary
+              // server explicitly. Stage 3 will fan out didOpen
+              // across every server scoped to handle the document.
+              let server_id = case languages.primary_server(config) {
+                Ok(server) -> server.id
+                Error(_) -> config.id
+              }
               let _ =
                 pool.ensure_open(
                   pool,
                   config.id,
                   workspace,
+                  server_id,
                   file_uri,
                   config.id,
                   text,

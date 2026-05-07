@@ -199,6 +199,7 @@ pub fn start(
 pub fn start_link_supervised(
   language: String,
   workspace: String,
+  server_id: String,
   command: String,
   args: List(String),
   init_params: Json,
@@ -221,7 +222,7 @@ pub fn start_link_supervised(
     Ok(handle) -> {
       let Proc(subject) = handle
       let p = pid(handle)
-      lsp_proc_subjects_insert(language, workspace, subject)
+      lsp_proc_subjects_insert(language, workspace, server_id, subject)
       Ok(p)
     }
   }
@@ -257,24 +258,31 @@ fn describe_start_error(err: StartError) -> String {
 fn lsp_proc_subjects_insert(
   language: String,
   workspace: String,
+  server_id: String,
   subject: Subject(Msg),
 ) -> Nil
 
-/// Remove the ETS bridge row for `(language, workspace)`. Called
-/// by pool's evict / kill_lsp paths after `proc.close` so the
+/// Remove the ETS bridge row for
+/// `(language, workspace, server_id)`. Called by pool's evict /
+/// kill_lsp paths after `proc.close` so the
 /// `pharos_lsp_proc_subjects` table does not retain a stale
 /// Subject pointing at a closed worker. No-op when the row is
 /// already absent.
 @external(erlang, "pharos_runtime_ffi", "lsp_proc_subjects_delete")
-pub fn forget_subject(language: String, workspace: String) -> Nil
+pub fn forget_subject(
+  language: String,
+  workspace: String,
+  server_id: String,
+) -> Nil
 
-/// Read the ETS bridge row for `(language, workspace)`. Pool
-/// reads via this on cache-miss to recover from a supervisor-
+/// Read the ETS bridge row for `(language, workspace, server_id)`.
+/// Pool reads via this on cache-miss to recover from a supervisor-
 /// driven restart that overwrote the row with a new Subject.
 @external(erlang, "pharos_runtime_ffi", "lsp_proc_subjects_lookup")
 pub fn recover_subject(
   language: String,
   workspace: String,
+  server_id: String,
 ) -> Result(Subject(Msg), Nil)
 
 fn describe_client_error(err: client.Error) -> String {
