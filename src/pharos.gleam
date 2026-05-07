@@ -32,6 +32,7 @@ import pharos/lsp/diagnostics_cache
 import pharos/lsp/dyn_sup
 import pharos/lsp/inflight
 import pharos/lsp/registry
+import pharos/mcp/request_workers
 import pharos/supervisor as root_supervisor
 
 const server_version: String = "0.0.1"
@@ -95,6 +96,7 @@ fn do_boot() -> Result(Pid, String) {
   diagnostics_cache.init()
   registry.init()
   inflight.init()
+  request_workers.init()
   dyn_sup.init_subjects_bridge()
 
   let supervisor_config =

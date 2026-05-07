@@ -38,6 +38,11 @@
     inflight_lookup/1,
     inflight_delete/1,
     inflight_size/0,
+    request_workers_init/0,
+    request_workers_insert/2,
+    request_workers_lookup/1,
+    request_workers_delete/1,
+    request_workers_size/0,
     pool_register/1,
     pool_lookup/0,
     sessions_register/1,
@@ -185,6 +190,61 @@ inflight_delete(McpId) when is_binary(McpId) ->
 
 inflight_size() ->
     case ets:info(?INFLIGHT_TABLE, size) of
+        undefined -> 0;
+        N -> N
+    end.
+
+%% ETS-backed MCP request worker tracker (M10 cancel worker, ADR-016
+%% follow-up). Keyed by MCP request id. Value: worker process pid.
+%% Populated by `pharos@stdio_worker` immediately before handing the
+%% request line to a freshly-spawned dispatcher process; deleted by
+%% the dispatcher itself in its `after` block. The cancel handler
+%% reads this table to kill the in-flight worker via
+%% `process.send_exit/2` so a stdio cancel arriving while the LSP
+%% request is still outstanding short-circuits the wait.
+-define(REQUEST_WORKERS_TABLE, pharos_request_workers).
+
+request_workers_init() ->
+    case ets:info(?REQUEST_WORKERS_TABLE) of
+        undefined ->
+            ets:new(?REQUEST_WORKERS_TABLE, [
+                named_table, public, set,
+                {read_concurrency, true},
+                {write_concurrency, true}
+            ]);
+        _ -> ?REQUEST_WORKERS_TABLE
+    end,
+    nil.
+
+request_workers_insert(McpId, WorkerPid)
+        when is_binary(McpId), is_pid(WorkerPid) ->
+    case ets:info(?REQUEST_WORKERS_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:insert(?REQUEST_WORKERS_TABLE, {McpId, WorkerPid}),
+            nil
+    end.
+
+request_workers_lookup(McpId) when is_binary(McpId) ->
+    case ets:info(?REQUEST_WORKERS_TABLE) of
+        undefined -> {error, nil};
+        _ ->
+            case ets:lookup(?REQUEST_WORKERS_TABLE, McpId) of
+                [{McpId, WorkerPid}] -> {ok, WorkerPid};
+                [] -> {error, nil}
+            end
+    end.
+
+request_workers_delete(McpId) when is_binary(McpId) ->
+    case ets:info(?REQUEST_WORKERS_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:delete(?REQUEST_WORKERS_TABLE, McpId),
+            nil
+    end.
+
+request_workers_size() ->
+    case ets:info(?REQUEST_WORKERS_TABLE, size) of
         undefined -> 0;
         N -> N
     end.

@@ -10,6 +10,7 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/int
 import gleam/json.{type Json}
 import gleam/list
@@ -20,6 +21,7 @@ import pharos/lsp/inflight
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/mcp/content_block
+import pharos/mcp/request_workers
 import pharos/tools/tier1/diagnostics
 import pharos/tools/tier1/document_symbols
 import pharos/tools/tier1/find_references
@@ -128,11 +130,28 @@ fn id_to_text(id: Id) -> String {
   }
 }
 
-/// Handle MCP `notifications/cancelled` (ADR-016). Look up the
-/// cancelled MCP id in the inflight table; on hit, send
-/// `$/cancelRequest` via the matched proc actor for the matched
-/// LSP id. On miss, the request has already completed (stdio's
-/// blocking dispatcher) or never tracked; logged either way.
+/// Handle MCP `notifications/cancelled` (ADR-016 + M10 async
+/// dispatch). Cancellation is two-pronged:
+///
+///   1. **LSP side.** Look up the in-flight LSP request id in the
+///      `pharos_inflight` table and emit `$/cancelRequest` to the
+///      handling proc. Lets the LSP short-circuit work pharos no
+///      longer needs.
+///   2. **MCP-worker side (M10).** Look up the dispatcher process
+///      pid in `pharos_request_workers` and send it an exit signal
+///      so the dispatcher's blocking receive on the LSP response
+///      short-circuits even when the LSP itself ignores
+///      `$/cancelRequest`. Spec-legal — MCP says the server SHOULD
+///      stop processing and SHOULD NOT respond to the cancelled
+///      request; killing the worker drops the pending response on
+///      the floor.
+///
+/// Both lookups are independent. A miss on either is normal: stdio
+/// before the async refactor never populated the worker table; HTTP
+/// transport runs each request on its mist connection process and
+/// doesn't go through `pharos_request_workers`. The cancel handler
+/// logs each branch's outcome so dogfood can confirm both paths
+/// fire.
 fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
   let id_text = case params {
     None -> "<no params>"
@@ -148,24 +167,44 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
         "pharos/mcp/server",
         "notifications/cancelled with malformed/missing requestId",
       )
-    cid ->
+    cid -> {
+      // (1) LSP-side cancel.
       case inflight.lookup(cid) {
         Error(_) ->
           log.info_at(
             "pharos/mcp/server",
-            "notifications/cancelled id=" <> cid
-              <> " (no in-flight match; request already completed or untracked)",
+            "notifications/cancelled id="
+              <> cid
+              <> " (no in-flight LSP request; already completed or untracked)",
           )
         Ok(#(proc_subject_dynamic, lsp_id)) -> {
           log.info_at(
             "pharos/mcp/server",
             "notifications/cancelled id=" <> cid
-              <> " → forwarding $/cancelRequest for lsp_id=" <> int.to_string(lsp_id),
+              <> " → forwarding $/cancelRequest for lsp_id="
+              <> int.to_string(lsp_id),
           )
           proc.cancel_by_dynamic_subject(proc_subject_dynamic, lsp_id)
-          Nil
         }
       }
+
+      // (2) MCP-worker-side cancel — kill the stdio dispatcher
+      // process so the blocking receive returns immediately.
+      case request_workers.lookup(cid) {
+        Error(_) -> Nil
+        Ok(worker_pid) -> {
+          log.info_at(
+            "pharos/mcp/server",
+            "notifications/cancelled id=" <> cid
+              <> " → killing dispatcher worker",
+          )
+          process.send_exit(worker_pid)
+          // Worker died mid-execution — its `request_workers.delete`
+          // cleanup never ran. Do it here so the table doesn't leak.
+          request_workers.delete(cid)
+        }
+      }
+    }
   }
 }
 
