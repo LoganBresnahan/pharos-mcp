@@ -95,10 +95,11 @@ pub fn route_strategy_for_method(method: String) -> RouteStrategy {
   }
 }
 
-/// Pick every server whose `MethodScope` covers `method`. List
-/// preserves declaration order so the tool layer can pick the first
-/// for `Primary` strategy without re-ranking. Empty list means no
-/// configured server claims the method.
+/// Pick every server whose `MethodScope` covers `method`, with the
+/// **Primary** routing rule applied: `Only`-scope matches win, and
+/// `All`-scope is consulted only as a fallback when no `Only`
+/// matches. Used by `Primary` and `FanOut` strategies — the former
+/// picks `head`, the latter consumes the whole list.
 pub fn servers_for_method(
   config: LanguageConfig,
   method: String,
@@ -120,6 +121,24 @@ pub fn servers_for_method(
       })
     _ -> only_servers
   }
+}
+
+/// Pick every server whose scope **could** answer `method` — both
+/// `Only`-with-match servers AND every `All`-scope server. Unlike
+/// `servers_for_method/2`, this does NOT prefer `Only` over `All`:
+/// when a language has both, both contribute. Used by `Merge`
+/// strategy methods (`textDocument/diagnostic`) where every
+/// claiming server's items concatenate into one response.
+pub fn servers_covering_method(
+  config: LanguageConfig,
+  method: String,
+) -> List(ServerConfig) {
+  list.filter(config.servers, fn(server) {
+    case server.methods {
+      All -> True
+      Only(methods) -> list.any(methods, fn(m) { m == method })
+    }
+  })
 }
 
 /// Pick the single server that should answer `method` under the

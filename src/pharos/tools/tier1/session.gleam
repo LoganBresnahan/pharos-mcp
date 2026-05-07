@@ -416,16 +416,68 @@ pub fn prepare_for_method(
   }
 }
 
-/// Prepare every Proc whose server scope covers `method`. Used by
-/// tools dispatching with `Merge` or `FanOut` strategy
-/// (`textDocument/diagnostic`, `textDocument/codeAction`). Spawn
-/// failures for individual servers are warn-logged and skipped — the
-/// caller gets the surviving subset so a missing ruff binary doesn't
-/// hide pyright's diagnostics.
+/// Prepare every Proc whose server scope is **preferred** for
+/// `method` — Only-first-then-All. Used by `FanOut` strategy
+/// (`textDocument/codeAction`). Spawn failures for individual
+/// servers are warn-logged and skipped — the caller gets the
+/// surviving subset so a missing ruff binary doesn't hide pyright's
+/// contribution.
 pub fn prepare_all_for_method(
   pool: Pool,
   file_uri: String,
   method: String,
+) -> Result(List(#(String, Proc)), SessionError) {
+  prepare_all_with_selector(pool, file_uri, method, fn(c, m) {
+    languages.servers_for_method(c, m)
+  })
+}
+
+/// Prepare every Proc whose scope **covers** `method` — both
+/// Only-with-match AND every All-scope server. Used by `Merge`
+/// strategy (`textDocument/diagnostic`) where each claiming server
+/// contributes a subset of items to the merged response. Returns
+/// `(server_config, proc)` pairs so callers can read per-server
+/// metadata (e.g. `diagnostics_mode`) without re-looking up the
+/// language config.
+pub fn prepare_all_covering_method(
+  pool: Pool,
+  file_uri: String,
+  method: String,
+) -> Result(List(#(languages.ServerConfig, Proc)), SessionError) {
+  use config <- result.try(lookup_config(file_uri))
+  use raw_workspace <- result.try(discover_workspace(
+    file_uri,
+    config.root_markers,
+  ))
+  let workspace = promote_root(raw_workspace, config)
+  let servers = languages.servers_covering_method(config, method)
+  let prepared =
+    list.filter_map(servers, fn(server) {
+      let _ = ensure_doc_opened(pool, config, workspace, file_uri)
+      case get_lsp_for_server(pool, config, workspace, server) {
+        Ok(proc) -> Ok(#(server, proc))
+        Error(err) -> {
+          log.warn_at(
+            "pharos/tools/tier1/session",
+            "skipping server `"
+              <> server.id
+              <> "` for method `"
+              <> method
+              <> "`: "
+              <> describe_session_error(err),
+          )
+          Error(Nil)
+        }
+      }
+    })
+  Ok(prepared)
+}
+
+fn prepare_all_with_selector(
+  pool: Pool,
+  file_uri: String,
+  method: String,
+  select_servers: fn(LanguageConfig, String) -> List(languages.ServerConfig),
 ) -> Result(List(#(String, Proc)), SessionError) {
   use config <- result.try(lookup_config(file_uri))
   use raw_workspace <- result.try(discover_workspace(
@@ -433,7 +485,7 @@ pub fn prepare_all_for_method(
     config.root_markers,
   ))
   let workspace = promote_root(raw_workspace, config)
-  let servers = languages.servers_for_method(config, method)
+  let servers = select_servers(config, method)
   let prepared =
     list.filter_map(servers, fn(server) {
       let _ = ensure_doc_opened(pool, config, workspace, file_uri)
