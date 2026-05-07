@@ -294,16 +294,121 @@ scenario_port_file() {
 }
 
 # -----------------------------------------------------------------------
+# Scenario 6 — Bundled python registers two servers (ADR-019 Stage 3).
+#
+# With no override, --doctor should list python/pyright AND python/ruff.
+# Confirms the bundled multi-server default survived through registry
+# init + persistent_term storage.
+
+scenario_bundled_python_dual() {
+  local out
+  out=$(run_doctor "")
+
+  local has_pyright=0
+  local has_ruff=0
+  printf '%s\n' "$out" | grep -qE '^python/pyright' && has_pyright=1
+  printf '%s\n' "$out" | grep -qE '^python/ruff' && has_ruff=1
+
+  if [ "$has_pyright" -eq 1 ] && [ "$has_ruff" -eq 1 ]; then
+    pass "bundled_python_dual (pyright + ruff both registered)"
+  else
+    fail "bundled_python_dual" \
+      "expected both python/pyright and python/ruff in registry; got pyright=$has_pyright ruff=$has_ruff"
+  fi
+}
+
+# -----------------------------------------------------------------------
+# Scenario 7 — AoT override appends a new server.
+#
+# pharos.toml with [[languages.python.servers]] adding "mypy" should
+# see a third python server in the registry without disturbing pyright
+# and ruff.
+
+scenario_aot_override() {
+  local toml="$TMP_ROOT/aot.toml"
+  cat > "$toml" <<'EOF'
+[[languages.python.servers]]
+id = "mypy"
+command = "mypy"
+args = ["--strict"]
+methods = ["textDocument/diagnostic"]
+EOF
+
+  local out
+  out=$(run_doctor "" PHAROS_CONFIG_FILE="$toml")
+
+  local has_pyright=0
+  local has_ruff=0
+  local has_mypy=0
+  printf '%s\n' "$out" | grep -qE '^python/pyright' && has_pyright=1
+  printf '%s\n' "$out" | grep -qE '^python/ruff' && has_ruff=1
+  printf '%s\n' "$out" | grep -qE '^python/mypy' && has_mypy=1
+
+  if [ "$has_pyright" -eq 1 ] && [ "$has_ruff" -eq 1 ] && [ "$has_mypy" -eq 1 ]; then
+    pass "aot_override (pyright + ruff + mypy all registered)"
+  else
+    fail "aot_override" \
+      "expected pyright + ruff + mypy in registry; got pyright=$has_pyright ruff=$has_ruff mypy=$has_mypy"
+  fi
+}
+
+# -----------------------------------------------------------------------
+# Scenario 8 — AoT override patches a non-primary server.
+#
+# pharos.toml with [[languages.python.servers]] id="ruff" command="..."
+# should patch ruff's command in the registry while leaving pyright
+# untouched.
+
+scenario_aot_patch_secondary() {
+  local toml="$TMP_ROOT/aot-patch.toml"
+  local custom_ruff="/opt/sentinel/custom-ruff-build"
+  cat > "$toml" <<EOF
+[[languages.python.servers]]
+id = "ruff"
+command = "$custom_ruff"
+EOF
+
+  local out
+  out=$(run_doctor "" PHAROS_CONFIG_FILE="$toml")
+
+  # ruff line should mention the sentinel path; pyright line should be
+  # unchanged.
+  local ruff_line
+  ruff_line=$(printf '%s\n' "$out" | grep -E '^python/ruff' || echo "")
+  local pyright_line
+  pyright_line=$(printf '%s\n' "$out" | grep -E '^python/pyright' || echo "")
+
+  if [[ "$ruff_line" == *"$custom_ruff"* ]] \
+    && [[ "$pyright_line" == *"pyright-langserver"* ]]; then
+    pass "aot_patch_secondary (ruff patched, pyright untouched)"
+  else
+    fail "aot_patch_secondary" \
+      "ruff line: $ruff_line; pyright line: $pyright_line"
+  fi
+}
+
+# -----------------------------------------------------------------------
 # Driver
 
-scenarios=(override env_matrix toml_precedence port_file)
+scenarios=(
+  override
+  env_matrix
+  toml_precedence
+  port_file
+  bundled_python_dual
+  aot_override
+  aot_patch_secondary
+)
 
 run_scenario() {
   case "$1" in
-    override)        scenario_override ;;
-    env_matrix)      scenario_env_matrix ;;
-    toml_precedence) scenario_toml_precedence ;;
-    port_file)       scenario_port_file ;;
+    override)             scenario_override ;;
+    env_matrix)           scenario_env_matrix ;;
+    toml_precedence)      scenario_toml_precedence ;;
+    port_file)            scenario_port_file ;;
+    bundled_python_dual)  scenario_bundled_python_dual ;;
+    aot_override)         scenario_aot_override ;;
+    aot_patch_secondary)  scenario_aot_patch_secondary ;;
     *)
       printf 'unknown scenario: %s\n' "$1" >&2
       printf 'available: %s\n' "${scenarios[*]}" >&2
