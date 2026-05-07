@@ -98,6 +98,84 @@ Verifies the ETS bridge + simple_one_for_one supervisor wiring.
 | 7.1 | `runtime_trace_lsp` short window during a hover | returns trace events |
 | 7.2 | `runtime_trace_calls` mfa=`pharos@lsp@proc:request/3` short window | returns trace events |
 
+## Phase 8 — apply_workspace_edit (M11)
+
+Verifies the WorkspaceEdit-to-disk path: dry-run reports byte deltas without
+writing, real apply writes atomically, overlap detection rejects bad edits.
+Use a scratch file outside the test workspaces so accidental writes don't
+contaminate later phases.
+
+| # | Tool | Pass criterion |
+|---|------|----------------|
+| 8.1 | Create `/tmp/awe-scratch.txt` with `hello world` | precondition |
+| 8.2 | `apply_workspace_edit` edit=`{changes:{file:///tmp/awe-scratch.txt:[{range 0:6-0:11, "WORLD"}]}}` dry_run=true | summary shows 11→11 bytes; file unchanged |
+| 8.3 | Same edit dry_run=false | file now contains `hello WORLD`; atomic rename happened |
+| 8.4 | Two overlapping edits in one file (e.g. 0:0-0:5 + 0:3-0:8) | error response mentions overlap; file unchanged |
+| 8.5 | Edit pointing past EOF | error response surfaces position-out-of-range; file unchanged |
+| 8.6 | `documentChanges` form (not `changes`) with one TextDocumentEdit | applies same as 8.3 |
+
+## Phase 9 — inlay_hints (M11)
+
+| # | Tool | Pass criterion |
+|---|------|----------------|
+| 9.1 | `inlay_hints` rust on `src/main.rs` range covering `let p = new_point(...)` | returns ≥ 1 hint with `kind=1` (Type) labelling `Point` |
+| 9.2 | `inlay_hints` python on `main.py` range covering full file | returns hints OR `[]` (pyright config-dependent — both acceptable) |
+| 9.3 | `inlay_hints` typescript on `src/index.ts` | returns hints OR `[]` |
+
+## Phase 10 — semantic_tokens (M11)
+
+| # | Tool | Pass criterion |
+|---|------|----------------|
+| 10.1 | `semantic_tokens` rust on `src/main.rs` (full document, range omitted) | non-empty `data` array; length divisible by 5 |
+| 10.2 | `semantic_tokens` rust same file with explicit range covering one fn | smaller `data` array than 10.1 |
+| 10.3 | `semantic_tokens` python | non-empty OR error if pyright doesn't advertise capability |
+
+## Phase 11 — type_hierarchy (M11)
+
+Rust-only — gopls / tsserver return `-32601 Method not found` for these.
+
+| # | Tool | Pass criterion |
+|---|------|----------------|
+| 11.1 | `type_hierarchy_prepare` rust at `Greet` trait declaration | returns ≥ 1 `TypeHierarchyItem` named `Greet` |
+| 11.2 | `type_hierarchy_subtypes` on the prepared item | returns the `Point` impl (or any concrete impl) |
+| 11.3 | `type_hierarchy_supertypes` on a `Point` item | empty array OR built-in supertypes (rust-analyzer-dependent) |
+
+## Phase 12 — trace ring under load (M11 fix verification)
+
+Verifies the trace producer's direct-ring write bypasses the writer's
+mailbox cap; a burst of LSP traffic should NOT collapse into a single
+`dropped=N` warn.
+
+| # | Tool | Pass criterion |
+|---|------|----------------|
+| 12.1 | `runtime_log_clear` | accepts |
+| 12.2 | `runtime_log_level` target=`pharos/lsp/trace` level=`debug` | accepts |
+| 12.3 | Burst — fire `find_references` rust on `Point` (high-volume call) | request completes |
+| 12.4 | `runtime_log_tail` n=500 filter=`lsp wire` | ≥ 100 trace lines (NOT a single `dropped=N` warn) |
+| 12.5 | `runtime_log_level` target=`pharos/lsp/trace` level=`off` | reset |
+
+## Phase 13 — multi-server diagnostics cache (M11 rekey)
+
+Python language has pyright + ruff bundled; both emit publishDiagnostics
+for the same file. The (uri, server_id) cache rekey lets the merge path
+hit cache per server instead of one server's items overwriting the other.
+
+| # | Tool | Pass criterion |
+|---|------|----------------|
+| 13.1 | `get_diagnostics` python on `main.py` (cold) | merged items: at least one pyright type-error AND one ruff lint warning |
+| 13.2 | `get_diagnostics` python same file (warm) | same payload, served from cache (faster) |
+| 13.3 | `runtime_ets_tables` filter=`pharos_diagnostics_cache` | ≥ 2 rows for python URI (one per server_id) |
+
+## Phase 14 — stdio under held-stdin (M11 fix)
+
+Implicitly verified by the fact that the MCP host reconnect now succeeds
+(see commit e857dce). Spot-check via:
+
+| # | Tool | Pass criterion |
+|---|------|----------------|
+| 14.1 | Issue several rapid tool calls back-to-back through the MCP host | every response returns; no buffering stalls |
+| 14.2 | `runtime_log_tail` filter=`stdio_worker` | no `Actor discarding unexpected message` warnings |
+
 ## Results log
 
 Run 1: 2026-05-06 (initial dogfood — defects + limitations identified).

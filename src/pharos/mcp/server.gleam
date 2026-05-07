@@ -1591,6 +1591,11 @@ fn call_hierarchy_calls_tool_definition(
             #(
               "item",
               json.object([
+                // `type: "object"` is load-bearing here — without it
+                // some MCP hosts (Claude Code) JSON-stringify the
+                // argument before sending, which breaks the
+                // server-side round-trip back to LSP.
+                #("type", json.string("object")),
                 #(
                   "description",
                   json.string(
@@ -2160,6 +2165,10 @@ fn lsp_request_raw_tool_definition() -> Json {
             #(
               "params",
               json.object([
+                // `type: "object"` so MCP hosts forward the value
+                // as a structured object instead of JSON-stringifying
+                // it (Claude Code's behaviour without this hint).
+                #("type", json.string("object")),
                 #(
                   "description",
                   json.string(
@@ -2390,7 +2399,7 @@ fn decode_call_hierarchy_item_arguments(
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use item <- decode.field("item", decode.dynamic)
-    decode.success(item)
+    decode.success(unstringify_if_needed(item))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
@@ -2455,7 +2464,7 @@ fn decode_apply_workspace_edit_arguments(
   let decoder = {
     use edit <- decode.field("edit", decode.dynamic)
     use dry_run <- decode.optional_field("dry_run", True, decode.bool)
-    decode.success(#(edit, dry_run))
+    decode.success(#(unstringify_if_needed(edit), dry_run))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
@@ -2471,12 +2480,33 @@ fn decode_lsp_request_raw_arguments(
     use uri <- decode.field("uri", decode.string)
     use method <- decode.field("method", decode.string)
     use params <- decode.field("params", decode.dynamic)
-    decode.success(#(uri, method, params))
+    decode.success(#(uri, method, unstringify_if_needed(params)))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
     "expected `uri: string`, `method: string`, `params: any`"
   })
+}
+
+/// Some MCP hosts (Claude Code at the time of writing) JSON-stringify
+/// object-typed tool arguments before sending them, especially when
+/// the inputSchema property does not declare `type: "object"`. The
+/// receiving end then sees a string Dynamic where the tool expects a
+/// structured value, and any field decoder against it errors with
+/// "missing field". This helper sniffs that case: if the Dynamic
+/// happens to be a string AND the string parses as JSON, the parsed
+/// value replaces the original; otherwise the original Dynamic
+/// passes through unchanged. Belt-and-suspenders fix alongside
+/// `type: "object"` schema hints in tool definitions.
+fn unstringify_if_needed(value: Dynamic) -> Dynamic {
+  case decode.run(value, decode.string) {
+    Error(_) -> value
+    Ok(text) ->
+      case json.parse(text, decode.dynamic) {
+        Ok(parsed) -> parsed
+        Error(_) -> value
+      }
+  }
 }
 
 fn decode_workspace_symbols_arguments(
