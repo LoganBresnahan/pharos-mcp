@@ -390,26 +390,37 @@ fn get_lsp(
   config: LanguageConfig,
   workspace: String,
 ) -> Result(Proc, SessionError) {
-  let spec =
-    pool.SpawnSpec(
-      command: config.command,
-      args: config.args,
-      init_params: build_initialize_params(workspace, config),
-      workspace_configuration: config.workspace_configuration,
-      readiness_token: config.readiness_token,
-      readiness_timeout_ms: readiness_timeout_ms,
-    )
-  pool.get(pool, config.id, workspace, spec)
-  |> result.map_error(fn(err) {
-    case err {
-      pool.ProcStartFailed(reason) -> SpawnFailed(reason)
+  case languages.primary_server(config) {
+    Error(_) ->
+      Error(SpawnFailed(
+        "language `"
+          <> config.id
+          <> "` has no servers configured (check pharos.toml)",
+      ))
+    Ok(server) -> {
+      let spec =
+        pool.SpawnSpec(
+          command: server.command,
+          args: server.args,
+          init_params: build_initialize_params(workspace, config, server),
+          workspace_configuration: server.workspace_configuration,
+          readiness_token: server.readiness_token,
+          readiness_timeout_ms: readiness_timeout_ms,
+        )
+      pool.get(pool, config.id, workspace, spec)
+      |> result.map_error(fn(err) {
+        case err {
+          pool.ProcStartFailed(reason) -> SpawnFailed(reason)
+        }
+      })
     }
-  })
+  }
 }
 
 fn build_initialize_params(
   workspace_path: String,
-  config: LanguageConfig,
+  _config: LanguageConfig,
+  server: languages.ServerConfig,
 ) -> json.Json {
   let root_uri = workspace_root.path_to_uri(workspace_path)
   json.object([
@@ -424,7 +435,7 @@ fn build_initialize_params(
         #("version", json.string("0.0.1")),
       ]),
     ),
-    #("initializationOptions", config.initialization_options),
+    #("initializationOptions", server.initialization_options),
   ])
 }
 

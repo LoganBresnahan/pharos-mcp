@@ -1,21 +1,21 @@
-//// Language registry — maps a file URI to the LSP we should drive.
+//// Language registry — maps a file URI to one or more LSP servers
+//// pharos should drive for that file's language.
 ////
-//// The bridge supports an unbounded set of languages by holding a
-//// table of `LanguageConfig` records, one per language we know how
-//// to launch. `for_uri/2` picks a config based on file extension;
-//// `default_registry/0` ships a sensible bundle covering Rust, Go,
-//// TypeScript/JavaScript, and Python.
+//// Every language carries a list of `ServerConfig` entries. Today
+//// (Stage 1 of ADR-019) every bundled language ships with a single
+//// server in that list; Stage 3 will add ruff alongside pyright for
+//// python so methods route per-server. The single-server form
+//// (`languages.rust = pyright`, etc.) is the canonical shape for
+//// languages whose ecosystem provides one capable server.
 ////
-//// `command` is the path to the LSP server binary. v0.1 hardcodes
-//// absolute paths matching the developer's local install — cleaner
-//// PATH lookup via `os:find_executable/1` will land in a later
-//// milestone, alongside user-provided overrides via config file.
+//// `MethodScope` declares which LSP methods a server handles:
+////   - `All` — every textDocument/* and workspace/* method (the
+////     "main" LSP per language).
+////   - `Only(methods)` — explicit list. Used to layer formatters or
+////     linters on top of the main server (ruff over pyright).
 ////
-//// initialization_options is server-defined per LSP spec — each
-//// upstream documents its own shape. The defaults here surface the
-//// settings most consumers want without forcing them to read
-//// upstream docs (e.g. rust-analyzer's `checkOnSave`, gopls's
-//// `usePlaceholders`).
+//// Per-method routing strategy (Primary / Merge / FanOut) lives in
+//// the tool dispatch layer and lands in Stage 3.
 
 import gleam/dict.{type Dict}
 import gleam/json.{type Json}
@@ -31,7 +31,7 @@ pub type DiagnosticsMode {
   /// it cares about. Used by rust-analyzer, gopls, pyright.
   Push
   /// Server only responds to explicit `textDocument/diagnostic`
-  /// requests (LSP 3.17+). Used by typescript-language-server.
+  /// requests (LSP 3.17+). Used by typescript-language-server, ruff.
   Pull
 }
 
@@ -50,49 +50,73 @@ pub type RootPromotion {
   CargoWorkspacePromotion
 }
 
+/// Method-scope declaration: which LSP methods a server handles.
+/// Used by the tool dispatch layer (Stage 3) to pick which server
+/// to call for a given request.
+pub type MethodScope {
+  /// Server handles every textDocument/* and workspace/* method.
+  /// Used for the "main" LSP per language (rust-analyzer, gopls,
+  /// pyright, etc.).
+  All
+  /// Server handles only the listed method names. Used to layer a
+  /// formatter or linter on top of the main server (e.g. ruff
+  /// declares `Only(["textDocument/formatting", ...])` so its
+  /// formatter wins over pyright's `-32601`).
+  Only(methods: List(String))
+}
+
+/// A single LSP server pharos can spawn. One language may have
+/// several. Per ADR-019.
+pub type ServerConfig {
+  ServerConfig(
+    /// Unique within the language — e.g. `"rust-analyzer"` for the
+    /// rust primary, `"ruff"` for the python linter overlay. Used
+    /// by the pool as part of the cache key (Stage 2) and by tools
+    /// that name a specific server (`runtime_kill_lsp`, etc.).
+    id: String,
+    /// Path to the LSP server executable (or bare name resolved
+    /// via PATH). Per ADR-018.
+    command: String,
+    /// CLI args. Some servers (typescript-language-server, pyright)
+    /// require `--stdio`.
+    args: List(String),
+    /// Server-specific `initializationOptions` payload.
+    initialization_options: Json,
+    /// Settings sent post-`initialized` via
+    /// `workspace/didChangeConfiguration`, AND used by the
+    /// `workspace/configuration` server-request handler. `None`
+    /// means no configuration push.
+    workspace_configuration: Option(Dict(String, Json)),
+    /// Which LSP methods this server handles. Drives per-method
+    /// routing in the tool dispatch layer (Stage 3).
+    methods: MethodScope,
+    /// Diagnostics delivery mode for this server.
+    diagnostics_mode: DiagnosticsMode,
+    /// `$/progress` token name the server emits during readiness
+    /// work (typically initial indexing). `None` skips the wait.
+    readiness_token: Option(String),
+  )
+}
+
 pub type LanguageConfig {
   LanguageConfig(
     /// LSP-spec language identifier sent in `textDocument/didOpen`'s
-    /// `languageId` field. See
-    /// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocumentItem
+    /// `languageId` field.
     id: String,
-    /// Absolute path to the LSP server executable.
-    command: String,
-    /// CLI args. Some servers (typescript-language-server, pyright)
-    /// require `--stdio`; others take none.
-    args: List(String),
     /// File extensions that trigger this language (incl. leading dot).
     file_extensions: List(String),
     /// Files to look for when ascending the directory tree to find
     /// the workspace root. First match wins (innermost ancestor).
     root_markers: List(String),
-    /// Server-specific `initializationOptions` payload. Pass-through
-    /// to the LSP at the `initialize` request.
-    initialization_options: Json,
-    /// Diagnostics delivery mode for this server.
-    diagnostics_mode: DiagnosticsMode,
-    /// Settings sent post-`initialized` via
-    /// `workspace/didChangeConfiguration`, AND used by the
-    /// `workspace/configuration` server-request handler to answer
-    /// pull-style config requests. Keyed by section name; each
-    /// section's value is the JSON the server wants for that scope.
-    /// `None` means the server gets no configuration push and the
-    /// server-pull request returns nulls. Per ADR-012 stage 0C.
-    workspace_configuration: Option(Dict(String, Json)),
-    /// `$/progress` token name the server emits during readiness work
-    /// (typically initial indexing). Tools that issue analysis
-    /// requests sensitive to mid-indexing state changes (notably
-    /// `find_references` against rust-analyzer, which raises
-    /// `-32801 ContentModified`) call `lifecycle.wait_for_ready/3`
-    /// before the actual request to drain the in-progress notifications.
-    /// `None` means no readiness wait — either the server does not
-    /// emit progress (tsserver) or the wait is not needed for any
-    /// known tool. Per ADR-012 stage 0F.
-    readiness_token: Option(String),
-    /// Post-discovery root promotion. Defaults to `NoPromotion`.
-    /// Per ADR-015. Rust uses `CargoWorkspacePromotion` so
-    /// sibling-crate files share one rust-analyzer.
+    /// Post-discovery root promotion. Per ADR-015. Rust uses
+    /// `CargoWorkspacePromotion` so sibling-crate files share one
+    /// rust-analyzer.
     root_promotion: RootPromotion,
+    /// Servers pharos will spawn for this language. Currently every
+    /// bundled language ships with one entry; Stage 3 of ADR-019
+    /// adds ruff alongside pyright for python. Order matters when
+    /// `MethodScope` overlaps — see Stage 3 routing rules.
+    servers: List(ServerConfig),
   )
 }
 
@@ -101,6 +125,18 @@ pub type LookupError {
   UnknownLanguage(uri: String)
   /// URI did not start with `file://` — caller passed something else.
   NotAFileUri(uri: String)
+}
+
+/// Convenience accessor for the (currently universal) single-server
+/// case: returns the first `ServerConfig` in the language's `servers`
+/// list. Stage 1 of ADR-019 leaves every callsite that still wants a
+/// single server using this helper; Stage 3 introduces explicit
+/// per-method routing for callers that need it.
+pub fn primary_server(lang: LanguageConfig) -> Result(ServerConfig, Nil) {
+  case lang.servers {
+    [first, ..] -> Ok(first)
+    [] -> Error(Nil)
+  }
 }
 
 /// Bundle of defaults for the four languages we commonly support.
@@ -123,12 +159,11 @@ pub fn for_uri(
   case string.starts_with(uri, "file://") {
     False -> Error(NotAFileUri(uri))
     True -> {
-      let path = uri
       let configs = dict.values(registry)
       case
         list.find(configs, fn(config) {
           list.any(config.file_extensions, fn(ext) {
-            string.ends_with(path, ext)
+            string.ends_with(uri, ext)
           })
         })
       {
@@ -144,99 +179,103 @@ pub fn for_uri(
 fn rust() -> LanguageConfig {
   LanguageConfig(
     id: "rust",
-    command: "rust-analyzer",
-    args: [],
     file_extensions: [".rs"],
     root_markers: ["Cargo.toml", "rust-project.json"],
-    initialization_options: json.object([
-      #("checkOnSave", json.bool(True)),
-      #("check", json.object([#("command", json.string("check"))])),
-      #("procMacro", json.object([#("enable", json.bool(True))])),
-    ]),
-    diagnostics_mode: Push,
-    workspace_configuration: None,
-    readiness_token: Some("rustAnalyzer/Indexing"),
     root_promotion: CargoWorkspacePromotion,
+    servers: [
+      ServerConfig(
+        id: "rust-analyzer",
+        command: "rust-analyzer",
+        args: [],
+        initialization_options: json.object([
+          #("checkOnSave", json.bool(True)),
+          #("check", json.object([#("command", json.string("check"))])),
+          #("procMacro", json.object([#("enable", json.bool(True))])),
+        ]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: Some("rustAnalyzer/Indexing"),
+      ),
+    ],
   )
 }
 
 fn go() -> LanguageConfig {
   LanguageConfig(
     id: "go",
-    command: "gopls",
-    args: [],
     file_extensions: [".go"],
     root_markers: ["go.mod", "go.work"],
-    initialization_options: json.object([
-      #("usePlaceholders", json.bool(True)),
-      #("completeUnimported", json.bool(True)),
-    ]),
-    diagnostics_mode: Push,
-    workspace_configuration: None,
-    readiness_token: Some("setup"),
     root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        id: "gopls",
+        command: "gopls",
+        args: [],
+        initialization_options: json.object([
+          #("usePlaceholders", json.bool(True)),
+          #("completeUnimported", json.bool(True)),
+        ]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: Some("setup"),
+      ),
+    ],
   )
 }
 
 fn typescript() -> LanguageConfig {
   LanguageConfig(
     id: "typescript",
-    command: "typescript-language-server",
-    args: ["--stdio"],
     file_extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
     root_markers: ["tsconfig.json", "jsconfig.json", "package.json"],
-    initialization_options: json.object([
-      #("hostInfo", json.string("pharos")),
-    ]),
-    diagnostics_mode: Push,
-    // typescript-language-server gates publishDiagnostics on
-    // `workspace/didChangeConfiguration` arriving post-`initialized`
-    // and on `workspace/configuration` server-pull requests being
-    // answered. Empty section objects (Stage 0C) were not enough.
-    // Stage 2 #3 expands to the minimum non-empty payload that VSCode
-    // sends: declare `preferences`, `suggest`, `format` for both
-    // language scopes, plus `diagnostics.ignoredCodes` and
-    // `tsserver.useSyntaxServer` so the server has all the
-    // configuration keys it expects to find.
-    workspace_configuration: Some(
-      dict.from_list([
-        #("typescript", typescript_section_settings()),
-        #("javascript", typescript_section_settings()),
-        #(
-          "completions",
-          json.object([#("completeFunctionCalls", json.bool(False))]),
-        ),
-        #(
-          "diagnostics",
-          json.object([
-            #("ignoredCodes", json.preprocessed_array([])),
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        id: "typescript-language-server",
+        command: "typescript-language-server",
+        args: ["--stdio"],
+        initialization_options: json.object([
+          #("hostInfo", json.string("pharos")),
+        ]),
+        // typescript-language-server gates publishDiagnostics on
+        // `workspace/didChangeConfiguration` arriving post-`initialized`
+        // and on `workspace/configuration` server-pull requests being
+        // answered.
+        workspace_configuration: Some(
+          dict.from_list([
+            #("typescript", typescript_section_settings()),
+            #("javascript", typescript_section_settings()),
+            #(
+              "completions",
+              json.object([#("completeFunctionCalls", json.bool(False))]),
+            ),
+            #(
+              "diagnostics",
+              json.object([
+                #("ignoredCodes", json.preprocessed_array([])),
+              ]),
+            ),
           ]),
         ),
-      ]),
-    ),
-    readiness_token: None,
-    root_promotion: NoPromotion,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+      ),
+    ],
   )
 }
 
 /// Shared body of the `typescript` and `javascript` sections of
-/// typescript-language-server's workspace_configuration. The same
-/// shape works for both because the server treats them
-/// symmetrically (typescript settings apply to .ts files, the
-/// javascript ones apply to .js).
+/// typescript-language-server's workspace_configuration.
 fn typescript_section_settings() -> Json {
   json.object([
     #(
       "preferences",
       json.object([
-        #(
-          "importModuleSpecifier",
-          json.string("shortest"),
-        ),
-        #(
-          "quoteStyle",
-          json.string("auto"),
-        ),
+        #("importModuleSpecifier", json.string("shortest")),
+        #("quoteStyle", json.string("auto")),
       ]),
     ),
     #(
@@ -272,24 +311,26 @@ fn typescript_section_settings() -> Json {
 fn python() -> LanguageConfig {
   LanguageConfig(
     id: "python",
-    command: "pyright-langserver",
-    args: ["--stdio"],
     file_extensions: [".py", ".pyi"],
     root_markers: [
       "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
       ".python-version",
     ],
-    // pyright's main config is in pyrightconfig.json or pyproject.toml.
-    initialization_options: json.object([]),
-    // Pyright advertises `diagnosticProvider` (LSP 3.17 pull) but
-    // does not reliably push `textDocument/publishDiagnostics`
-    // notifications — rust-analyzer and gopls do, pyright doesn't.
-    // Stage-2 dogfood saw `NoDiagnosticsObserved` here despite a
-    // file with obvious type errors. `textDocument/diagnostic`
-    // pull returns the items synchronously.
-    diagnostics_mode: Pull,
-    workspace_configuration: None,
-    readiness_token: Some("Indexing"),
     root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        id: "pyright",
+        command: "pyright-langserver",
+        args: ["--stdio"],
+        // pyright's main config is in pyrightconfig.json or pyproject.toml.
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        // Pyright advertises `diagnosticProvider` (LSP 3.17 pull) but
+        // does not reliably push notifications. Pull mode wins.
+        diagnostics_mode: Pull,
+        readiness_token: Some("Indexing"),
+      ),
+    ],
   )
 }

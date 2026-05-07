@@ -107,40 +107,49 @@ pub fn doctor() -> Int {
   io.println("tools.filter:        [" <> string.join(cfg.tools.entries, ", ") <> "]")
   io.println("")
 
-  // Section: language registry — probe each command on PATH
+  // Section: language registry — probe each server's command on PATH
   let langs = languages_dict_to_list()
-  io.println("Language registry (" <> int.to_string(list.length(langs)) <> ")")
+  let total_servers =
+    list.fold(langs, 0, fn(acc, entry) { acc + list.length({ entry.1 }.servers) })
+  io.println(
+    "Language registry ("
+      <> int.to_string(list.length(langs))
+      <> " languages, "
+      <> int.to_string(total_servers)
+      <> " server(s))",
+  )
   io.println(string.repeat("-", 60))
 
   let lang_failures =
     list.fold(langs, 0, fn(failures, entry) {
       let #(id, lang) = entry
-      let probe = which_executable(lang.command)
-      case probe {
-        Ok(resolved) -> {
-          io.println(
-            pad_right(id, 16)
-              <> "  ok     "
-              <> lang.command
-              <> case resolved == lang.command {
-                True -> ""
-                False -> " → " <> resolved
-              },
-          )
-          failures
+      list.fold(lang.servers, failures, fn(inner_failures, server) {
+        case which_executable(server.command) {
+          Ok(resolved) -> {
+            io.println(
+              pad_right(id <> "/" <> server.id, 28)
+                <> "  ok     "
+                <> server.command
+                <> case resolved == server.command {
+                  True -> ""
+                  False -> " → " <> resolved
+                },
+            )
+            inner_failures
+          }
+          Error(_) -> {
+            io.println(
+              pad_right(id <> "/" <> server.id, 28)
+                <> "  MISSING  "
+                <> server.command
+                <> " (not on PATH; install it or override [languages."
+                <> id
+                <> "] command)",
+            )
+            inner_failures + 1
+          }
         }
-        Error(_) -> {
-          io.println(
-            pad_right(id, 16)
-              <> "  MISSING  "
-              <> lang.command
-              <> " (not on PATH; install it or override [languages."
-              <> id
-              <> "] command)",
-          )
-          failures + 1
-        }
-      }
+      })
     })
 
   io.println("")

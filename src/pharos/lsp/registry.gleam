@@ -2,10 +2,9 @@
 //// user-supplied overrides from `pharos/config.languages`.
 ////
 //// pharos ships with hardcoded LSP commands matching the developer's
-//// dev box (rust-analyzer, gopls, etc.). End users on different
-//// machines have those binaries somewhere else, and may want to add
-//// languages pharos does not bundle (Haskell, Zig, etc.). This
-//// module reads the cached `Config`, merges
+//// dev box. End users on different machines have those binaries
+//// somewhere else, and may want to add languages pharos does not
+//// bundle. This module reads the cached `Config`, merges
 //// `Config.languages` over the bundled defaults, and stashes the
 //// resulting registry in `persistent_term` so per-request lookups
 //// run at O(1) without re-parsing.
@@ -14,10 +13,11 @@
 //// resolved by `pharos/config.load/0`. By the time `init/0` runs,
 //// `Config.languages` already reflects the merged user input.
 ////
-//// Adding or overriding a language: see
-//// `~/.config/pharos/pharos.toml`. New languages must specify
-//// `command` and `file_extensions` at minimum; existing languages
-//// only need the fields the user actually wants to change.
+//// Stage 1 of ADR-019: per-language overrides apply to the language's
+//// FIRST (primary) server. Stage 3 will introduce explicit
+//// per-server addressing via `[[languages.<id>.servers]]` array of
+//// tables; today's flat shape stays valid as the canonical form for
+//// languages with one server.
 
 import gleam/dict.{type Dict}
 import gleam/json
@@ -25,8 +25,8 @@ import gleam/option.{type Option, None, Some}
 import pharos/config.{type LanguageOverride}
 import pharos/log
 import pharos/lsp/languages.{
-  type DiagnosticsMode, type LanguageConfig, type LookupError, LanguageConfig,
-  NoPromotion, Pull, Push,
+  type DiagnosticsMode, type LanguageConfig, type LookupError, type ServerConfig,
+  All, LanguageConfig, NoPromotion, Pull, Push, ServerConfig,
 }
 
 /// Load the effective registry into `persistent_term`. Call once at
@@ -39,7 +39,7 @@ pub fn init() -> Nil {
       log.info_at(
         "pharos/lsp/registry",
         "applied "
-          <> count_str(dict.size(cfg.languages))
+          <> int_str(dict.size(cfg.languages))
           <> " language override(s) from pharos config",
       )
       merge_overrides(languages.default_registry(), cfg.languages)
@@ -49,19 +49,11 @@ pub fn init() -> Nil {
   Nil
 }
 
-fn count_str(n: Int) -> String {
-  case n {
-    1 -> "1"
-    n -> int_str(n)
-  }
-}
-
 @external(erlang, "erlang", "integer_to_binary")
 fn int_str(n: Int) -> String
 
 /// Read the registry stored by `init/0`. Falls back to bundled
-/// defaults if `init` was not yet called (test harnesses that bypass
-/// the normal boot path, etc.).
+/// defaults if `init` was not yet called.
 pub fn cached() -> Dict(String, LanguageConfig) {
   case load() {
     Ok(registry) -> registry
@@ -75,11 +67,7 @@ pub fn for_uri(uri: String) -> Result(LanguageConfig, LookupError) {
 }
 
 /// Resolve a language id (e.g. `"rust"`, `"go"`) through the cached
-/// registry. Used by tools that accept an explicit language argument
-/// instead of inferring it from a file extension — primarily
-/// `workspace_symbols`, where the natural URI is a directory and
-/// extension routing fails. Returns `UnknownLanguage` with the id
-/// echoed back so the caller can render a clear error.
+/// registry. Used by tools that accept an explicit language argument.
 pub fn for_language(id: String) -> Result(LanguageConfig, LookupError) {
   case dict.get(cached(), id) {
     Ok(config) -> Ok(config)
@@ -109,42 +97,45 @@ fn merge_overrides(
   })
 }
 
-/// Promote a bare `LanguageOverride` to a `LanguageConfig`. Fields
-/// not supplied get blank defaults — this only fires for languages
-/// NOT present in `default_registry`; the merge step below handles
-/// the override case where defaults exist.
+/// Promote a bare `LanguageOverride` to a `LanguageConfig` with one
+/// server. Fires only for brand-new languages NOT in
+/// `default_registry`. `command` and `file_extensions` are required
+/// for new languages; everything else gets sensible blanks.
 fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
+  let server =
+    ServerConfig(
+      id: key,
+      command: option.unwrap(override.command, ""),
+      args: option.unwrap(override.args, []),
+      initialization_options: json.object([]),
+      workspace_configuration: None,
+      methods: All,
+      diagnostics_mode: parse_mode(override.diagnostics_mode),
+      readiness_token: override.readiness_token,
+    )
   LanguageConfig(
     id: option.unwrap(override.id, key),
-    command: option.unwrap(override.command, ""),
-    args: option.unwrap(override.args, []),
     file_extensions: option.unwrap(override.file_extensions, []),
     root_markers: option.unwrap(override.root_markers, []),
-    initialization_options: json.object([]),
-    diagnostics_mode: parse_mode(override.diagnostics_mode),
-    workspace_configuration: None,
-    readiness_token: override.readiness_token,
     root_promotion: NoPromotion,
+    servers: [server],
   )
 }
 
-/// Field-by-field merge: override wins when its value is `Some(...)`
-/// or its list is non-empty. Initialization options +
-/// workspace_configuration are not yet overrideable here; future
-/// work.
+/// Apply a flat override to an existing `LanguageConfig`. Server-level
+/// fields (command, args, diagnostics_mode, readiness_token) target
+/// the FIRST server in the language's `servers` list — the primary.
+/// Language-level fields (file_extensions, root_markers) replace
+/// those on the parent record.
 fn merge_one(default: LanguageConfig, override: LanguageOverride) -> LanguageConfig {
+  let merged_servers = case default.servers {
+    [] -> default.servers
+    [primary, ..rest] -> [merge_primary(primary, override), ..rest]
+  }
   LanguageConfig(
     id: case override.id {
       Some(s) -> s
       None -> default.id
-    },
-    command: case override.command {
-      Some(s) -> s
-      None -> default.command
-    },
-    args: case override.args {
-      Some(xs) -> xs
-      None -> default.args
     },
     file_extensions: case override.file_extensions {
       Some(xs) -> xs
@@ -154,17 +145,36 @@ fn merge_one(default: LanguageConfig, override: LanguageOverride) -> LanguageCon
       Some(xs) -> xs
       None -> default.root_markers
     },
-    initialization_options: default.initialization_options,
+    root_promotion: default.root_promotion,
+    servers: merged_servers,
+  )
+}
+
+fn merge_primary(
+  primary: ServerConfig,
+  override: LanguageOverride,
+) -> ServerConfig {
+  ServerConfig(
+    id: primary.id,
+    command: case override.command {
+      Some(s) -> s
+      None -> primary.command
+    },
+    args: case override.args {
+      Some(xs) -> xs
+      None -> primary.args
+    },
+    initialization_options: primary.initialization_options,
+    workspace_configuration: primary.workspace_configuration,
+    methods: primary.methods,
     diagnostics_mode: case override.diagnostics_mode {
-      None -> default.diagnostics_mode
+      None -> primary.diagnostics_mode
       Some(_) -> parse_mode(override.diagnostics_mode)
     },
-    workspace_configuration: default.workspace_configuration,
     readiness_token: case override.readiness_token {
-      None -> default.readiness_token
+      None -> primary.readiness_token
       Some(_) -> override.readiness_token
     },
-    root_promotion: default.root_promotion,
   )
 }
 

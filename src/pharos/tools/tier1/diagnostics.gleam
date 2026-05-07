@@ -105,7 +105,15 @@ fn attempt(
           Ok(Diagnostics(uri: file_uri, body_json: body_json))
 
         option.None -> {
-          let result = case config.diagnostics_mode {
+          // Stage 1 of ADR-019: pick the primary (first) server's
+          // diagnostics_mode. Stage 3 routes diagnostics through
+          // every server with `Only(["textDocument/diagnostic"])` or
+          // `All` scope and merges results.
+          let mode = case languages.primary_server(config) {
+            Ok(server) -> server.diagnostics_mode
+            Error(_) -> Push
+          }
+          let result = case mode {
             Push -> push_drain(lsp, file_uri, timeout_ms)
             Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
           }
