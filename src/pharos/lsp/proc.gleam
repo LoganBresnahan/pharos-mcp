@@ -121,6 +121,7 @@ pub fn start(
   command: String,
   args: List(String),
   workspace: String,
+  server_id: String,
   init_params: Json,
   initialize_timeout_ms: Int,
   readiness_token: Option(String),
@@ -132,7 +133,7 @@ pub fn start(
   // transfer that, in dogfood, raced with gopls's unsolicited
   // post-initialize messages and starved its inbound queue.
   let initialise = fn(self) {
-    case client.start(command, args, workspace) {
+    case client.start(command, args, workspace, server_id) {
       Error(e) -> Error("client.start failed: " <> describe_client_error(e))
       Ok(c) ->
         case lifecycle.initialize(c, 0, init_params, initialize_timeout_ms) {
@@ -212,6 +213,7 @@ pub fn start_link_supervised(
       command,
       args,
       workspace,
+      server_id,
       init_params,
       initialize_timeout_ms,
       readiness_token,
@@ -781,8 +783,11 @@ fn drain_loop(
 ) -> Result(#(Client, Option(String)), client.Error) {
   // Cache poll: the actor's PortMessage handler may already have
   // cached publishDiagnostics for `target_uri` between handler
-  // invocations.
-  case latest, lookup_cached_envelope(target_uri) {
+  // invocations. The server_id lives on the Client so cache lookup
+  // is keyed by `(uri, server_id)` — multi-LSP languages do not
+  // cross-pollute each other's cache rows.
+  let server_id = client.server_id(c)
+  case latest, lookup_cached_envelope(target_uri, server_id) {
     None, Some(envelope) -> Ok(#(c, Some(envelope)))
 
     _, _ ->
@@ -812,7 +817,7 @@ fn drain_loop(
                 }
               let next_latest = case latest {
                 Some(_) -> latest
-                None -> lookup_cached_envelope(target_uri)
+                None -> lookup_cached_envelope(target_uri, server_id)
               }
               drain_loop(updated_client, target_uri, remaining_ms - drain_step_ms, next_latest)
             }
@@ -824,8 +829,11 @@ fn drain_loop(
 /// Read the cache and re-shape into a `publishDiagnostics`
 /// notification envelope so drain_loop's caller can return the
 /// same JSON shape whether the body came from cache or live drain.
-fn lookup_cached_envelope(target_uri: String) -> Option(String) {
-  case diagnostics_cache.get(target_uri) {
+fn lookup_cached_envelope(
+  target_uri: String,
+  server_id: String,
+) -> Option(String) {
+  case diagnostics_cache.get(target_uri, server_id) {
     Error(_) -> None
     Ok(params) ->
       Some(

@@ -111,8 +111,12 @@ fn attempt_single(
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
   case session.prepare(pool, file_uri) {
     Error(err) -> Error(map_session_error(err))
-    Ok(lsp) ->
-      case lookup_cached(file_uri) {
+    Ok(lsp) -> {
+      let primary_id = case languages.primary_server(config) {
+        Ok(s) -> s.id
+        Error(_) -> ""
+      }
+      case lookup_cached(file_uri, primary_id) {
         option.Some(body_json) ->
           Ok(Diagnostics(uri: file_uri, body_json: body_json))
 
@@ -144,6 +148,7 @@ fn attempt_single(
           }
         }
       }
+    }
   }
 }
 
@@ -153,9 +158,15 @@ fn attempt_single(
 /// `textDocument/diagnostic` runs its own fetch sequentially; their
 /// items concatenate. Per-server failures warn-log and contribute
 /// an empty array — the surviving servers' diagnostics still reach
-/// the LLM. Cache is bypassed because it stores one entry per URI
-/// (single-server contract); multi-server cache invalidation is
-/// tracked as an M11 follow-up.
+/// the LLM.
+///
+/// Cache participation: the cache is keyed by `(uri, server_id)`
+/// (M11 fix), so each server's cached items are addressable. For
+/// each contributing server we hit the cache first; on miss we run
+/// the live fetch (push drain or pull request) and lifecycle's
+/// classifier writes the response back to the cache for next time.
+/// No transport-error retry on this path — partial results are
+/// preferable to all-or-nothing failure.
 fn attempt_merge(
   pool: Pool,
   file_uri: String,
@@ -170,15 +181,16 @@ fn attempt_merge(
       let server_results =
         list.map(prepared, fn(entry) {
           let #(server, lsp) = entry
-          let items = fetch_items_one(server, lsp, file_uri, timeout_ms)
+          let items = case fetch_items_cached(file_uri, server.id) {
+            option.Some(cached) -> cached
+            option.None -> fetch_items_one(server, lsp, file_uri, timeout_ms)
+          }
           #(server.id, items)
         })
 
       let merged_items = merge_items_arrays(server_results)
       let _ = config
       let _ = pool
-      // No transport-error retry on the merge path; partial
-      // results are preferable to all-or-nothing failure.
       case merged_items == "[]" {
         True -> Ok(NoDiagnosticsObserved(uri: file_uri))
         False ->
@@ -186,6 +198,31 @@ fn attempt_merge(
             uri: file_uri,
             body_json: synthesize_publish_body(file_uri, merged_items),
           ))
+      }
+    }
+  }
+}
+
+/// Per-server cache hit on the merge path. Returns the JSON-string
+/// `diagnostics` array if cached; `None` on miss so the live fetch
+/// runs. The cache stored params verbatim from publishDiagnostics
+/// (`{uri, version?, diagnostics}`); we extract `diagnostics` and
+/// re-encode as JSON.
+fn fetch_items_cached(
+  file_uri: String,
+  server_id: String,
+) -> option.Option(String) {
+  case diagnostics_cache.get(file_uri, server_id) {
+    Error(_) -> option.None
+    Ok(params_value) -> {
+      let envelope =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
+        <> "\"params\":"
+        <> tool_helpers.json_encode(params_value)
+        <> "}"
+      case extract_items_from_envelope(envelope) {
+        Ok(items) -> option.Some(items)
+        Error(_) -> option.None
       }
     }
   }
@@ -434,8 +471,11 @@ fn synthesize_publish_body(uri: String, items_json: String) -> String {
 
 // -- Cache + eviction (single-server only) -------------------------------
 
-fn lookup_cached(file_uri: String) -> option.Option(String) {
-  case diagnostics_cache.get(file_uri) {
+fn lookup_cached(
+  file_uri: String,
+  server_id: String,
+) -> option.Option(String) {
+  case diagnostics_cache.get(file_uri, server_id) {
     Error(_) -> option.None
     Ok(params_value) -> {
       let envelope =

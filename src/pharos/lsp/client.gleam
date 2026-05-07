@@ -28,7 +28,24 @@ pub opaque type Client {
     buffer: BitArray,
     queue: List(BitArray),
     handlers: Registry,
+    /// Identifier of the LSP server this client speaks to. 1:1 with
+    /// the subprocess; used by lifecycle's diagnostics-cache writer
+    /// to key publishDiagnostics by `(uri, server_id)` so multi-LSP
+    /// languages do not cross-overwrite each other in the cache.
+    server_id: String,
   )
+}
+
+/// Read the LSP server id this client is bound to.
+pub fn server_id(c: Client) -> String {
+  c.server_id
+}
+
+/// Update the LSP server id on the client. Used by callers that
+/// recover a Client without server_id available at construction
+/// time and want to backfill it before lifecycle wires the cache.
+pub fn set_server_id(c: Client, id: String) -> Client {
+  Client(..c, server_id: id)
 }
 
 pub type Error {
@@ -38,11 +55,18 @@ pub type Error {
   SpawnError(port.SpawnError)
 }
 
-/// Spawn an LSP subprocess and prepare a client.
+/// Spawn an LSP subprocess and prepare a client. `server_id` is
+/// the LSP id from the language registry (e.g. `"pyright"`,
+/// `"ruff"`); lifecycle's diagnostics-cache writer keys
+/// publishDiagnostics by `(uri, server_id)` so it must reach the
+/// Client at construction. When the caller does not yet know it
+/// (legacy paths), pass an empty string and backfill via
+/// `set_server_id/2` before any frame is dispatched.
 pub fn start(
   command: String,
   args: List(String),
   cwd: String,
+  server_id: String,
 ) -> Result(Client, Error) {
   case port.spawn(command, args, cwd) {
     Ok(p) ->
@@ -51,6 +75,7 @@ pub fn start(
         buffer: <<>>,
         queue: [],
         handlers: server_request_handlers.defaults(),
+        server_id: server_id,
       ))
     Error(spawn_err) ->
       Error(SpawnError(spawn_err))

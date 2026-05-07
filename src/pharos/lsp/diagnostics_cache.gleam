@@ -6,13 +6,17 @@
 //// that read diagnostics on subsequent calls time out unless we
 //// remember what the server already told us.
 ////
-//// The cache key is the file URI. Values are the raw `params`
-//// `Dynamic` from the publishDiagnostics notification (verbatim
-//// LSP shape `{uri, version?, diagnostics}`). Stale entries linger
-//// until either (a) a fresh publishDiagnostics for the same URI
-//// overwrites, or (b) a future tool calls `drop/1` after a known
-//// edit. Stage 2 second-pass C lands the read/write side; explicit
-//// cache invalidation lands later if needed.
+//// The cache key is `(uri, server_id)`. Multi-LSP languages
+//// (python = pyright + ruff) emit independently for the same URI;
+//// keying by URI alone would overwrite one server's items with the
+//// other's. `get_all_for_uri/1` returns every cached server's
+//// entry for the URI so the multi-server merge path can stitch
+//// them together.
+////
+//// Stale entries linger until either (a) a fresh
+//// publishDiagnostics for the same `(uri, server_id)` overwrites,
+//// (b) `drop/2` for a specific (uri, server_id), or (c) `drop_uri/1`
+//// nukes every entry for the URI (used after a known edit).
 
 import gleam/dynamic.{type Dynamic}
 
@@ -21,18 +25,32 @@ import gleam/dynamic.{type Dynamic}
 @external(erlang, "pharos_diagnostics_cache_ffi", "init")
 pub fn init() -> Nil
 
-/// Record the latest `publishDiagnostics.params` value for `uri`.
-/// Subsequent reads via `get/1` return the same value until it is
-/// overwritten or dropped.
+/// Record the latest `publishDiagnostics.params` value for
+/// `(uri, server_id)`. Subsequent reads via `get/2` return the same
+/// value until it is overwritten or dropped.
 @external(erlang, "pharos_diagnostics_cache_ffi", "put")
-pub fn put(uri: String, value: Dynamic) -> Nil
+pub fn put(uri: String, server_id: String, value: Dynamic) -> Nil
 
-/// Read the cached `publishDiagnostics.params` for `uri`. Returns
-/// `Error(Nil)` when the cache has no entry for the URI yet.
+/// Read the cached `publishDiagnostics.params` for
+/// `(uri, server_id)`. Returns `Error(Nil)` when the cache has no
+/// entry yet.
 @external(erlang, "pharos_diagnostics_cache_ffi", "get")
-pub fn get(uri: String) -> Result(Dynamic, Nil)
+pub fn get(uri: String, server_id: String) -> Result(Dynamic, Nil)
 
-/// Forget the cache entry for `uri`. Used when callers know the
-/// content has changed and a stale entry would mislead.
+/// Read every cached server's `publishDiagnostics.params` for the
+/// URI. Returns a list of `(server_id, params)` tuples; empty when
+/// nothing is cached. Used by the multi-server merge path so the
+/// cache survives across calls.
+@external(erlang, "pharos_diagnostics_cache_ffi", "get_all_for_uri")
+pub fn get_all_for_uri(uri: String) -> List(#(String, Dynamic))
+
+/// Forget the cache entry for one `(uri, server_id)`. Used when
+/// callers know that one server's view is stale (e.g. after a
+/// targeted re-publish).
 @external(erlang, "pharos_diagnostics_cache_ffi", "drop")
-pub fn drop(uri: String) -> Nil
+pub fn drop(uri: String, server_id: String) -> Nil
+
+/// Forget every cache entry for `uri` regardless of server. Use
+/// after a known content change.
+@external(erlang, "pharos_diagnostics_cache_ffi", "drop_uri")
+pub fn drop_uri(uri: String) -> Nil

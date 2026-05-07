@@ -10,7 +10,7 @@ import gleeunit/should
 import pharos/lsp/client
 
 pub fn round_trip_one_body_through_cat_test() {
-  let assert Ok(c) = client.start("/bin/cat", [], "/tmp")
+  let assert Ok(c) = client.start("/bin/cat", [], "/tmp", "test")
 
   let body = bit_array.from_string("{\"jsonrpc\":\"2.0\",\"id\":1}")
   let assert Ok(Nil) = client.send_body(c, body)
@@ -22,7 +22,7 @@ pub fn round_trip_one_body_through_cat_test() {
 }
 
 pub fn round_trip_two_bodies_drains_queue_test() {
-  let assert Ok(c0) = client.start("/bin/cat", [], "/tmp")
+  let assert Ok(c0) = client.start("/bin/cat", [], "/tmp", "test")
 
   let body_a = bit_array.from_string("{\"id\":1}")
   let body_b = bit_array.from_string("{\"id\":2}")
@@ -39,7 +39,7 @@ pub fn round_trip_two_bodies_drains_queue_test() {
 }
 
 pub fn next_message_times_out_when_nothing_sent_test() {
-  let assert Ok(c) = client.start("/bin/cat", [], "/tmp")
+  let assert Ok(c) = client.start("/bin/cat", [], "/tmp", "test")
 
   case client.next_message(c, 100) {
     Error(client.PortReceiveError(_)) -> Nil

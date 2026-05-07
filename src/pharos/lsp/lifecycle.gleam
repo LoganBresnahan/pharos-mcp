@@ -348,7 +348,7 @@ pub fn classify_and_dispatch(
     }
 
     Notification(method: method, params: params) -> {
-      cache_publish_diagnostics(method, params)
+      cache_publish_diagnostics(client, method, params)
       Ok(client)
     }
 
@@ -360,16 +360,24 @@ pub fn classify_and_dispatch(
 
 /// Side-effect for `Notification` classifications: when the server
 /// emits `textDocument/publishDiagnostics`, store the params keyed
-/// by URI so the get_diagnostics tool can read them on subsequent
-/// calls instead of waiting for a re-emit that never comes (pool's
-/// didOpen-once policy means servers do not re-publish for the same
-/// version). All other notification methods are dropped here; the
-/// caller's loop continues draining.
-fn cache_publish_diagnostics(method: String, params: Dynamic) -> Nil {
+/// by `(uri, server_id)` so the get_diagnostics tool can read them
+/// on subsequent calls instead of waiting for a re-emit that never
+/// comes (pool's didOpen-once policy means servers do not re-publish
+/// for the same version). The `server_id` lives on the `Client`
+/// itself (1:1 with the LSP subprocess) so multi-LSP languages
+/// (python = pyright + ruff) cache each server's items independently
+/// without cross-overwrites. All other notification methods are
+/// dropped here; the caller's loop continues draining.
+fn cache_publish_diagnostics(
+  client: Client,
+  method: String,
+  params: Dynamic,
+) -> Nil {
   case method {
     "textDocument/publishDiagnostics" ->
       case decode.run(params, publish_diagnostics_uri_decoder()) {
-        Ok(uri) -> diagnostics_cache.put(uri, params)
+        Ok(uri) ->
+          diagnostics_cache.put(uri, client.server_id(client), params)
         Error(_) -> Nil
       }
     _ -> Nil
@@ -524,7 +532,7 @@ fn wait_for_response(
       // second-pass C. Other notifications drain unchanged. Stage 0F's
       // wait_for_ready/3 is the place to consume $/progress
       // selectively when a tool needs to wait for indexing.
-      cache_publish_diagnostics(method, params)
+      cache_publish_diagnostics(client, method, params)
       wait_for_response(client, expected_id, timeout_ms)
     }
 

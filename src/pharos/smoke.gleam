@@ -38,7 +38,7 @@ const drain_window_ms: Int = 5000
 pub fn run(workspace_path: String) -> Nil {
   log.info("smoke: spawning rust-analyzer for workspace " <> workspace_path)
 
-  case client.start(rust_analyzer_path, [], workspace_path) {
+  case client.start(rust_analyzer_path, [], workspace_path, "rust-analyzer") {
     Error(err) -> {
       log.error("smoke: spawn failed: " <> describe_error(err))
       Nil
