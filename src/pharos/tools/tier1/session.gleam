@@ -18,6 +18,7 @@
 import gleam/bit_array
 import gleam/erlang/process
 import gleam/json
+import gleam/list
 import gleam/result
 import pharos/log
 import pharos/lsp/languages.{
@@ -107,6 +108,63 @@ pub fn with_session_and_retry(
           retry_after_evict(pool, file_uri, body)
         }
         Error(other) -> Error(RetryRequestError(other))
+      }
+  }
+}
+
+/// Method-aware variant of `with_session_and_retry/3`. Picks the
+/// server whose `MethodScope` covers `method` (per ADR-019 routing)
+/// instead of the language's primary server. Used by tools whose
+/// answer may live with a non-primary server — e.g. `format_document`
+/// routes through ruff for python files because pyright returns
+/// `-32601` for `textDocument/formatting`.
+pub fn with_session_and_retry_for_method(
+  pool: Pool,
+  file_uri: String,
+  method: String,
+  body: fn(Proc) -> Result(a, lifecycle.RequestError),
+) -> Result(a, RetryError) {
+  case prepare_for_method(pool, file_uri, method) {
+    Error(err) -> Error(RetrySessionError(err))
+    Ok(lsp) ->
+      case body(lsp) {
+        Ok(value) -> Ok(value)
+        Error(lifecycle.ClientFailure(reason)) -> {
+          log.warn_at(
+            "pharos/tools/tier1/session",
+            "transport error (method=" <> method <> "); evicting and retrying once",
+          )
+          let _ = reason
+          retry_for_method_after_evict(pool, file_uri, method, body)
+        }
+        Error(other) -> Error(RetryRequestError(other))
+      }
+  }
+}
+
+fn retry_for_method_after_evict(
+  pool: Pool,
+  file_uri: String,
+  method: String,
+  body: fn(Proc) -> Result(a, lifecycle.RequestError),
+) -> Result(a, RetryError) {
+  case lookup_config(file_uri) {
+    Error(err) -> Error(RetrySessionError(err))
+    Ok(config) ->
+      case discover_workspace(file_uri, config.root_markers) {
+        Error(err) -> Error(RetrySessionError(err))
+        Ok(raw_workspace) -> {
+          let workspace = promote_root(raw_workspace, config)
+          pool.evict_all_servers(pool, config.id, workspace)
+          case prepare_for_method(pool, file_uri, method) {
+            Error(err) -> Error(RetrySessionError(err))
+            Ok(lsp) ->
+              case body(lsp) {
+                Ok(value) -> Ok(value)
+                Error(other) -> Error(RetryRequestError(other))
+              }
+          }
+        }
       }
   }
 }
@@ -323,6 +381,117 @@ pub fn prepare_workspace_for_language(
 /// `prepare/2`.
 pub fn config_for_uri(uri: String) -> Result(LanguageConfig, SessionError) {
   lookup_config(uri)
+}
+
+/// Prepare a single Proc for the server that owns `method` under
+/// the `Primary` routing strategy. Per ADR-019: Only-scope wins
+/// first, then All-scope. Used by tools that have one canonical
+/// answer (hover, goto_*, formatting, references, …).
+pub fn prepare_for_method(
+  pool: Pool,
+  file_uri: String,
+  method: String,
+) -> Result(Proc, SessionError) {
+  use config <- result.try(lookup_config(file_uri))
+  use raw_workspace <- result.try(discover_workspace(
+    file_uri,
+    config.root_markers,
+  ))
+  let workspace = promote_root(raw_workspace, config)
+  case languages.primary_server_for_method(config, method) {
+    Error(_) ->
+      Error(SpawnFailed(
+        "no server in language `"
+          <> config.id
+          <> "` claims method `"
+          <> method
+          <> "` (check pharos.toml [languages."
+          <> config.id
+          <> "])",
+      ))
+    Ok(server) -> {
+      let _ = ensure_doc_opened(pool, config, workspace, file_uri)
+      get_lsp_for_server(pool, config, workspace, server)
+    }
+  }
+}
+
+/// Prepare every Proc whose server scope covers `method`. Used by
+/// tools dispatching with `Merge` or `FanOut` strategy
+/// (`textDocument/diagnostic`, `textDocument/codeAction`). Spawn
+/// failures for individual servers are warn-logged and skipped — the
+/// caller gets the surviving subset so a missing ruff binary doesn't
+/// hide pyright's diagnostics.
+pub fn prepare_all_for_method(
+  pool: Pool,
+  file_uri: String,
+  method: String,
+) -> Result(List(#(String, Proc)), SessionError) {
+  use config <- result.try(lookup_config(file_uri))
+  use raw_workspace <- result.try(discover_workspace(
+    file_uri,
+    config.root_markers,
+  ))
+  let workspace = promote_root(raw_workspace, config)
+  let servers = languages.servers_for_method(config, method)
+  let prepared =
+    list.filter_map(servers, fn(server) {
+      let _ = ensure_doc_opened(pool, config, workspace, file_uri)
+      case get_lsp_for_server(pool, config, workspace, server) {
+        Ok(proc) -> Ok(#(server.id, proc))
+        Error(err) -> {
+          log.warn_at(
+            "pharos/tools/tier1/session",
+            "skipping server `"
+              <> server.id
+              <> "` for method `"
+              <> method
+              <> "`: "
+              <> describe_session_error(err),
+          )
+          Error(Nil)
+        }
+      }
+    })
+  Ok(prepared)
+}
+
+/// Render a `SessionError` as a string for logging. Tool-side error
+/// rendering uses each tool's bespoke describe function; this is the
+/// internal fallback used by `prepare_all_for_method`.
+fn describe_session_error(err: SessionError) -> String {
+  case err {
+    NotAFileUri(uri) -> "uri must start with file:// — got: " <> uri
+    WorkspaceNotFound(uri) ->
+      "no workspace root marker found ascending from " <> uri
+    SpawnFailed(reason) -> "LSP spawn failed: " <> reason
+    HandshakeFailed(reason) -> "initialize handshake failed: " <> reason
+    UnsupportedFileType(uri) -> "unsupported file type: " <> uri
+  }
+}
+
+fn get_lsp_for_server(
+  pool: Pool,
+  config: LanguageConfig,
+  workspace: String,
+  server: languages.ServerConfig,
+) -> Result(Proc, SessionError) {
+  let spec =
+    pool.SpawnSpec(
+      server_id: server.id,
+      command: server.command,
+      args: server.args,
+      init_params: build_initialize_params(workspace, config, server),
+      workspace_configuration: server.workspace_configuration,
+      readiness_token: server.readiness_token,
+      readiness_timeout_ms: readiness_timeout_ms,
+    )
+  pool.get(pool, config.id, workspace, spec)
+  |> result.map_error(fn(err) {
+    case err {
+      pool.ProcStartFailed(reason) -> SpawnFailed(reason)
+    }
+  })
 }
 
 // -- Internals ----------------------------------------------------------

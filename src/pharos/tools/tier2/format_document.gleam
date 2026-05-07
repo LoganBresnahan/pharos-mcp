@@ -44,11 +44,16 @@ pub fn handle(
     ])
 
   case
-    session.with_session_and_retry(pool, file_uri, fn(lsp) {
-      session.request_with_content_modified_retry(fn() {
-        proc.request(lsp, "textDocument/formatting", params, timeout_ms)
-      })
-    })
+    session.with_session_and_retry_for_method(
+      pool,
+      file_uri,
+      "textDocument/formatting",
+      fn(lsp) {
+        session.request_with_content_modified_retry(fn() {
+          proc.request(lsp, "textDocument/formatting", params, timeout_ms)
+        })
+      },
+    )
   {
     Ok(result_value) -> render(file_uri, result_value)
     Error(session.RetrySessionError(err)) ->

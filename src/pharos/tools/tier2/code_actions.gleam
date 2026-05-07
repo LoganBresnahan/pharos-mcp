@@ -1,22 +1,25 @@
 //// MCP tool: `code_actions`.
 ////
-//// Wraps LSP `textDocument/codeAction`. Returns the verbatim list
-//// of `Command | CodeAction` (LSP 3.16+) for the given range, as
-//// JSON. Each action has a `title` describing what it would do;
-//// `CodeAction` entries may carry an `edit` (WorkspaceEdit) and/or
-//// a `command` to execute.
+//// Wraps LSP `textDocument/codeAction`. Per ADR-019 routing this is
+//// a `FanOut` method: every server whose `MethodScope` covers
+//// `textDocument/codeAction` is consulted, and their result arrays
+//// are concatenated. Today this matters for python — pyright +
+//// ruff both contribute fixes, where pyright surfaces type-related
+//// quick-fixes and ruff surfaces lint autofixes + import-sort. Most
+//// other languages still resolve to a single primary server.
 ////
 //// Pharos does not execute commands or apply edits automatically.
 //// The LLM reviews the action list and either:
-////   - Calls `apply_workspace_edit` (future M9 tool) with one
+////   - Calls `apply_workspace_edit` (future M11 tool) with one
 ////     action's `edit`, or
 ////   - Applies the edit by hand via its own Edit tool.
-////
-//// Returning raw JSON (rather than rendering each action) keeps the
-//// surface predictable; per-action `WorkspaceEdit` rendering is a
-//// follow-up alongside the LLM-side ergonomic improvements.
 
+import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
 import gleam/json
+import gleam/list
+import pharos/log
+import pharos/lsp/lifecycle
 import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
@@ -59,9 +62,6 @@ pub fn handle(
           ),
         ]),
       ),
-      // Empty `context.diagnostics` is the safe default — servers
-      // return all available actions for the range. Tools that
-      // want quick-fix-only behavior can pass diagnostics later.
       #(
         "context",
         json.object([
@@ -70,20 +70,69 @@ pub fn handle(
       ),
     ])
 
-  case
-    session.with_session_and_retry(pool, file_uri, fn(lsp) {
-      session.request_with_content_modified_retry(fn() {
-        proc.request(lsp, "textDocument/codeAction", params, default_timeout_ms)
-      })
-    })
-  {
-    Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
-    Error(session.RetrySessionError(err)) ->
-      Error(SessionFailed(describe_session_error(err)))
-    Error(session.RetryRequestError(err)) ->
-      Error(RequestFailed(tool_helpers.describe_request_error(err)))
+  case session.prepare_all_for_method(pool, file_uri, "textDocument/codeAction") {
+    Error(err) -> Error(SessionFailed(describe_session_error(err)))
+    Ok([]) ->
+      Error(SessionFailed(
+        "no LSP server in the language registry claims "
+          <> "textDocument/codeAction for this file",
+      ))
+    Ok(servers) -> {
+      let responses =
+        list.map(servers, fn(entry) {
+          let #(server_id, lsp) = entry
+          let result = session.request_with_content_modified_retry(fn() {
+            proc.request(lsp, "textDocument/codeAction", params, default_timeout_ms)
+          })
+          #(server_id, result)
+        })
+      Ok(merge_responses(responses))
+    }
   }
 }
+
+/// Concatenate the action arrays returned by each server. Failed
+/// responses are warn-logged and dropped so the LLM still gets the
+/// surviving actions instead of an all-or-nothing error. Non-array
+/// payloads (servers that returned `null` or a malformed shape) are
+/// likewise dropped.
+fn merge_responses(
+  responses: List(#(String, Result(Dynamic, lifecycle.RequestError))),
+) -> String {
+  let merged_items =
+    list.fold(responses, [], fn(acc, entry) {
+      let #(server_id, result) = entry
+      case result {
+        Ok(value) ->
+          case decode.run(value, decode.list(decode.dynamic)) {
+            Ok(items) -> list.append(acc, items)
+            Error(_) -> {
+              log.warn_at(
+                "pharos/tools/tier2/code_actions",
+                "server `"
+                  <> server_id
+                  <> "` returned non-array codeAction response; skipping",
+              )
+              acc
+            }
+          }
+        Error(err) -> {
+          log.warn_at(
+            "pharos/tools/tier2/code_actions",
+            "server `"
+              <> server_id
+              <> "` codeAction request failed: "
+              <> tool_helpers.describe_request_error(err),
+          )
+          acc
+        }
+      }
+    })
+  encode_dynamic_list(merged_items)
+}
+
+@external(erlang, "pharos_fs_ffi", "encode_json")
+fn encode_dynamic_list(items: List(Dynamic)) -> String
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {

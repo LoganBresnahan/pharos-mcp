@@ -1,7 +1,35 @@
 # 019. Multi-LSP method routing per language
 
-**Status:** Proposed
+**Status:** Accepted (M10, 2026-05-07)
 **Date:** 2026-05-06
+
+## Implementation status
+
+Landed across three commits at the M10 tail:
+
+- **Stage 1** (`feat(M10/ADR-019-stage1)`): `LanguageConfig` split into
+  language-level fields plus a `servers: List(ServerConfig)` carrying
+  command, args, init options, workspace_configuration, methods scope,
+  diagnostics_mode, readiness_token. Single-server defaults preserve
+  prior behaviour.
+- **Stage 2** (`feat(M10/ADR-019-stage2)`): pool re-keyed from
+  `(language, workspace)` to `(language, workspace, server_id)`. ETS
+  bridge keys + `pharos_lsp_dyn_sup:start_child/9` updated. Tool layer
+  passes the primary server's id everywhere; new
+  `pool.evict_all_servers/3` covers the retry path.
+  `runtime_kill_lsp` MCP tool gains an optional `server_id` arg.
+- **Stage 3** (`feat(M10/ADR-019-stage3)`): `RouteStrategy` +
+  `route_strategy_for_method/1` + `servers_for_method/2` +
+  `primary_server_for_method/2` lookup helpers. Session module gains
+  `prepare_for_method/3` and `prepare_all_for_method/3`. `format_document`
+  routes by method (so ruff handles `textDocument/formatting` for
+  python). `code_actions` fans out across every server claiming
+  `textDocument/codeAction` and concatenates result arrays.
+  Bundled python defaults gain ruff alongside pyright.
+
+Not yet routed: `textDocument/diagnostic` Merge strategy (still uses
+primary). Tracked as a follow-up — current diagnostics flow bundles
+cache + retry + push/pull mode dispatch and merging is non-trivial.
 
 ## Context
 

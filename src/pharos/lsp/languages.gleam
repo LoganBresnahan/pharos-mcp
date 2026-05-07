@@ -51,8 +51,8 @@ pub type RootPromotion {
 }
 
 /// Method-scope declaration: which LSP methods a server handles.
-/// Used by the tool dispatch layer (Stage 3) to pick which server
-/// to call for a given request.
+/// Used by the tool dispatch layer to pick which server to call for
+/// a given request.
 pub type MethodScope {
   /// Server handles every textDocument/* and workspace/* method.
   /// Used for the "main" LSP per language (rust-analyzer, gopls,
@@ -63,6 +63,76 @@ pub type MethodScope {
   /// declares `Only(["textDocument/formatting", ...])` so its
   /// formatter wins over pyright's `-32601`).
   Only(methods: List(String))
+}
+
+/// Per-method dispatch strategy for the tool layer.
+///   - `Primary` — call the first server whose scope covers the
+///     method; return its result. Used for hover, goto_*, references,
+///     formatting, rename, signature_help — methods whose answer is
+///     uniquely owned by one server.
+///   - `Merge` — call every server whose scope covers the method,
+///     concatenate the response's diagnostic-shaped arrays.
+///     Used for `textDocument/diagnostic` so pyright and ruff both
+///     contribute items.
+///   - `FanOut` — call every server, concatenate the response's
+///     code-action-shaped arrays. Used for `textDocument/codeAction`
+///     so refactoring servers + linters can both surface fixes.
+pub type RouteStrategy {
+  Primary
+  Merge
+  FanOut
+}
+
+/// Default routing strategy per LSP method. The tool layer consults
+/// this when picking how to dispatch. Values match the ADR-019
+/// initial table; future work can make this configurable per
+/// language via the override file.
+pub fn route_strategy_for_method(method: String) -> RouteStrategy {
+  case method {
+    "textDocument/diagnostic" -> Merge
+    "textDocument/codeAction" -> FanOut
+    _ -> Primary
+  }
+}
+
+/// Pick every server whose `MethodScope` covers `method`. List
+/// preserves declaration order so the tool layer can pick the first
+/// for `Primary` strategy without re-ranking. Empty list means no
+/// configured server claims the method.
+pub fn servers_for_method(
+  config: LanguageConfig,
+  method: String,
+) -> List(ServerConfig) {
+  let only_servers =
+    list.filter(config.servers, fn(server) {
+      case server.methods {
+        Only(methods) -> list.any(methods, fn(m) { m == method })
+        All -> False
+      }
+    })
+  case only_servers {
+    [] ->
+      list.filter(config.servers, fn(server) {
+        case server.methods {
+          All -> True
+          Only(_) -> False
+        }
+      })
+    _ -> only_servers
+  }
+}
+
+/// Pick the single server that should answer `method` under the
+/// `Primary` routing strategy. First server whose scope covers the
+/// method (Only-first-then-All) wins.
+pub fn primary_server_for_method(
+  config: LanguageConfig,
+  method: String,
+) -> Result(ServerConfig, Nil) {
+  case servers_for_method(config, method) {
+    [first, ..] -> Ok(first)
+    [] -> Error(Nil)
+  }
 }
 
 /// A single LSP server pharos can spawn. One language may have
@@ -317,6 +387,14 @@ fn python() -> LanguageConfig {
       ".python-version",
     ],
     root_promotion: NoPromotion,
+    // Stage 3 of ADR-019: dual-server python. Pyright owns
+    // hover/goto/types; ruff owns formatting + lint diagnostics +
+    // import-sort + lint-fix code actions. Both contribute to
+    // `textDocument/diagnostic` (Merge strategy) and
+    // `textDocument/codeAction` (FanOut). Order matters — ruff is
+    // listed second so pyright wins as the `All` fallback for
+    // unscoped methods, and ruff's `Only` declarations target only
+    // its strengths.
     servers: [
       ServerConfig(
         id: "pyright",
@@ -330,6 +408,20 @@ fn python() -> LanguageConfig {
         // does not reliably push notifications. Pull mode wins.
         diagnostics_mode: Pull,
         readiness_token: Some("Indexing"),
+      ),
+      ServerConfig(
+        id: "ruff",
+        command: "ruff",
+        args: ["server"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: Only([
+          "textDocument/formatting",
+          "textDocument/codeAction",
+          "textDocument/diagnostic",
+        ]),
+        diagnostics_mode: Pull,
+        readiness_token: None,
       ),
     ],
   )

@@ -122,12 +122,18 @@ pharos does not bundle language servers. Install whichever you need;
 pharos resolves them via PATH at runtime and surfaces a clear error if
 a binary is missing.
 
-| Language | Server | Install |
-|----------|--------|---------|
+| Language | Server(s) | Install |
+|----------|-----------|---------|
 | Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
 | TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server typescript` |
-| Python | `pyright-langserver` | `npm install -g pyright` |
+| Python | `pyright-langserver` (types/hover/goto) **+** `ruff` (formatting / lint / fixes) | `npm install -g pyright` and `pip install ruff` (or `uv tool install ruff`) |
+
+Python uses two servers via ADR-019 method routing: pyright owns
+hover, goto, types, references; ruff owns formatting, lint
+diagnostics, and lint-quick-fix code actions. Both contribute to
+`textDocument/codeAction` (their results merge). Either binary can be
+overridden in `pharos.toml`.
 
 Run `pharos --doctor` to verify each server resolves; output includes
 the absolute path PATH lookup landed on (or a `MISSING` row plus
@@ -246,32 +252,29 @@ values:
 Override per language if your server uses a different progress token,
 or set `readiness_token = ""` to disable the wait entirely.
 
-### Roadmap
+### Multi-server languages (ADR-019)
 
-The registry currently maps each language to **one** LSP. ADR-019
-extends this to **multiple LSPs per language with method-level routing**
-(e.g. python = pyright for hover/types + ruff for formatting/lint).
-That work lands in M10's tail. Schema becomes:
+Each language has a list of `ServerConfig` entries declaring which LSP
+methods they handle. Most languages bundle a single server with
+`methods = "all"`. Python ships with two:
 
-```toml
-# Future shape under ADR-019:
-[languages.python]
-file_extensions = [".py", ".pyi"]
+| Server | Scope | Owns |
+|--------|-------|------|
+| `pyright` | `methods = "all"` | hover, goto, references, types, signature_help, document_symbols, workspace_symbols, completion |
+| `ruff` | `methods = ["textDocument/formatting", "textDocument/codeAction", "textDocument/diagnostic"]` | formatter, lint quick-fixes, import-sort, lint diagnostics |
 
-[[languages.python.servers]]
-id = "pyright"
-command = "pyright-langserver"
-methods = "all"
+Routing rule (per ADR-019): for each LSP method, the **first server
+declaring it via `Only` wins**, otherwise the **first `All`-scope
+server wins**. Methods that produce array-shaped results
+(`textDocument/codeAction`, `textDocument/diagnostic`) merge results
+across every claiming server — pyright's type-related quick-fixes and
+ruff's lint autofixes both reach the LLM in one response.
 
-[[languages.python.servers]]
-id = "ruff"
-command = "ruff"
-args = ["server"]
-methods = ["textDocument/formatting", "textDocument/codeAction"]
-```
-
-The single-server form documented above stays valid and is the canonical
-path for languages with one capable LSP (rust, go, typescript today).
+The single-server form documented above stays valid for languages with
+one capable LSP (rust, go, typescript today). The multi-server
+override syntax via `pharos.toml` array-of-tables (`[[languages.<id>.servers]]`)
+is forward-compatible but not yet exposed; today's flat shape
+overrides the language's primary server only.
 
 ## Configuration
 
