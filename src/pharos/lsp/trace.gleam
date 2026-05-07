@@ -3,9 +3,10 @@
 //// Emits one debug-level log line per chunk of bytes flowing in
 //// either direction between pharos and an LSP subprocess. Off by
 //// default; activate either by tuning the logger filter
-//// (`PHAROS_LOG=info,pharos/lsp/trace=debug`) or by setting
-//// `PHAROS_TRACE_LSP=1`, which the writer applies as the same
-//// override at boot.
+//// (`PHAROS_LOG=info,pharos/lsp/trace=debug`), by setting
+//// `[lsp] trace = true` in pharos.toml, or by setting
+//// `PHAROS_TRACE_LSP=1`, which the config umbrella applies as the
+//// same filter override at boot.
 ////
 //// Output shape (one per direction per chunk):
 ////

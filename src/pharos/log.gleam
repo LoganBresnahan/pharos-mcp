@@ -18,77 +18,18 @@
 //// dispatch.
 
 import gleam/option.{type Option, None, Some}
-import pharos/env
 import pharos/log/entry.{
   type Level, Critical, Debug, Info, LogEntry, Warn,
 }
-import pharos/log/filter
 import pharos/log/ring
-import pharos/log/writer.{type Writer}
+import pharos/log/writer
 
 const default_target: String = "pharos"
 
-/// Boot the writer using filter + sink configuration read from the
-/// environment. Call once near the top of `pharos.main`. Subsequent
-/// calls re-register the writer subject; old writer pid is left to
-/// exit naturally (its mailbox drains before the cast resolves).
-///
-/// Configuration:
-///   - `PHAROS_LOG` — RUST_LOG-style spec; default `info`.
-///   - `PHAROS_TRACE_LSP` — convenience flag. When set to anything
-///     other than empty/`0`/`off`, the boot filter is augmented
-///     with `pharos/lsp/trace=debug` so wire traces are emitted
-///     without having to spell out the full `PHAROS_LOG` form.
-///   - `PHAROS_LOG_RING` — `0`/`off` disables the ring buffer sink;
-///     anything else (or unset) keeps it on.
-///   - `PHAROS_LOG_STDERR` — `0`/`off` disables stderr; default on.
-///   - `PHAROS_LOG_FILE` — path to an append-only log file. Parent
-///     dirs are created if missing. No rotation in this version;
-///     operators rotate via logrotate / journal / fs tooling. Off
-///     by default; set the env var to opt in.
-pub fn start_default() -> Result(Writer, writer.StartError) {
-  let spec = case env.get("PHAROS_LOG") {
-    None -> ""
-    Some(value) -> value
-  }
-  let parsed_filter = filter.parse_spec(spec)
-  let with_trace = case read_bool_env("PHAROS_TRACE_LSP", default_value: False) {
-    False -> parsed_filter
-    True ->
-      filter.Filter(
-        default: parsed_filter.default,
-        overrides: [
-          filter.Override("pharos/lsp/trace", option.Some(Debug)),
-          ..parsed_filter.overrides
-        ],
-      )
-  }
-  let ring_enabled = read_bool_env("PHAROS_LOG_RING", default_value: True)
-  let stderr_enabled = read_bool_env("PHAROS_LOG_STDERR", default_value: True)
-  let file_path = case env.get("PHAROS_LOG_FILE") {
-    None -> None
-    Some(raw) ->
-      case raw {
-        "" -> None
-        path -> Some(path)
-      }
-  }
-  writer.start(with_trace, ring_enabled, stderr_enabled, file_path)
-}
-
-fn read_bool_env(name: String, default_value default: Bool) -> Bool {
-  case env.get(name) {
-    None -> default
-    Some(raw) ->
-      case raw {
-        "0" -> False
-        "off" -> False
-        "false" -> False
-        "no" -> False
-        _ -> True
-      }
-  }
-}
+// The writer is started under the supervisor in `pharos/supervisor`,
+// which threads the resolved `pharos/config` values into
+// `writer.start_supervised/4`. There is no env-reading helper here;
+// the umbrella in `pharos/config` owns all configuration sources.
 
 // -- Default-target API (back-compat with the 33 existing call sites)
 

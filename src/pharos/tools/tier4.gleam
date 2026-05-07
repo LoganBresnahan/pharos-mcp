@@ -25,7 +25,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import pharos/env
+import pharos/config
 import pharos/log
 import pharos/log/entry
 import pharos/lsp/pool.{type Pool}
@@ -45,21 +45,23 @@ pub type ToolResult =
   Result(String, String)
 
 /// Tier-4 tool definitions. Returned to MCP clients via `tools/list`.
-pub fn definitions() -> List(Json) {
+/// Each entry is a `(name, builder)` so the caller can filter by
+/// the configured tool surface before instantiating the JSON.
+pub fn named_definitions() -> List(#(String, fn() -> Json)) {
   [
-    runtime_processes_definition(),
-    runtime_pid_info_definition(),
-    runtime_supervision_tree_definition(),
-    runtime_ets_tables_definition(),
-    runtime_memory_definition(),
-    runtime_applications_definition(),
-    runtime_scheduler_util_definition(),
-    runtime_log_tail_definition(),
-    runtime_log_clear_definition(),
-    runtime_log_level_definition(),
-    runtime_trace_lsp_definition(),
-    runtime_kill_lsp_definition(),
-    runtime_trace_calls_definition(),
+    #("runtime_processes", runtime_processes_definition),
+    #("runtime_pid_info", runtime_pid_info_definition),
+    #("runtime_supervision_tree", runtime_supervision_tree_definition),
+    #("runtime_ets_tables", runtime_ets_tables_definition),
+    #("runtime_memory", runtime_memory_definition),
+    #("runtime_applications", runtime_applications_definition),
+    #("runtime_scheduler_util", runtime_scheduler_util_definition),
+    #("runtime_log_tail", runtime_log_tail_definition),
+    #("runtime_log_clear", runtime_log_clear_definition),
+    #("runtime_log_level", runtime_log_level_definition),
+    #("runtime_trace_lsp", runtime_trace_lsp_definition),
+    #("runtime_kill_lsp", runtime_kill_lsp_definition),
+    #("runtime_trace_calls", runtime_trace_calls_definition),
   ]
 }
 
@@ -718,8 +720,9 @@ fn runtime_trace_calls_definition() -> Json {
       "description",
       json.string(
         "Capture function calls into one module via recon_trace. "
-          <> "Gated behind PHAROS_RUNTIME_TRACE_ENABLED=1 — refuses "
-          <> "otherwise. Caps: "
+          <> "Gated behind `[runtime] trace_calls_enabled = true` "
+          <> "(or PHAROS_RUNTIME_TRACE_ENABLED=1) — refuses otherwise. "
+          <> "Caps: "
           <> int.to_string(trace_calls_max_duration_ms)
           <> "ms duration, "
           <> int.to_string(trace_calls_max_events)
@@ -808,21 +811,15 @@ fn runtime_trace_calls_definition() -> Json {
 }
 
 fn handle_trace_calls(args: Option(Dynamic)) -> ToolResult {
-  case env.get("PHAROS_RUNTIME_TRACE_ENABLED") {
-    None ->
+  let cfg = config.cached()
+  case cfg.runtime.trace_calls_enabled {
+    False ->
       Error(
-        "runtime_trace_calls is gated behind PHAROS_RUNTIME_TRACE_ENABLED=1; "
-          <> "set the env var and restart pharos to enable",
+        "runtime_trace_calls is disabled. Enable it in pharos.toml under "
+          <> "[runtime] trace_calls_enabled = true (or set "
+          <> "PHAROS_RUNTIME_TRACE_ENABLED=1) and restart pharos",
       )
-    Some(raw) ->
-      case raw {
-        "0" | "off" | "false" | "" ->
-          Error(
-            "runtime_trace_calls is disabled "
-              <> "(PHAROS_RUNTIME_TRACE_ENABLED=" <> raw <> ")",
-          )
-        _ -> trace_calls_inner(args)
-      }
+    True -> trace_calls_inner(args)
   }
 }
 

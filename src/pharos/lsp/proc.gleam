@@ -280,7 +280,7 @@ fn describe_client_error(err: client.Error) -> String {
       "language server binary `"
       <> command
       <> "` not found on PATH — install it and ensure it is on PATH, or "
-      <> "override `command` via PHAROS_LSP_REGISTRY (ADR-018)"
+      <> "override `command` via [languages.<id>] in pharos.toml (ADR-018)"
     client.SpawnError(port.SpawnFailed(reason)) ->
       "subprocess spawn failed: " <> reason
   }

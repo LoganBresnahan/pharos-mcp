@@ -49,7 +49,12 @@
     register_root_supervisor/1,
     find_root_supervisor/0,
     trace_filter_cache_set/1,
-    trace_filter_cache_is_on/0
+    trace_filter_cache_is_on/0,
+    config_store/1,
+    config_load/0,
+    argv/0,
+    burrito_cache_root/0,
+    beam_version_info/0
 ]).
 
 %% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
@@ -580,3 +585,50 @@ trace_filter_cache_is_on() ->
         true -> true;
         _ -> false
     end.
+
+%% Persistent-term backing for the loaded Config record. Stored once
+%% at boot by `pharos/config:load/0`; read O(1) by every consumer.
+config_store(ConfigTerm) ->
+    persistent_term:put(pharos_config, ConfigTerm),
+    nil.
+
+config_load() ->
+    try
+        Cfg = persistent_term:get(pharos_config),
+        {ok, Cfg}
+    catch
+        error:badarg -> {error, nil}
+    end.
+
+%% Plain CLI argv (after BEAM/Erlang flags). Returns the args the user
+%% supplied to the Burrito-wrapped binary. Empty list under `mix run`.
+argv() ->
+    [unicode:characters_to_binary(A) || A <- init:get_plain_arguments()].
+
+%% Burrito's per-app extract-cache root: `<user_cache>/burrito_runtime/_/pharos`
+%% covers every installed version. Used by `pharos --purge-cache` to
+%% clean up extracted ERTS+BEAM payloads from prior runs.
+%%
+%% On Linux: ~/.cache/burrito_runtime/_/pharos/
+%% On macOS: ~/Library/Caches/burrito_runtime/_/pharos/
+%% On Windows: <LOCALAPPDATA>\burrito_runtime\_\pharos\
+%%
+%% Returns the path as a binary even when the directory does not yet
+%% exist (e.g. running under `mix start` rather than the wrapped
+%% binary). Caller is expected to check `filelib:is_dir/1` before
+%% trying to delete.
+burrito_cache_root() ->
+    Base = filename:basedir(user_cache, "burrito_runtime"),
+    Path = filename:join([Base, "_", "pharos"]),
+    list_to_binary(Path).
+
+%% BEAM + ERTS version snapshot for `pharos --doctor`. Every value
+%% is a binary so the Gleam side can render without atom-to-string
+%% conversions. ERTS is the subsystem that actually runs the binary
+%% (matters when reporting Burrito-wrapped vs `mix run` invocation).
+beam_version_info() ->
+    Erts = list_to_binary(erlang:system_info(version)),
+    Otp = list_to_binary(erlang:system_info(otp_release)),
+    Sys = list_to_binary(erlang:system_info(system_version)),
+    Trim = string:trim(Sys),
+    {ok, {beam_info, Erts, Otp, Trim}}.

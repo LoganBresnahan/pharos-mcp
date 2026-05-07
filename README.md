@@ -4,30 +4,225 @@ MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) 
 
 Distributed as a single self-contained binary via [Burrito](https://github.com/burrito-elixir/burrito), shipped through GitHub Releases and npm. Optionally augmented by a thin VSCode extension (separate repo) that exposes unsaved-buffer state.
 
-> **Status:** Pre-alpha, Milestone 1.
-> Stdio transport works against any MCP client: `initialize` handshake,
-> `tools/list`, `tools/call` for a stub `echo` tool. Real LSP-backed tools
-> arrive in Milestones 3–4. See [doc/init.md](doc/init.md) for the milestone
-> plan.
+> **Status:** Pre-alpha, Milestone 10 (pre-distribution polish).
+> Tier 1 + Tier 2 tools complete (hover, goto, references, document/workspace
+> symbols, signature help, call hierarchy, rename preview, format, code
+> actions, diagnostics, raw passthrough), runtime introspection tier
+> shipped, four languages (rust / go / typescript / python) bundled.
+> Distribution wiring (npm publish + GH release matrix) lands in M13.
+> See [doc/init.md](doc/init.md) for the milestone plan.
 
-## Quick install (planned, post-Milestone 6)
+## Install
+
+Three channels, in order of recommended UX. **All produce the same
+`pharos` binary**; pick whichever fits your workflow.
+
+### 1. npm via `npx` (recommended — works on every platform)
+
+Add this to your MCP host's config (`.mcp.json`, `claude_desktop_config.json`,
+Cursor's per-server config, etc.):
 
 ```jsonc
-// .mcp.json or claude_desktop_config.json
 {
   "mcpServers": {
-    "pharos": {              // config key — arbitrary, but using
-                                   // underscores keeps it aligned with the
-                                   // BEAM identifier and the repo directory;
-                                   // tools register as mcp__pharos__*
+    "pharos": {
       "command": "npx",
-      "args": ["-y", "pharos"]   // npm package name MUST use hyphens
+      "args": ["-y", "pharos"]
     }
   }
 }
 ```
 
-Or download a binary directly from [Releases](https://github.com/LoganBresnahan/pharos/releases).
+`npx` fetches the meta package; npm resolves only the matching
+`@pharos/<platform>-<arch>` sub-package and skips the others. Node shim
+inside spawns the binary with stdio piped. Cross-platform out of the box
+(Linux / macOS / Windows / WSL).
+
+After install, **warm the Burrito extract cache** so the first MCP host
+spawn does not pay cold-extract latency (~1–3s):
+
+```bash
+npx pharos --doctor
+```
+
+### 2. Direct download from GitHub Releases
+
+For users who prefer not to depend on Node. Pick the binary for your
+platform from the [latest release](https://github.com/LoganBresnahan/pharos/releases/latest)
+and place it on PATH.
+
+| OS / arch | Recommended install path | On default PATH? |
+|-----------|---------------------------|------------------|
+| Linux x86_64 | `~/.local/bin/pharos` | yes (XDG; bash & zsh ship it) |
+| Linux aarch64 | `~/.local/bin/pharos` | yes |
+| macOS x86_64 (Intel) | `~/.local/bin/pharos` or `/usr/local/bin/pharos` | yes |
+| macOS aarch64 (Apple Silicon) | `~/.local/bin/pharos` | yes |
+| Windows x86_64 | `%LOCALAPPDATA%\Programs\pharos\pharos.exe` | needs PATH addition (see below) |
+| WSL | same as Linux (it IS Linux) | yes |
+
+Linux / macOS:
+```bash
+mkdir -p ~/.local/bin
+curl -L https://github.com/LoganBresnahan/pharos/releases/latest/download/pharos-linux-x64 \
+  -o ~/.local/bin/pharos
+chmod +x ~/.local/bin/pharos
+
+# Verify + warm the cache
+pharos --doctor
+```
+
+Replace `linux-x64` with your target: `linux-arm64`, `darwin-x64`,
+`darwin-arm64`. For Windows, download `pharos-win-x64.exe` to
+`%LOCALAPPDATA%\Programs\pharos\pharos.exe` and add that directory to
+your `Path` user environment variable:
+
+```powershell
+$dir = "$env:LOCALAPPDATA\Programs\pharos"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Invoke-WebRequest `
+  -Uri https://github.com/LoganBresnahan/pharos/releases/latest/download/pharos-win-x64.exe `
+  -OutFile "$dir\pharos.exe"
+[Environment]::SetEnvironmentVariable(
+  "Path", "$env:Path;$dir", "User"
+)
+
+# Restart your terminal so PATH refreshes, then verify + warm:
+pharos --doctor
+```
+
+If `~/.local/bin` is not in your PATH, add it:
+
+```bash
+# bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+# zsh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+Then point your MCP host config at the absolute path:
+
+```jsonc
+{
+  "mcpServers": {
+    "pharos": {
+      "command": "/home/<you>/.local/bin/pharos"
+    }
+  }
+}
+```
+
+### 3. Build from source
+
+See [Development](#development) below. Use this only when iterating on
+pharos itself.
+
+## Language servers (install separately)
+
+pharos does not bundle language servers. Install whichever you need;
+pharos resolves them via PATH at runtime, with a clear error if missing.
+
+| Language | Server | Install |
+|----------|--------|---------|
+| Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
+| Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
+| TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server typescript` |
+| Python | `pyright-langserver` | `npm install -g pyright` |
+
+Override the resolved binary path per language in `~/.config/pharos/pharos.toml`:
+
+```toml
+[languages.rust]
+command = "/opt/custom/rust-analyzer-nightly"
+```
+
+Run `pharos --doctor` to verify each server resolves on PATH.
+
+## Configuration
+
+pharos reads configuration in this precedence order (later wins):
+
+1. Compiled-in defaults (no config required)
+2. `~/.config/pharos/pharos.toml` — global per-user
+3. `./.pharos.toml` — per-project; walked up from the cwd pharos was launched in
+4. `PHAROS_*` environment variables — final override
+
+To start customising, dump the canonical TOML with comments:
+
+```bash
+mkdir -p ~/.config/pharos
+pharos --print-default-config > ~/.config/pharos/pharos.toml
+$EDITOR ~/.config/pharos/pharos.toml
+```
+
+The full schema lives in [doc/example-pharos.toml](doc/example-pharos.toml).
+
+### Tool filter (`tools = [...]`)
+
+Four categories cover every MCP tool pharos exposes:
+
+| Category | Members |
+|----------|---------|
+| `read` | non-mutating LSP queries (hover, goto, references, symbols, diagnostics, signature help, call hierarchy) — 12 tools |
+| `write` | edit-producing LSP tools that return `WorkspaceEdit` data (rename_preview, format_document, code_actions) — 3 tools |
+| `debug` | pharos runtime introspection (processes, supervision tree, ETS, log tail, kill_lsp, …) — 14 tools incl. `echo` |
+| `raw` | power-user escape hatch (`lsp_request_raw`) — 1 tool |
+
+Mix categories with literal tool names freely:
+
+```toml
+tools = ["read"]                       # query-only agent
+tools = ["read", "write"]              # full LSP surface
+tools = ["read", "runtime_log_tail"]   # category + one extra
+tools = ["hover", "goto_definition"]   # fully explicit
+```
+
+Default: all categories on.
+
+## CLI flags
+
+pharos has no runtime-configuration CLI flags — every knob lives in
+TOML or `PHAROS_*` env vars. Flags are limited to operational meta
+commands.
+
+| Flag | What it does |
+|------|--------------|
+| `--version`, `-V` | Print version and exit. |
+| `--help`, `-h` | Print usage and exit. |
+| `--print-default-config` | Print the canonical pharos.toml starter file with comments. |
+| `--doctor` | Self-diagnostic. Resolves Config the same way a normal boot does, probes each language server's binary on PATH, reports anything that would break. Doubles as a Burrito-cache warmup — run once after install so the first MCP host spawn is fast. |
+| `--purge-cache` | Remove Burrito's extracted ERTS+BEAM payload at `<user_cache>/burrito_runtime/_/pharos/`. Next run re-extracts (~1–3s). Does **not** remove the binary itself or your config files. |
+
+## Updating
+
+There is no `--update` flag. Use the channel-appropriate recipe:
+
+```bash
+# npm install
+npm update -g pharos
+
+# Direct download (replace the platform suffix)
+curl -L https://github.com/LoganBresnahan/pharos/releases/latest/download/pharos-linux-x64 \
+  -o ~/.local/bin/pharos
+chmod +x ~/.local/bin/pharos
+
+# After update, recommended:
+pharos --purge-cache       # clear stale Burrito extract from prior version
+pharos --doctor            # warm fresh cache + re-verify
+```
+
+## Uninstalling
+
+```bash
+pharos --purge-cache              # remove Burrito's extracted payload
+
+# Then per channel:
+npm uninstall -g pharos           # if installed via npm
+rm ~/.local/bin/pharos            # if installed via direct download
+
+# Optional cleanup:
+rm -rf ~/.config/pharos           # config files (TOML + language registry)
+rm -rf ~/.cache/pharos            # log files
+```
 
 ## Why?
 

@@ -12,6 +12,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/int
 import gleam/json.{type Json}
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import pharos/log
@@ -31,6 +32,7 @@ import pharos/tools/tier2/format_document
 import pharos/tools/tier2/goto_implementation
 import pharos/tools/tier2/goto_type_definition
 import pharos/tools/tier2/lsp_request_raw
+import pharos/tools/registry as tool_registry
 import pharos/tools/tier4
 import pharos/tools/tier2/rename_preview
 import pharos/tools/tier2/signature_help
@@ -216,33 +218,48 @@ fn server_capabilities() -> Json {
 fn tools_list_response(id: Id) -> String {
   success_response(id, fn() {
     json.object([
-      #(
-        "tools",
-        json.array(
-          [
-            echo_tool_definition(),
-            get_diagnostics_tool_definition(),
-            hover_tool_definition(),
-            goto_definition_tool_definition(),
-            find_references_tool_definition(),
-            document_symbols_tool_definition(),
-            workspace_symbols_tool_definition(),
-            goto_type_definition_tool_definition(),
-            goto_implementation_tool_definition(),
-            signature_help_tool_definition(),
-            call_hierarchy_prepare_tool_definition(),
-            call_hierarchy_incoming_calls_tool_definition(),
-            call_hierarchy_outgoing_calls_tool_definition(),
-            rename_preview_tool_definition(),
-            format_document_tool_definition(),
-            code_actions_tool_definition(),
-            lsp_request_raw_tool_definition(),
-            ..tier4.definitions()
-          ],
-          of: fn(t) { t },
-        ),
-      ),
+      #("tools", json.array(allowed_tool_definitions(), of: fn(t) { t })),
     ])
+  })
+}
+
+/// Build the filtered list of tool definitions: every `(name,
+/// builder)` whose `name` is allowed by the cached tool filter
+/// (`pharos/config.tools`) becomes its instantiated JSON; the rest
+/// drop out before `tools/list` ever sees them.
+fn allowed_tool_definitions() -> List(Json) {
+  let tier1_2 = [
+    #("echo", echo_tool_definition),
+    #("get_diagnostics", get_diagnostics_tool_definition),
+    #("hover", hover_tool_definition),
+    #("goto_definition", goto_definition_tool_definition),
+    #("find_references", find_references_tool_definition),
+    #("document_symbols", document_symbols_tool_definition),
+    #("workspace_symbols", workspace_symbols_tool_definition),
+    #("goto_type_definition", goto_type_definition_tool_definition),
+    #("goto_implementation", goto_implementation_tool_definition),
+    #("signature_help", signature_help_tool_definition),
+    #("call_hierarchy_prepare", call_hierarchy_prepare_tool_definition),
+    #(
+      "call_hierarchy_incoming_calls",
+      call_hierarchy_incoming_calls_tool_definition,
+    ),
+    #(
+      "call_hierarchy_outgoing_calls",
+      call_hierarchy_outgoing_calls_tool_definition,
+    ),
+    #("rename_preview", rename_preview_tool_definition),
+    #("format_document", format_document_tool_definition),
+    #("code_actions", code_actions_tool_definition),
+    #("lsp_request_raw", lsp_request_raw_tool_definition),
+  ]
+  list.append(tier1_2, tier4.named_definitions())
+  |> list.filter_map(fn(pair) {
+    let #(name, builder) = pair
+    case tool_registry.is_allowed(name) {
+      True -> Ok(builder())
+      False -> Error(Nil)
+    }
   })
 }
 
@@ -644,6 +661,39 @@ fn echo_tool_definition() -> Json {
 // -- tools/call ----------------------------------------------------------
 
 fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
+  case peek_filtered_name(params) {
+    Some(blocked) ->
+      error_response(
+        Some(id),
+        -32_601,
+        "Tool not enabled: "
+          <> blocked
+          <> " (filtered by pharos.tools config)",
+      )
+    None -> dispatch_tool_call(pool, id, params)
+  }
+}
+
+/// Peek the requested tool name and return `Some(name)` if the
+/// tool filter denies it. Returns `None` when the filter allows
+/// the tool, when the params do not decode (the inner dispatch
+/// will surface the decode error), or when the name is missing.
+fn peek_filtered_name(params: Option(Dynamic)) -> Option(String) {
+  case decode_tool_call(params) {
+    Ok(#(name, _)) ->
+      case tool_registry.is_allowed(name) {
+        True -> None
+        False -> Some(name)
+      }
+    Error(_) -> None
+  }
+}
+
+fn dispatch_tool_call(
+  pool: Pool,
+  id: Id,
+  params: Option(Dynamic),
+) -> String {
   case decode_tool_call(params) {
     Ok(#("echo", arguments)) ->
       case decode_echo_arguments(arguments) {

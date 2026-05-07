@@ -1,0 +1,117 @@
+# Canonical pharos config. Drop a copy at:
+#
+#   ~/.config/pharos/pharos.toml      (global)
+# or
+#   ./.pharos.toml                    (project; walked up from cwd)
+#
+# Either is fully optional — pharos boots cleanly with no config file
+# at all. Project-level overrides global; environment variables
+# (`PHAROS_*`) override both.
+#
+# Every key here is at its compiled-in default. Delete keys you do
+# not want to override; uncomment and edit the rest.
+#
+# Bootstrap recipe:
+#   pharos --print-default-config > ~/.config/pharos/pharos.toml
+
+# transport — "stdio" | "http" | "both". Most MCP hosts spawn pharos
+# as a subprocess and speak stdio.
+# transport = "stdio"
+
+# tools — choose which MCP tools the LLM sees.
+#
+# Each entry is either a category alias (expands to a set) or a
+# specific tool name. Mix freely. Default exposes everything.
+#
+#   "read"  — non-mutating LSP queries (12 tools):
+#     hover, goto_definition, goto_type_definition,
+#     goto_implementation, find_references, document_symbols,
+#     workspace_symbols, signature_help,
+#     call_hierarchy_prepare, call_hierarchy_incoming_calls,
+#     call_hierarchy_outgoing_calls, get_diagnostics
+#
+#   "write" — edit-producing LSP tools (3 tools, all return
+#             WorkspaceEdit data; never auto-apply to disk):
+#     rename_preview, format_document, code_actions
+#
+#   "debug" — pharos runtime introspection (14 tools incl. echo):
+#     echo, runtime_processes, runtime_supervision_tree,
+#     runtime_ets_tables, runtime_memory, runtime_applications,
+#     runtime_scheduler_util, runtime_pid_info,
+#     runtime_log_tail, runtime_log_clear, runtime_log_level,
+#     runtime_trace_lsp, runtime_trace_calls, runtime_kill_lsp
+#
+#   "raw"   — power-user escape hatch (1 tool):
+#     lsp_request_raw
+#
+# Examples:
+#   tools = ["read"]                       # query-only agent
+#   tools = ["read", "write"]              # full LSP surface
+#   tools = ["read", "runtime_log_tail"]   # category + one extra
+#   tools = ["hover", "goto_definition"]   # fully explicit
+# tools = ["read", "write", "debug", "raw"]
+
+[server.http]
+# port — 0 lets the OS pick a free port. Pharos logs the bound
+# port to stderr (and writes it to port_file if set).
+# port = 3535
+
+# bind — interface to bind on. Localhost-only by default.
+# bind = "127.0.0.1"
+
+# port_file — atomic write+rename of the bound port to a path.
+# Headless callers read this file to discover where pharos landed.
+# port_file = "~/.cache/pharos/http-port"
+
+[log]
+# filter — RUST_LOG-style spec. "info" by default; per-target
+# overrides override the default level for matching prefixes.
+#   PHAROS_LOG=info,pharos/lsp/proc=debug,pharos/lsp/trace=off
+# filter = "info"
+
+# file — append-only log file path. Unset (the default) disables the
+# file sink.
+# file = "~/.cache/pharos/log/pharos.log"
+
+# ring — keep an in-memory ring buffer feeding runtime_log_tail.
+# ring = true
+
+# stderr — also fan out to stderr. Required for foreground
+# debugging; safe to disable when the file sink is set.
+# stderr = true
+
+[lsp]
+# trace — convenience flag for turning on the wire tracer at debug
+# level. Equivalent to a filter override
+# `pharos/lsp/trace=debug`.
+# trace = false
+
+[runtime]
+# trace_calls_enabled — gates the runtime_trace_calls MCP tool
+# (recon-backed). Off by default because raw module/function
+# tracing has scheduler side effects.
+# trace_calls_enabled = false
+
+# [bridge]
+# port — VSCode bridge listener port for the M7 extension.
+# port = 31337
+
+# [languages.<id>] — per-language overrides. Replaces the legacy
+# JSON registry. Only the fields you want to override need values.
+#
+# Override the binary path for a bundled language:
+# [languages.rust]
+# command = "/opt/custom/rust-analyzer-nightly"
+#
+# [languages.python]
+# command = "pyright-langserver"
+# args = ["--stdio"]
+#
+# Adding a brand-new language requires command + file_extensions at
+# minimum:
+# [languages.haskell]
+# command = "haskell-language-server-wrapper"
+# args = ["--lsp"]
+# file_extensions = [".hs"]
+# root_markers = ["cabal.project", "stack.yaml"]
+# diagnostics_mode = "push"

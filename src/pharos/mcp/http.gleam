@@ -33,10 +33,12 @@ import gleam/otp/static_supervisor as supervisor
 import gleam/result
 import gleam/string
 import gleam/string_tree
+import pharos/config
 import pharos/log
 import pharos/lsp/pool.{type Pool}
 import pharos/mcp/server
 import pharos/mcp/sessions.{type Sessions}
+import gleam/option.{None, Some}
 import mist
 
 /// Cap incoming bodies. A JSON-RPC message larger than this would
@@ -105,9 +107,10 @@ fn build(
         log.info_at(
           "pharos/mcp/http",
           "HTTP listener auto-assigned port " <> int.to_string(bound_port)
-            <> " on " <> bind <> " (PHAROS_HTTP_PORT=0)",
+            <> " on " <> bind <> " (port=0)",
         )
     }
+    write_port_file_if_configured(bound_port)
   })
 }
 
@@ -187,6 +190,35 @@ fn dispatch(pool: Pool, body_text: String) -> Response(mist.ResponseData) {
     server.NoReply -> empty_response(204)
   }
 }
+
+/// Atomically write the bound port to the path configured in
+/// `[server.http] port_file` (or `PHAROS_HTTP_PORT_FILE`). Headless
+/// callers poll this path to discover where pharos landed when port
+/// is `0` (OS auto-assign). Failures are warn-logged and non-fatal —
+/// the listener is already up, we just lose the discovery side
+/// channel.
+fn write_port_file_if_configured(bound_port: Int) -> Nil {
+  let cfg = config.cached()
+  case cfg.http.port_file {
+    None -> Nil
+    Some(path) ->
+      case atomic_write_text(path, int.to_string(bound_port)) {
+        Ok(_) ->
+          log.info_at(
+            "pharos/mcp/http",
+            "wrote bound port " <> int.to_string(bound_port) <> " to " <> path,
+          )
+        Error(reason) ->
+          log.warn_at(
+            "pharos/mcp/http",
+            "failed to write port_file " <> path <> ": " <> reason,
+          )
+      }
+  }
+}
+
+@external(erlang, "pharos_fs_ffi", "atomic_write_text")
+fn atomic_write_text(path: String, text: String) -> Result(Nil, String)
 
 // -- SSE: GET /mcp/events ------------------------------------------------
 

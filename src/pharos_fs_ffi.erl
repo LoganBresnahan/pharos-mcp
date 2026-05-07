@@ -9,7 +9,7 @@
 %% Returns Gleam-friendly tagged tuples shaped as Result(t, e).
 
 -module(pharos_fs_ffi).
--export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1]).
+-export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, dir_size_bytes/1, which_executable/1]).
 
 is_regular_file(Path) ->
     filelib:is_regular(binary_to_list(Path)).
@@ -41,3 +41,100 @@ shell(Cmd) ->
 %% LSP's response back through MCP without a Json type detour.
 encode_json(Term) ->
     iolist_to_binary(json:encode(Term)).
+
+%% Current working directory as a binary. Used by config loader to
+%% start the .pharos.toml ascent from the invocation directory. Falls
+%% back to the empty binary if the underlying syscall fails (vanishingly
+%% rare, but file:get_cwd/0 can return {error, _} on permission issues).
+cwd() ->
+    case file:get_cwd() of
+        {ok, Path} -> list_to_binary(Path);
+        {error, _} -> <<>>
+    end.
+
+%% Atomic write+rename: serialise `Text` to `Path.tmp`, then rename
+%% over `Path`. POSIX rename is atomic on the same filesystem, so a
+%% concurrent reader sees either the prior contents or the new ones —
+%% never a half-written file. Used by `mcp/http`'s port_file feature.
+%% Parent directory must exist; we do not mkdir.
+%%
+%% Returns:
+%%   {ok, nil}    — success
+%%   {error, Bin} — human-readable error binary
+atomic_write_text(Path, Text) when is_binary(Path), is_binary(Text) ->
+    PathStr = binary_to_list(Path),
+    Tmp = PathStr ++ ".tmp",
+    case file:write_file(Tmp, Text) of
+        ok ->
+            case file:rename(Tmp, PathStr) of
+                ok -> {ok, nil};
+                {error, Reason} ->
+                    file:delete(Tmp),
+                    {error, format_reason(Reason)}
+            end;
+        {error, Reason} ->
+            {error, format_reason(Reason)}
+    end.
+
+format_reason(Reason) ->
+    iolist_to_binary(io_lib:format("~p", [Reason])).
+
+%% Recursively remove a directory (rm -rf semantics). Returns:
+%%   {ok, nil}   — directory gone (or never existed)
+%%   {error, Bin} — error binary
+%%
+%% Safe on a path that does not exist (returns ok). Used by
+%% `pharos --purge-cache` to nuke the Burrito extract dir.
+rm_rf(Path) when is_binary(Path) ->
+    PathStr = binary_to_list(Path),
+    case filelib:is_dir(PathStr) orelse filelib:is_regular(PathStr) of
+        false -> {ok, nil};
+        true ->
+            case file:del_dir_r(PathStr) of
+                ok -> {ok, nil};
+                {error, enoent} -> {ok, nil};
+                {error, Reason} -> {error, format_reason(Reason)}
+            end
+    end.
+
+%% Recursive directory size in bytes. Returns 0 for missing paths.
+%% Used by `pharos --doctor` + `--purge-cache` so output reports
+%% how many MB the cache holds before/after.
+dir_size_bytes(Path) when is_binary(Path) ->
+    PathStr = binary_to_list(Path),
+    case filelib:is_dir(PathStr) of
+        false -> 0;
+        true ->
+            Files = filelib:wildcard(filename:join(PathStr, "**/*")),
+            lists:foldl(fun(F, Acc) ->
+                case filelib:is_regular(F) of
+                    true ->
+                        case file:read_file_info(F) of
+                            {ok, Info} -> Acc + element(2, Info); %% size
+                            _ -> Acc
+                        end;
+                    false -> Acc
+                end
+            end, 0, Files)
+    end.
+
+%% Resolve a bare command name through PATH. Mirrors `which`. Returns:
+%%   {ok, AbsPath} — absolute path to the executable
+%%   {error, nil}  — not found
+%%
+%% Honours absolute paths (returned verbatim if they exist + are
+%% executable).
+which_executable(Cmd) when is_binary(Cmd) ->
+    CmdStr = binary_to_list(Cmd),
+    case filename:pathtype(CmdStr) of
+        absolute ->
+            case filelib:is_regular(CmdStr) of
+                true -> {ok, list_to_binary(CmdStr)};
+                false -> {error, nil}
+            end;
+        _ ->
+            case os:find_executable(CmdStr) of
+                false -> {error, nil};
+                Path -> {ok, list_to_binary(Path)}
+            end
+    end.
