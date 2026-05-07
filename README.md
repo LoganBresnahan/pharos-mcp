@@ -119,7 +119,8 @@ pharos itself.
 ## Language servers (install separately)
 
 pharos does not bundle language servers. Install whichever you need;
-pharos resolves them via PATH at runtime, with a clear error if missing.
+pharos resolves them via PATH at runtime and surfaces a clear error if
+a binary is missing.
 
 | Language | Server | Install |
 |----------|--------|---------|
@@ -128,14 +129,149 @@ pharos resolves them via PATH at runtime, with a clear error if missing.
 | TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server typescript` |
 | Python | `pyright-langserver` | `npm install -g pyright` |
 
-Override the resolved binary path per language in `~/.config/pharos/pharos.toml`:
+Run `pharos --doctor` to verify each server resolves; output includes
+the absolute path PATH lookup landed on (or a `MISSING` row plus
+install hint when it didn't).
+
+## Language registry
+
+pharos ships a built-in registry mapping language ids to LSP commands,
+file extensions, and workspace-root markers. Lookup flow per tool call:
+
+1. Tool receives a `file:// URI`.
+2. File extension is matched against the registry (`.rs` → `rust`,
+   `.go` → `go`, `.ts/.tsx/.js/.jsx` → `typescript`, `.py/.pyi` →
+   `python`).
+3. The matched language's `command` is resolved on PATH:
+   - **Bare name** (e.g. `rust-analyzer`) goes through `os:find_executable/1`,
+     which searches every directory in `$PATH` in order.
+   - **Absolute path** (e.g. `/opt/custom/rust-analyzer`) is used verbatim
+     after a regular-file check.
+4. Pharos spawns the resolved binary, drives the LSP handshake, dispatches
+   the tool's underlying LSP method, returns the result.
+
+### Bundled defaults
+
+| id | extensions | command | workspace markers |
+|----|------------|---------|-------------------|
+| `rust` | `.rs` | `rust-analyzer` | `Cargo.toml`, `rust-project.json` |
+| `go` | `.go` | `gopls` | `go.mod`, `go.work` |
+| `typescript` | `.ts`, `.tsx`, `.js`, `.jsx` | `typescript-language-server --stdio` | `tsconfig.json`, `package.json`, `jsconfig.json` |
+| `python` | `.py`, `.pyi` | `pyright-langserver --stdio` | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt` |
+
+The full default registry lives in [src/pharos/lsp/languages.gleam](src/pharos/lsp/languages.gleam) — every field
+overlay-able from `pharos.toml` (see below).
+
+### Custom paths (override a bundled language)
+
+Common case: language server installed somewhere `os:find_executable`
+won't see, or you want to pin a specific build (e.g. nightly
+rust-analyzer). Drop into `~/.config/pharos/pharos.toml`:
 
 ```toml
 [languages.rust]
 command = "/opt/custom/rust-analyzer-nightly"
+
+[languages.python]
+command = "/Users/me/.venv/bin/pyright-langserver"
+args = ["--stdio"]
 ```
 
-Run `pharos --doctor` to verify each server resolves on PATH.
+Only fields you supply override the default — everything else
+(`file_extensions`, `root_markers`, etc.) is inherited from the bundled
+entry. Verify with `pharos --doctor`:
+
+```
+rust              ok     /opt/custom/rust-analyzer-nightly
+python            ok     /Users/me/.venv/bin/pyright-langserver
+```
+
+### Custom paths per project
+
+For monorepos that pin a project-specific server build, drop a
+`.pharos.toml` at the project root. Pharos walks up from cwd at boot to
+find it; project values beat global values:
+
+```toml
+# /workspace/myproject/.pharos.toml
+[languages.python]
+command = "/workspace/myproject/.venv/bin/pyright-langserver"
+args = ["--stdio"]
+```
+
+### Adding a brand-new language
+
+`command` and `file_extensions` are required; everything else has
+sensible blank defaults. Example for Haskell:
+
+```toml
+[languages.haskell]
+command = "haskell-language-server-wrapper"
+args = ["--lsp"]
+file_extensions = [".hs", ".lhs"]
+root_markers = ["cabal.project", "stack.yaml", "package.yaml"]
+diagnostics_mode = "push"      # or "pull" — see ADR-018
+```
+
+After the entry lands, hover/goto/etc. on a `.hs` file will spawn
+`haskell-language-server-wrapper`. `pharos --doctor` will probe it
+alongside the bundled languages.
+
+### Diagnostics mode
+
+`diagnostics_mode` controls how `get_diagnostics` retrieves data:
+
+- `"push"` — pharos waits for the server's `textDocument/publishDiagnostics`
+  notification after `didOpen`. Default. Matches rust-analyzer, gopls.
+- `"pull"` — pharos sends `textDocument/diagnostic` request and reads
+  the response. Required for typescript-language-server (does not push)
+  and pyright when the file's diagnostic stream went idle.
+
+When in doubt, leave the default and read the doctor output to see
+what the configured server emits.
+
+### Readiness token
+
+`readiness_token` lets pharos drain a `$/progress` indexing notification
+to the `end` state before serving the **first** request to a freshly
+spawned server, eliminating the cold-start `null` failure mode. Bundled
+values:
+
+| Language | Token |
+|----------|-------|
+| `rust` | `rustAnalyzer/Indexing` |
+| `go` | `setup` |
+| `python` | `Indexing` |
+
+Override per language if your server uses a different progress token,
+or set `readiness_token = ""` to disable the wait entirely.
+
+### Roadmap
+
+The registry currently maps each language to **one** LSP. ADR-019
+extends this to **multiple LSPs per language with method-level routing**
+(e.g. python = pyright for hover/types + ruff for formatting/lint).
+That work lands in M10's tail. Schema becomes:
+
+```toml
+# Future shape under ADR-019:
+[languages.python]
+file_extensions = [".py", ".pyi"]
+
+[[languages.python.servers]]
+id = "pyright"
+command = "pyright-langserver"
+methods = "all"
+
+[[languages.python.servers]]
+id = "ruff"
+command = "ruff"
+args = ["server"]
+methods = ["textDocument/formatting", "textDocument/codeAction"]
+```
+
+The single-server form documented above stays valid and is the canonical
+path for languages with one capable LSP (rust, go, typescript today).
 
 ## Configuration
 
