@@ -307,7 +307,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         False -> actor.continue(state)
         True -> {
           let line = entry.render(log_entry)
-          fan_out(state, line, log_entry.level)
+          fan_out(state, line, log_entry.level, log_entry.target)
           case state.dropped {
             0 -> actor.continue(state)
             n -> {
@@ -320,7 +320,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
                   message: "log entries dropped due to backpressure",
                   fields: [#("dropped", int_to_string(n))],
                 ))
-              fan_out(state, drop_line, Warn)
+              fan_out(state, drop_line, Warn, "pharos/log/writer")
               actor.continue(State(..state, dropped: 0))
             }
           }
@@ -368,12 +368,23 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
-fn fan_out(state: State, line: String, level: Level) -> Nil {
+fn fan_out(
+  state: State,
+  line: String,
+  level: Level,
+  target: String,
+) -> Nil {
   case state.stderr_enabled {
     True -> direct_stderr(line)
     False -> Nil
   }
-  case state.ring_enabled {
+  // The trace producer (`pharos/lsp/trace.emit`) writes its own
+  // entries directly into the ring via `ring.insert/2` so they
+  // survive the writer's mailbox-depth cap under load (the original
+  // motivation for runtime_trace_lsp's "missing entries" symptom).
+  // Skip the ring fan-out here for that target to avoid double-
+  // inserting whenever the writer's mailbox does manage to keep up.
+  case state.ring_enabled && target != trace_target {
     True -> ring.insert(line, level)
     False -> Nil
   }
