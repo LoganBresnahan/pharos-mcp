@@ -73,10 +73,42 @@ pub type BridgeConfig {
   BridgeConfig(port: Option(Int))
 }
 
+/// User-supplied per-server overlay (M10 / ADR-019 stage 3 follow-up).
+/// Each entry in `LanguageOverride.servers` matches by `id` against
+/// the bundled defaults — present-id overrides patch existing fields,
+/// absent-id entries append a new ServerConfig to the language's
+/// servers list. `methods = ["..."]` declares an `Only` scope;
+/// omitted means `All`.
+pub type ServerOverride {
+  ServerOverride(
+    id: Option(String),
+    command: Option(String),
+    args: Option(List(String)),
+    methods: Option(List(String)),
+    diagnostics_mode: Option(String),
+    readiness_token: Option(String),
+  )
+}
+
 /// User-supplied per-language overlay. Only fields the user wants
 /// to change need a value; merge logic in `pharos/lsp/registry`
 /// fills the rest from the bundled defaults (or from
 /// language-spec-blank values when introducing a brand-new language).
+///
+/// Two override shapes coexist:
+///   - **Flat (legacy + simple).** `command`, `args`, etc. at the
+///     language level — applied to the language's primary
+///     (first-listed) server. Convenient for the common case of
+///     swapping a single binary path.
+///   - **Per-server (`servers = [...]`).** TOML array of tables
+///     `[[languages.<id>.servers]]`. Each entry merges into the
+///     matching default by id, or appends as a new server if id is
+///     absent. Use when adding a third server or tweaking
+///     non-primary fields (e.g. ruff's command in python).
+///
+/// When both are present in one override, the per-server array is
+/// applied first; the flat fields then patch the resulting primary
+/// server's matching fields.
 pub type LanguageOverride {
   LanguageOverride(
     id: Option(String),
@@ -86,6 +118,7 @@ pub type LanguageOverride {
     root_markers: Option(List(String)),
     diagnostics_mode: Option(String),
     readiness_token: Option(String),
+    servers: Option(List(ServerOverride)),
   )
 }
 
@@ -489,6 +522,31 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     args: decode_optional_string_list(value, "args"),
     file_extensions: decode_optional_string_list(value, "file_extensions"),
     root_markers: decode_optional_string_list(value, "root_markers"),
+    diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
+    readiness_token: decode_optional_string(value, "readiness_token"),
+    servers: decode_optional_servers_list(value),
+  )
+}
+
+/// Decode `[[languages.<id>.servers]]` array of tables. Tomerl
+/// renders TOML arrays of inline tables as a List(Dynamic) where
+/// each element is a map; pull the per-server fields out of each.
+/// Returns `None` when the key is absent or the value isn't an
+/// array of tables — falls back to legacy flat-override semantics.
+fn decode_optional_servers_list(parent: Dynamic) -> Option(List(ServerOverride)) {
+  case decode_field(parent, "servers", decode.list(decode.dynamic)) {
+    Error(_) -> None
+    Ok(entries) ->
+      Some(list.map(entries, decode_server_override))
+  }
+}
+
+fn decode_server_override(value: Dynamic) -> ServerOverride {
+  ServerOverride(
+    id: decode_optional_string(value, "id"),
+    command: decode_optional_string(value, "command"),
+    args: decode_optional_string_list(value, "args"),
+    methods: decode_optional_string_list(value, "methods"),
     diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
     readiness_token: decode_optional_string(value, "readiness_token"),
   )

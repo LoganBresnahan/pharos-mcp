@@ -344,8 +344,11 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # port — VSCode bridge listener port for the M7 extension.
 # port = 31_337
 
-# [languages.<id>] — per-language overrides. Replaces the legacy
-# JSON registry. Only the fields you want to override need values.
+# [languages.<id>] — per-language overrides. Two override shapes
+# are accepted; mix freely.
+#
+# 1) Flat shape (legacy + simplest). Patches the primary (first)
+# server of the language.
 #
 # [languages.rust]
 # command = \"/opt/custom/rust-analyzer-nightly\"
@@ -353,6 +356,21 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # [languages.python]
 # command = \"pyright-langserver\"
 # args = [\"--stdio\"]
+#
+# 2) Per-server array of tables. Required to target a non-primary
+# server (ruff in python) or to add a third server alongside the
+# bundled defaults. Each entry merges into the default by id, or
+# appends as a new server when the id is absent.
+#
+# [[languages.python.servers]]
+# id = \"ruff\"
+# command = \"/custom/path/to/ruff\"
+#
+# [[languages.python.servers]]
+# id = \"mypy\"
+# command = \"mypy\"
+# args = [\"--strict\"]
+# methods = [\"textDocument/diagnostic\"]
 #
 # Adding a brand-new language requires command + file_extensions
 # at minimum:

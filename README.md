@@ -270,11 +270,31 @@ server wins**. Methods that produce array-shaped results
 across every claiming server — pyright's type-related quick-fixes and
 ruff's lint autofixes both reach the LLM in one response.
 
-The single-server form documented above stays valid for languages with
-one capable LSP (rust, go, typescript today). The multi-server
-override syntax via `pharos.toml` array-of-tables (`[[languages.<id>.servers]]`)
-is forward-compatible but not yet exposed; today's flat shape
-overrides the language's primary server only.
+The single-server flat-override form stays the simplest path for
+swapping a primary binary path. To target a non-primary server (e.g.
+ruff in python) or to layer additional servers (mypy alongside
+pyright + ruff), use the array-of-tables form
+`[[languages.<id>.servers]]`. Each entry merges into the default
+by `id`, or appends as a new server if the id is absent:
+
+```toml
+[[languages.python.servers]]
+id = "ruff"
+command = "/custom/path/to/ruff"
+
+[[languages.python.servers]]
+id = "mypy"
+command = "mypy"
+args = ["--strict"]
+methods = ["textDocument/diagnostic"]
+```
+
+Methods routing rule: a server with `methods = [...]` declares
+`Only` scope (handles only the listed methods); a server without
+`methods` keeps `All` scope (handles every method). For each LSP
+method, Primary-strategy methods pick the first `Only` match (else
+first `All`); Merge / FanOut methods consult every claiming server
+and combine results.
 
 ## Configuration
 

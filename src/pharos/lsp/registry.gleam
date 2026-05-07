@@ -13,20 +13,36 @@
 //// resolved by `pharos/config.load/0`. By the time `init/0` runs,
 //// `Config.languages` already reflects the merged user input.
 ////
-//// Stage 1 of ADR-019: per-language overrides apply to the language's
-//// FIRST (primary) server. Stage 3 will introduce explicit
-//// per-server addressing via `[[languages.<id>.servers]]` array of
-//// tables; today's flat shape stays valid as the canonical form for
-//// languages with one server.
+//// Two override shapes are accepted (both processed in
+//// `merge_one/2`):
+////
+////   - **Flat (legacy + simple).** `command`, `args`,
+////     `diagnostics_mode`, `readiness_token` at the language level
+////     patch the language's primary (first) server. Convenient for
+////     swapping a single binary path.
+////
+////   - **Per-server (`[[languages.<id>.servers]]`).** TOML array
+////     of tables. Each entry merges into the matching default by
+////     `id`. An entry whose `id` is absent from the defaults
+////     APPENDS as a new server to the language's `servers` list —
+////     useful for layering additional servers (mypy alongside
+////     pyright + ruff, eslint-language-server alongside
+////     typescript-language-server, etc.).
+////
+//// When both shapes are supplied in one override, the per-server
+//// array is applied first; the flat fields then patch the
+//// resulting primary server's matching fields.
 
 import gleam/dict.{type Dict}
 import gleam/json
+import gleam/list
 import gleam/option.{type Option, None, Some}
-import pharos/config.{type LanguageOverride}
+import pharos/config.{type LanguageOverride, type ServerOverride}
 import pharos/log
 import pharos/lsp/languages.{
-  type DiagnosticsMode, type LanguageConfig, type LookupError, type ServerConfig,
-  All, LanguageConfig, NoPromotion, Pull, Push, ServerConfig,
+  type DiagnosticsMode, type LanguageConfig, type LookupError, type MethodScope,
+  type ServerConfig, All, LanguageConfig, NoPromotion, Only, Pull, Push,
+  ServerConfig,
 }
 
 /// Load the effective registry into `persistent_term`. Call once at
@@ -122,14 +138,23 @@ fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
   )
 }
 
-/// Apply a flat override to an existing `LanguageConfig`. Server-level
-/// fields (command, args, diagnostics_mode, readiness_token) target
-/// the FIRST server in the language's `servers` list — the primary.
-/// Language-level fields (file_extensions, root_markers) replace
-/// those on the parent record.
+/// Apply an override (flat fields and/or `servers` array) to an
+/// existing `LanguageConfig`. The per-server array is applied
+/// first — for each `ServerOverride`, find the matching ServerConfig
+/// in defaults by id and merge fields, or append as a new server if
+/// no match exists. Then the flat fields patch the resulting primary
+/// server's matching fields. Language-level fields
+/// (file_extensions, root_markers) replace the parent record's.
 fn merge_one(default: LanguageConfig, override: LanguageOverride) -> LanguageConfig {
-  let merged_servers = case default.servers {
-    [] -> default.servers
+  // Step 1: per-server array merge / append.
+  let after_servers_array = case override.servers {
+    None -> default.servers
+    Some(server_overrides) ->
+      apply_server_overrides(default.servers, server_overrides)
+  }
+  // Step 2: flat fields patch primary server.
+  let merged_servers = case after_servers_array {
+    [] -> after_servers_array
     [primary, ..rest] -> [merge_primary(primary, override), ..rest]
   }
   LanguageConfig(
@@ -148,6 +173,106 @@ fn merge_one(default: LanguageConfig, override: LanguageOverride) -> LanguageCon
     root_promotion: default.root_promotion,
     servers: merged_servers,
   )
+}
+
+/// Per-server merge step. Iterate the override array; each entry
+/// either patches an existing server (matched by `id`) or appends
+/// as a new server (for ids absent from the defaults). Servers from
+/// the defaults that the override didn't touch keep their existing
+/// shape.
+fn apply_server_overrides(
+  defaults: List(ServerConfig),
+  overrides: List(ServerOverride),
+) -> List(ServerConfig) {
+  list.fold(overrides, defaults, fn(acc, ovr) {
+    case ovr.id {
+      None -> acc
+      Some(target_id) -> apply_one_server_override(acc, target_id, ovr)
+    }
+  })
+}
+
+fn apply_one_server_override(
+  servers: List(ServerConfig),
+  target_id: String,
+  ovr: ServerOverride,
+) -> List(ServerConfig) {
+  let #(found, patched) =
+    list.fold(servers, #(False, []), fn(state, server) {
+      let #(matched, acc) = state
+      case server.id == target_id {
+        True -> #(True, [merge_server(server, ovr), ..acc])
+        False -> #(matched, [server, ..acc])
+      }
+    })
+  let in_order = list.reverse(patched)
+  case found {
+    True -> in_order
+    False -> list.append(in_order, [server_from_override(target_id, ovr)])
+  }
+}
+
+/// Per-server field merge. `methods = [...]` overrides the scope
+/// (translates to `Only(methods)`); omitted methods keeps the
+/// default. To force `All` scope on an override, omit `methods` and
+/// rely on the default; this module never lets a TOML override
+/// downgrade a server's scope from `Only` back to `All` because no
+/// real use case has surfaced.
+fn merge_server(
+  default: ServerConfig,
+  ovr: ServerOverride,
+) -> ServerConfig {
+  ServerConfig(
+    id: default.id,
+    command: case ovr.command {
+      Some(s) -> s
+      None -> default.command
+    },
+    args: case ovr.args {
+      Some(xs) -> xs
+      None -> default.args
+    },
+    initialization_options: default.initialization_options,
+    workspace_configuration: default.workspace_configuration,
+    methods: parse_methods(ovr.methods, default.methods),
+    diagnostics_mode: case ovr.diagnostics_mode {
+      None -> default.diagnostics_mode
+      Some(_) -> parse_mode(ovr.diagnostics_mode)
+    },
+    readiness_token: case ovr.readiness_token {
+      None -> default.readiness_token
+      Some(_) -> ovr.readiness_token
+    },
+  )
+}
+
+/// Build a brand-new ServerConfig from an override entry whose `id`
+/// is absent from the defaults. `command` is required for usefulness;
+/// an entry with no `command` still appears in the registry but will
+/// fail to spawn (visible via `pharos --doctor`). Methods default to
+/// `All`.
+fn server_from_override(target_id: String, ovr: ServerOverride) -> ServerConfig {
+  ServerConfig(
+    id: target_id,
+    command: option.unwrap(ovr.command, ""),
+    args: option.unwrap(ovr.args, []),
+    initialization_options: json.object([]),
+    workspace_configuration: None,
+    methods: parse_methods(ovr.methods, All),
+    diagnostics_mode: parse_mode(ovr.diagnostics_mode),
+    readiness_token: ovr.readiness_token,
+  )
+}
+
+fn parse_methods(
+  raw: Option(List(String)),
+  fallback: MethodScope,
+) -> MethodScope {
+  case raw {
+    None -> fallback
+    Some([]) -> All
+    Some(methods) -> Only(methods)
+  }
 }
 
 fn merge_primary(
