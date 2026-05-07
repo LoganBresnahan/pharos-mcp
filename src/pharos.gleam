@@ -273,13 +273,13 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # Each entry is either a category alias (expands to a set) or a
 # specific tool name. Mix freely. Default exposes everything.
 #
-#   \"read\"  — non-mutating LSP queries (13 tools):
+#   \"read\"  — non-mutating LSP queries (14 tools):
 #     hover, goto_definition, goto_type_definition,
 #     goto_implementation, find_references, document_symbols,
 #     workspace_symbols, signature_help,
 #     call_hierarchy_prepare, call_hierarchy_incoming_calls,
 #     call_hierarchy_outgoing_calls, get_diagnostics,
-#     inlay_hints
+#     inlay_hints, semantic_tokens
 #
 #   \"write\" — edit-producing LSP tools (4 tools). The first three
 #             return `WorkspaceEdit` data; `apply_workspace_edit`

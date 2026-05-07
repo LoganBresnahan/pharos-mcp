@@ -39,6 +39,7 @@ import pharos/tools/tier2/lsp_request_raw
 import pharos/tools/registry as tool_registry
 import pharos/tools/tier4
 import pharos/tools/tier2/rename_preview
+import pharos/tools/tier2/semantic_tokens
 import pharos/tools/tier2/signature_help
 
 const protocol_version: String = "2024-11-05"
@@ -294,6 +295,7 @@ fn allowed_tool_definitions() -> List(Json) {
     #("code_actions", code_actions_tool_definition),
     #("apply_workspace_edit", apply_workspace_edit_tool_definition),
     #("inlay_hints", inlay_hints_tool_definition),
+    #("semantic_tokens", semantic_tokens_tool_definition),
     #("lsp_request_raw", lsp_request_raw_tool_definition),
   ]
   list.append(tier1_2, tier4.named_definitions())
@@ -812,6 +814,9 @@ fn dispatch_tool_call(
     Ok(#("inlay_hints", arguments)) ->
       handle_inlay_hints(pool, id, arguments)
 
+    Ok(#("semantic_tokens", arguments)) ->
+      handle_semantic_tokens(pool, id, arguments)
+
     Ok(#("lsp_request_raw", arguments)) ->
       handle_lsp_request_raw(pool, id, arguments)
 
@@ -1223,6 +1228,30 @@ fn handle_code_actions(
   }
 }
 
+fn handle_semantic_tokens(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_semantic_tokens_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid semantic_tokens params: " <> reason,
+      )
+    Ok(#(uri, sl, sc, el, ec, timeout_ms)) ->
+      case semantic_tokens.handle(pool, uri, sl, sc, el, ec, timeout_ms) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(semantic_tokens.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(semantic_tokens.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
 fn handle_inlay_hints(
   pool: Pool,
   id: Id,
@@ -1629,6 +1658,110 @@ fn format_document_tool_definition() -> Json {
           ]),
         ),
         #("required", json.preprocessed_array([json.string("uri")])),
+      ]),
+    ),
+  ])
+}
+
+fn semantic_tokens_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("semantic_tokens")),
+    #(
+      "description",
+      json.string(
+        "Get LSP semantic tokens for a file (whole document or a "
+          <> "range). Wraps `textDocument/semanticTokens/full` when "
+          <> "no range is supplied (or all four range ints are 0); "
+          <> "`textDocument/semanticTokens/range` otherwise. Returns "
+          <> "the verbatim LSP `SemanticTokens` JSON: "
+          <> "`{resultId?: string, data: number[]}`. The `data` array "
+          <> "is the LSP-spec integer encoding — 5 ints per token: "
+          <> "`[deltaLine, deltaStartChar, length, tokenType, "
+          <> "tokenModifiers]`. `tokenType` is an index into the "
+          <> "server's legend (in the server's `initialize` "
+          <> "capabilities under `semanticTokensProvider.legend`); "
+          <> "pharos does not yet stash the legend, so callers wanting "
+          <> "type-name strings should fetch it themselves via "
+          <> "`lsp_request_raw` against `initialize` or rely on the "
+          <> "well-known LSP defaults (`namespace`, `type`, `class`, "
+          <> "`enum`, `interface`, `struct`, `typeParameter`, "
+          <> "`parameter`, `variable`, `property`, `enumMember`, "
+          <> "`event`, `function`, `method`, `macro`, `keyword`, "
+          <> "`modifier`, `comment`, `string`, `number`, `regexp`, "
+          <> "`operator`, `decorator`).",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of the source file to tokenize.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "start_line",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Zero-based start line. Omit (with the other range "
+                    <> "fields) to request /full instead of /range.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "start_character",
+              json.object([
+                #("type", json.string("integer")),
+                #("description", json.string("Zero-based UTF-16 start offset.")),
+              ]),
+            ),
+            #(
+              "end_line",
+              json.object([
+                #("type", json.string("integer")),
+                #("description", json.string("Zero-based end line.")),
+              ]),
+            ),
+            #(
+              "end_character",
+              json.object([
+                #("type", json.string("integer")),
+                #("description", json.string("Zero-based UTF-16 end offset.")),
+              ]),
+            ),
+            #(
+              "timeout_ms",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Per-call timeout in milliseconds. Default 15000.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.preprocessed_array([json.string("uri")]),
+        ),
       ]),
     ),
   ])
@@ -2103,6 +2236,31 @@ fn decode_call_hierarchy_item_arguments(
   |> result.map_error(fn(_) {
     "expected `item: <CallHierarchyItem>` "
     <> "(round-trip an object returned by call_hierarchy_prepare)"
+  })
+}
+
+fn decode_semantic_tokens_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int, Int, Int, Int, Int), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use sl <- decode.optional_field("start_line", 0, decode.int)
+    use sc <- decode.optional_field("start_character", 0, decode.int)
+    use el <- decode.optional_field("end_line", 0, decode.int)
+    use ec <- decode.optional_field("end_character", 0, decode.int)
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      semantic_tokens.default_timeout_ms,
+      decode.int,
+    )
+    decode.success(#(uri, sl, sc, el, ec, timeout_ms))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, optional `start_line/start_character/"
+    <> "end_line/end_character: int` (omit all four for /full), "
+    <> "optional `timeout_ms: int`"
   })
 }
 
