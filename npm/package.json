@@ -1,0 +1,28 @@
+{
+  "name": "pharos-mcp",
+  "version": "0.0.1",
+  "description": "MCP server bridging LLMs to LSP servers — pharos. Single-binary distribution.",
+  "license": "MIT",
+  "homepage": "https://github.com/LoganBresnahan/pharos",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LoganBresnahan/pharos.git"
+  },
+  "bin": {
+    "pharos": "bin/pharos.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "vendor/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["linux", "darwin", "win32"],
+  "cpu": ["x64", "arm64"]
+}

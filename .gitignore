@@ -30,11 +30,11 @@ erl_crash.dump
 .DS_Store
 Thumbs.db
 
-# npm publish artifacts (built binaries)
-/npm/platforms/*/llm-lsp-mcp
-/npm/platforms/*/llm-lsp-mcp.exe
-/npm/platforms/*/node_modules/
-/npm/meta/node_modules/
+# npm package's bundled binaries — populated at release time by
+# copying from /burrito_out/. The scaffolding under /npm/
+# (package.json, bin/, scripts/, README.md) IS committed.
+/npm/vendor/
+/npm/node_modules/
 
 # Local secrets / config overrides
 *.local.exs
