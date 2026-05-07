@@ -33,6 +33,7 @@ import pharos/tools/tier2/call_hierarchy
 import pharos/tools/tier2/code_actions
 import pharos/tools/tier2/format_document
 import pharos/tools/tier2/goto_implementation
+import pharos/tools/tier2/inlay_hints
 import pharos/tools/tier2/goto_type_definition
 import pharos/tools/tier2/lsp_request_raw
 import pharos/tools/registry as tool_registry
@@ -292,6 +293,7 @@ fn allowed_tool_definitions() -> List(Json) {
     #("format_document", format_document_tool_definition),
     #("code_actions", code_actions_tool_definition),
     #("apply_workspace_edit", apply_workspace_edit_tool_definition),
+    #("inlay_hints", inlay_hints_tool_definition),
     #("lsp_request_raw", lsp_request_raw_tool_definition),
   ]
   list.append(tier1_2, tier4.named_definitions())
@@ -807,6 +809,9 @@ fn dispatch_tool_call(
     Ok(#("apply_workspace_edit", arguments)) ->
       handle_apply_workspace_edit(id, arguments)
 
+    Ok(#("inlay_hints", arguments)) ->
+      handle_inlay_hints(pool, id, arguments)
+
     Ok(#("lsp_request_raw", arguments)) ->
       handle_lsp_request_raw(pool, id, arguments)
 
@@ -1218,6 +1223,30 @@ fn handle_code_actions(
   }
 }
 
+fn handle_inlay_hints(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_inlay_hints_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid inlay_hints params: " <> reason,
+      )
+    Ok(#(uri, sl, sc, el, ec, timeout_ms)) ->
+      case inlay_hints.handle(pool, uri, sl, sc, el, ec, timeout_ms) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(inlay_hints.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(inlay_hints.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
 fn handle_apply_workspace_edit(
   id: Id,
   arguments: Option(Dynamic),
@@ -1605,6 +1634,120 @@ fn format_document_tool_definition() -> Json {
   ])
 }
 
+fn inlay_hints_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("inlay_hints")),
+    #(
+      "description",
+      json.string(
+        "Get inline annotations the editor would render in a range "
+          <> "of source — typically inferred type hints after a `let` "
+          <> "binding or parameter names at call sites. Wraps LSP "
+          <> "`textDocument/inlayHint`. Returns the verbatim "
+          <> "`InlayHint[]` JSON: each hint has `position`, `label` "
+          <> "(string or `InlayHintLabelPart[]`), optional `kind` "
+          <> "(1=Type, 2=Parameter), `tooltip`, and `textEdits`. "
+          <> "rust-analyzer / pyright / typescript-language-server "
+          <> "implement this; gopls requires a server-side feature "
+          <> "flag. Returns `null` or `[]` when no hints in the "
+          <> "range. Cold-start note: a freshly-spawned LSP may "
+          <> "return empty for the first 5-15s while it indexes; "
+          <> "retry once after a 1-2s pause if the file has known "
+          <> "hints.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of the source file to inspect.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "start_line",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string("Zero-based start line of the range."),
+                ),
+              ]),
+            ),
+            #(
+              "start_character",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Zero-based UTF-16 start offset on `start_line`.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "end_line",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string("Zero-based end line of the range."),
+                ),
+              ]),
+            ),
+            #(
+              "end_character",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Zero-based UTF-16 end offset on `end_line`.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "timeout_ms",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Per-call timeout in milliseconds. Default 10000.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.preprocessed_array([
+            json.string("uri"),
+            json.string("start_line"),
+            json.string("start_character"),
+            json.string("end_line"),
+            json.string("end_character"),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
 fn apply_workspace_edit_tool_definition() -> Json {
   json.object([
     #("name", json.string("apply_workspace_edit")),
@@ -1960,6 +2103,30 @@ fn decode_call_hierarchy_item_arguments(
   |> result.map_error(fn(_) {
     "expected `item: <CallHierarchyItem>` "
     <> "(round-trip an object returned by call_hierarchy_prepare)"
+  })
+}
+
+fn decode_inlay_hints_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int, Int, Int, Int, Int), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use sl <- decode.field("start_line", decode.int)
+    use sc <- decode.field("start_character", decode.int)
+    use el <- decode.field("end_line", decode.int)
+    use ec <- decode.field("end_character", decode.int)
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      inlay_hints.default_timeout_ms,
+      decode.int,
+    )
+    decode.success(#(uri, sl, sc, el, ec, timeout_ms))
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, `start_line/start_character: int`, "
+    <> "`end_line/end_character: int`, optional `timeout_ms: int`"
   })
 }
 
