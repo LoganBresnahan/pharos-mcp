@@ -56,8 +56,20 @@ start_child(Language, Workspace, Cmd, Args, InitParams, TimeoutMs,
         {ok, Pid, _Info} -> {ok, Pid};
         {error, {already_started, Pid}} -> {ok, Pid};
         {error, Reason} ->
-            {error, list_to_binary(io_lib:format("~p", [Reason]))}
+            {error, format_reason(Reason)}
     end.
+
+%% Preserve the human-readable error string when the child returned
+%% one (proc.start_link_supervised maps every internal error to a
+%% binary via describe_start_error/1). Without this branch
+%% io_lib:format("~p", [<<"..."/utf8>>]) renders the binary as a
+%% literal byte list — `<<99,108,...>>` — and the BinaryNotFound /
+%% handshake-failed text gets unreadable. For non-binary reasons we
+%% still fall back to ~p so unexpected supervisor protocol errors
+%% (already_present, max_children, etc.) get a useful description.
+format_reason(Reason) when is_binary(Reason) -> Reason;
+format_reason(Reason) ->
+    iolist_to_binary(io_lib:format("~p", [Reason])).
 
 %% Operator-requested termination of one worker. transient strategy
 %% means the supervisor does NOT auto-restart after this call, so

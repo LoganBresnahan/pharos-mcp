@@ -20,6 +20,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORIG_CWD="$(pwd)"
 cd "$PROJECT_ROOT"
 
 # Ensure asdf shims are reachable. Claude Code's spawned subprocess may
@@ -29,20 +30,28 @@ if [ -d "$HOME/.asdf/shims" ]; then
 fi
 
 # Compile if needed. All output goes to stderr — the host only watches
-# stdout.
-#
-# `gleam build` is used directly rather than `mix compile` because the
-# Mix toolchain refuses to resolve `hpack_erl` (a transitive of `mist`)
-# whose hex-package name does not match its OTP application name.
-# `gleam build` resolves it correctly via the manifest. Burrito at M6
-# will still go through Mix release flow — that path is addressed
-# separately.
-gleam build 1>&2
+# stdout. Mix is the canonical build path now (the hpack_erl naming
+# workaround in mix.exs handles the prior pain point); `_build/dev/lib`
+# carries every BEAM the runtime needs, including the OTP application
+# trampoline `pharos:main/0`.
+mix compile 1>&2
+
+# Restore the original cwd before exec'ing erl so pharos's project-TOML
+# walk-up (and any other cwd-sensitive code) sees the directory the
+# invoker was actually in. Important for `.pharos.toml` discovery from
+# arbitrary project trees.
+cd "$ORIG_CWD"
 
 # Boot Erlang directly. -noshell keeps the line discipline simple;
-# `pharos:main/0` is our recursive stdin loop and returns when EOF
-# closes stdin. halt(0) exits the BEAM cleanly afterward.
+# `pharos:main/0` is our stdin loop and returns when EOF closes stdin.
+# halt(0) exits the BEAM cleanly afterward.
+#
+# Code paths use absolute paths anchored at PROJECT_ROOT so they
+# resolve correctly regardless of where erl was invoked from. Forwarded
+# argv (`-- "$@"`) lands in `init:get_plain_arguments/0` so meta flags
+# like `--doctor` and `--purge-cache` work via this wrapper.
 exec erl \
-  -pa build/dev/erlang/*/ebin \
+  -pa $PROJECT_ROOT/_build/dev/lib/*/ebin \
   -noshell \
-  -eval "pharos:main(), halt(0)."
+  -eval "pharos:main(), halt(0)." \
+  -- "$@"

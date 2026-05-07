@@ -240,7 +240,16 @@ fn describe_start_error(err: StartError) -> String {
     ClientStartFailed(c) -> "client start failed: " <> describe_client_error(c)
     HandshakeFailed(l) ->
       "initialize handshake failed: " <> describe_lifecycle_error(l)
-    ActorStartFailed(_) -> "actor start failed"
+    // The actor initialiser maps every typed error to a String before
+    // returning, so InitFailed(reason) carries the human-readable
+    // BinaryNotFound / "client.start failed: ..." / "initialize
+    // handshake failed: ..." message intact. Surface it verbatim so
+    // the LLM sees the actionable text instead of a generic wrapper.
+    ActorStartFailed(actor.InitFailed(reason)) -> reason
+    ActorStartFailed(actor.InitTimeout) ->
+      "actor initialiser timed out before completing"
+    ActorStartFailed(actor.InitExited(_)) ->
+      "actor initialiser exited abnormally"
   }
 }
 

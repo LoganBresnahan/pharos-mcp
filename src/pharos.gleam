@@ -79,18 +79,23 @@ pub fn boot() -> Result(Pid, String) {
 }
 
 fn do_boot() -> Result(Pid, String) {
+  // Resolve and stash Config in persistent_term FIRST. Downstream
+  // initialisers (notably registry.init, which merges
+  // Config.languages over the bundled defaults) read it. Every
+  // downstream consumer (log, http transport, registry, runtime
+  // tools) reads the cached value instead of touching env vars or
+  // files itself.
+  let cfg = config.load()
+
   // Pre-supervisor init: idempotent ETS tables that supervised
   // children read or write. Order does not matter beyond "before
-  // root_supervisor.start".
+  // root_supervisor.start" — except registry.init, which must run
+  // AFTER config.load so persistent_term carries the user's
+  // language overrides at merge time.
   diagnostics_cache.init()
   registry.init()
   inflight.init()
   dyn_sup.init_subjects_bridge()
-
-  // Resolve and stash Config in persistent_term. Every downstream
-  // consumer (log, http transport, registry, runtime tools) reads
-  // the cached value instead of touching env vars or files itself.
-  let cfg = config.load()
 
   let supervisor_config =
     root_supervisor.Config(
