@@ -118,10 +118,47 @@ defmodule Pharos.MixProject do
     expected = Path.join(ebin, "#{dep_name}.app")
 
     cond do
-      File.exists?(expected) -> :ok
-      not File.dir?(ebin) -> :ok
-      true -> alias_app_if_unambiguous(ebin, expected, dep_name)
+      not File.dir?(ebin) ->
+        :ok
+
+      File.exists?(expected) ->
+        # Wrapper .app already in place from a prior run. The symlink
+        # mirror dir likely also exists on disk, but `:code.add_pathz`
+        # only persists for the lifetime of one Mix VM invocation —
+        # subsequent `mix release` runs (separate VMs) can't resolve
+        # the OTP-named app unless we re-add the path here.
+        ensure_mirror_paths(build_lib, ebin, dep_name)
+
+      true ->
+        alias_app_if_unambiguous(ebin, expected, dep_name)
     end
+  end
+
+  # Re-add OTP-name mirror dirs to the VM's code path on every Mix
+  # invocation, regardless of whether the wrapper .app was already
+  # present. Walks every .app file in the dep's ebin and resolves any
+  # otp_name != dep_name as a symlink target whose ebin should be on
+  # the path. Idempotent — `:code.add_pathz` is safe to call multiple
+  # times with the same path.
+  defp ensure_mirror_paths(build_lib, ebin, dep_name) do
+    Path.join(ebin, "*.app")
+    |> Path.wildcard()
+    |> Enum.each(fn actual ->
+      otp_name = Path.basename(actual, ".app")
+
+      if otp_name != dep_name do
+        otp_dir = Path.join(build_lib, otp_name)
+
+        if File.exists?(otp_dir) do
+          otp_ebin =
+            otp_dir
+            |> Path.join("ebin")
+            |> String.to_charlist()
+
+          :code.add_pathz(otp_ebin)
+        end
+      end
+    end)
   end
 
   defp alias_app_if_unambiguous(ebin, expected, dep_name) do

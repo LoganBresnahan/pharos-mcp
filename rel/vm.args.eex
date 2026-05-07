@@ -1,0 +1,10 @@
+## Customize flags given to the VM: https://www.erlang.org/doc/man/erl.html
+## -mode/-name/-sname/-setcookie are configured via env vars, do not set them here
+
+## M11 burrito-stdio fix: pass `-noinput` so Erlang's `prim_tty` /
+## `:user` does NOT claim fd 0. pharos opens its own `{fd,0,0}` port
+## from `pharos_stdin_ffi:read_line/1` for synchronous, unbuffered
+## per-line stdin delivery. Without `-noinput` the driver fight
+## emits a `driver_select stealing control of fd=0` error to fd 1
+## that corrupts the MCP NDJSON stream.
+-noinput

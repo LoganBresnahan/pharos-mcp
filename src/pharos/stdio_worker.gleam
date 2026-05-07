@@ -20,6 +20,7 @@
 //// dispatchers can produce responses in any order without
 //// interleaving line-atomicity hazards.
 
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Subject}
 import gleam/json
 import gleam/dynamic/decode
@@ -40,7 +41,6 @@ pub type StartError {
 }
 
 pub opaque type Msg {
-  Read
   Stop
   /// Dispatcher → stdio_worker: write `json` as one stdout line.
   Write(json: String)
@@ -48,6 +48,10 @@ pub opaque type Msg {
   /// notifications/initialized, notifications/cancelled, or
   /// killed-by-cancel). Logged but not written.
   WorkerComplete(mcp_id: String)
+  /// Raw mailbox message captured by the selector — typically a
+  /// stdin-port `{Port, {data, {eol, Line}}}` / `{Port, eof}` tuple.
+  /// `decode_port_event` projects it into the `PortEvent` shape.
+  PortMailbox(payload: Dynamic)
 }
 
 type State {
@@ -82,6 +86,11 @@ pub fn start_supervised() -> Result(
     case pool.global() {
       Error(_) -> Error("pool.global() returned no subject")
       Ok(pool_handle) -> {
+        // Port owner is the calling process (the actor's pid).
+        // Subsequent Port messages — `{Port, {data, {eol, Line}}}`
+        // and `{Port, eof}` — arrive in the actor's mailbox and
+        // get caught by `select_other` below as `PortMailbox`.
+        open_stdin_port()
         let writer = make_writer(self)
         let state =
           State(
@@ -104,8 +113,10 @@ pub fn start_supervised() -> Result(
   actor.new_with_initialiser(5000, initialise)
   |> actor.on_message(handle_message)
   |> actor.start()
-  |> result_kick_loop()
 }
+
+@external(erlang, "pharos_stdin_ffi", "stdin_port")
+fn open_stdin_port() -> Dynamic
 
 /// Build a Subject(WriterMsg) that targets the same actor as `self`.
 /// Conversion happens via `select_map` in the selector below — every
@@ -140,23 +151,14 @@ fn build_selector(
       WorkerDone -> WorkerComplete(mcp_id: "")
     }
   })
-}
-
-fn result_kick_loop(
-  result: Result(actor.Started(Subject(Msg)), actor.StartError),
-) -> Result(actor.Started(Subject(Msg)), actor.StartError) {
-  case result {
-    Ok(started) -> {
-      process.send(started.data, Read)
-      Ok(started)
-    }
-    Error(e) -> Error(e)
-  }
+  // Catch raw Port mailbox tuples (stdin port emits `{Port, {data,
+  // {eol, Line}}}` etc.) and project them into the typed Msg.
+  |> process.select_other(PortMailbox)
 }
 
 fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
-    Read -> handle_read(state)
+    PortMailbox(payload) -> handle_port_event(state, payload)
     Write(json) -> {
       stdio.write(json)
       step_inflight(state)
@@ -165,6 +167,38 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     Stop -> actor.stop()
   }
 }
+
+/// Decode a raw Port mailbox payload from the stdin port into either
+/// a complete line (dispatch via `dispatch_line`), a partial line
+/// (no eol — discard for now; lines >65535 bytes don't occur in
+/// practice for MCP), or EOF (transition to drain).
+fn handle_port_event(
+  state: State,
+  payload: Dynamic,
+) -> actor.Next(State, Msg) {
+  case decode_port_event(payload) {
+    PortLine(line) -> {
+      case line {
+        "" -> actor.continue(state)
+        body -> {
+          dispatch_line(state, body)
+          actor.continue(State(..state, inflight: state.inflight + 1))
+        }
+      }
+    }
+    PortEof -> handle_eof(state)
+    PortOther -> actor.continue(state)
+  }
+}
+
+type PortEvent {
+  PortLine(String)
+  PortEof
+  PortOther
+}
+
+@external(erlang, "pharos_stdin_ffi", "decode_port_event")
+fn decode_port_event(payload: Dynamic) -> PortEvent
 
 /// One unit of dispatcher cleanup arrived (either a Write reply or a
 /// WorkerComplete). Decrement the in-flight counter and, if we are
@@ -179,29 +213,6 @@ fn step_inflight(state: State) -> actor.Next(State, Msg) {
       actor.stop()
     }
     _, _ -> actor.continue(next)
-  }
-}
-
-fn handle_read(state: State) -> actor.Next(State, Msg) {
-  case stdio.read_line() {
-    stdio.StdinEof -> handle_eof(state)
-    stdio.StdinError(reason) -> {
-      log.error("stdin read error: " <> reason)
-      handle_eof(state)
-    }
-
-    stdio.StdinLine(line) -> {
-      let trimmed = stdio.trim_trailing_newline(line)
-      let next = case trimmed {
-        "" -> state
-        body -> {
-          dispatch_line(state, body)
-          State(..state, inflight: state.inflight + 1)
-        }
-      }
-      process.send(state.self, Read)
-      actor.continue(next)
-    }
   }
 }
 
