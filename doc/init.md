@@ -294,14 +294,16 @@ pharos/
 │       └── tier1/
 │           └── diagnostics_test.gleam
 │
-├── npm/                                     # npm publishing artifacts
-│   ├── meta/                                # Top-level "pharos" package
-│   │   ├── package.json
-│   │   ├── bin/
-│   │   │   └── pharos.js               # Node shim that resolves & spawns platform binary
-│   │   └── README.md
-│   └── platforms/                           # Per-platform sub-packages (template, filled by CI)
-│       └── README.md                        # Documents the optional-deps pattern
+├── npm/                                     # npm publishing artifacts (M11 scaffold;
+│   │                                          M13 splits into meta + per-platform sub-pkgs)
+│   ├── package.json                         # `pharos-mcp` — single-pkg scaffold today
+│   ├── bin/
+│   │   └── pharos.js                        # Node shim that resolves & spawns platform binary
+│   ├── scripts/
+│   │   └── postinstall.js                   # Burrito-cache warmup (avoids 50s cold-start
+│   │                                          blowing past MCP host's 30s connect timeout)
+│   ├── vendor/                              # Burrito binaries; gitignored, filled by CI
+│   └── README.md
 │
 ├── .github/
 │   └── workflows/
@@ -680,10 +682,23 @@ Now that M10 + M11 + M12 give pharos a polished surface and broad coverage, ship
 
 - Multi-target Burrito matrix (linux_x64, linux_arm64, darwin_x64, darwin_arm64, win_x64)
 - GitHub Actions release workflow green on tag push
-- First npm publish with optional-deps pattern
+- First npm publish with optional-deps pattern (single-pkg scaffold lives at `npm/`; M13 splits it into `pharos-mcp` meta + `@pharos/<platform>-<arch>` sub-packages so users only download their target's ~15MB binary)
 - README install instructions verified end-to-end against a clean machine
 - Versioning policy locked (semver, pre-1.0 minor-bump-on-breaking)
 - Gated on the upstream Gleam publish fix landing and `mist` republishing — otherwise the ADR-011 workaround leaks into the public install story
+
+#### Foundations already in place (M11)
+
+The two distribution-blocking bugs that surfaced during M11 stdio dogfood are already fixed; M13 only needs to wire them into the release pipeline.
+
+- **Burrito stdio under MCP-host stdin (commit e857dce).** Burrito's release runtime (`-noshell -mode embedded`) routes stdio through Erlang's `:user` group leader, which buffers reads + writes and only flushes on stdin EOF. MCP hosts hold stdin open and wait for the response on stdout — the response sat in the buffer and every fresh install timed out at the host's 30s connect deadline. Fix: pharos opens its own raw `{fd, 0, 0}` and `{fd, 1, 1}` ports, bypassing `:user` for synchronous per-line I/O. `rel/vm.args.eex` adds `-noinput` so Erlang's `prim_tty` does not fight us for fd 0. Without this fix, no amount of distribution polish makes pharos usable from npm.
+- **npm postinstall warmup (commit c381659).** First-run Burrito cache extraction is ~30–60s on cold disks (xz-decompressing the embedded ERTS + BEAM payload). MCP hosts have a 30s connect timeout; first launch always failed even with the stdio fix. Pre-warming the cache during `npm install` moves the wait to install time. Implementation lives at `npm/scripts/postinstall.js` — spawn the binary, poll `~/.local/share/.burrito/pharos_*` until populated, SIGKILL once the cache directory exists. Soft-fail (always `exit 0`) so a warmup hiccup never blocks install. Skip via `PHAROS_SKIP_POSTINSTALL=1`. Verified locally: 2.5s cold-extract via the script.
+
+#### Release pipeline tasks
+
+- **`release.yml`**: matrix-build burrito binaries, upload to GitHub Release, copy each `burrito_out/pharos_<target>(.exe)` into the matching npm sub-package's `vendor/` (or `bin/`) directory, then `npm publish` the sub-packages and the meta package.
+- **`npm/vendor/` is gitignored** — only the package scaffolding (`package.json`, `bin/pharos.js`, `scripts/postinstall.js`, `README.md`) is committed. CI populates `vendor/` at publish time.
+- **Sub-package split** vs the current single-pkg scaffold: the postinstall warmup runs from the meta package after npm resolves the right sub-package, so the meta package's `bin/pharos.js` does the platform pick-up but the binaries live in the matching sub-package's `vendor/`. Adjust `bin/pharos.js`'s `binary_path()` to look up the resolved sub-package path via `require.resolve`.
 
 ## Testing that needs to be done
 
