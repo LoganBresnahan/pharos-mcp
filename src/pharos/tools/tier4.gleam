@@ -28,6 +28,7 @@ import gleam/string
 import pharos/config
 import pharos/log
 import pharos/log/entry
+import pharos/log/trace_ring
 import pharos/lsp/pool.{type Pool}
 import pharos/runtime
 
@@ -607,33 +608,39 @@ fn handle_trace_lsp(args: Option(Dynamic)) -> ToolResult {
     False -> raw_duration
   }
 
-  // Activate the tracer override; we deliberately do not capture
-  // the prior state — Part C MVP keeps this simple and re-applies
-  // `info` at the end. If a user previously set the trace target
-  // via PHAROS_LOG, they re-apply via runtime_log_level after.
-  case log.set_target_level("pharos/lsp/trace", Some(entry.Debug)) {
-    Error(_) -> Error("log writer is not running; cannot enable tracer")
-    Ok(Nil) -> {
-      let before = log.ring_size()
-      sleep(duration)
-      let _ = log.set_target_level("pharos/lsp/trace", None)
-      let after = log.ring_size()
-      let captured = log.ring_tail(after - before + 50, "lsp wire")
-      let entries =
-        list.map(captured, fn(row) {
-          let #(_level, line) = row
-          json.string(line)
-        })
-      Ok(
-        json.to_string(
-          json.object([
-            #("duration_ms", json.int(duration)),
-            #("captured", json.array(entries, of: fn(j) { j })),
-          ]),
-        ),
-      )
-    }
-  }
+  // Snapshot the trace_ring's current size so we can return only
+  // entries captured DURING the window. The trace_ring is always-on
+  // (M11 fix for the parallel-dispatch race that left
+  // sequentially-sound captures empty under concurrent producer +
+  // trace_lsp dispatch). No filter toggle, no race: the producer
+  // writes unconditionally, this read just reports the delta.
+  //
+  // The set_target_level call still runs — it activates the gated
+  // log path so stderr/file sinks see the wire entries during the
+  // window — but trace_lsp's return value comes from the
+  // unconditional ring, not from the filter-gated log ring.
+  let _ = log.set_target_level("pharos/lsp/trace", Some(entry.Debug))
+  let before = trace_ring.size()
+  sleep(duration)
+  let _ = log.set_target_level("pharos/lsp/trace", None)
+  let after = trace_ring.size()
+  // Read captured-during-window entries plus a small slack so an
+  // emit landing right after our `after` read is not lost. Filter
+  // by "lsp wire" to defend against future co-tenants on the ring.
+  let captured = trace_ring.tail(after - before + 10, "lsp wire")
+  let entries =
+    list.map(captured, fn(row) {
+      let #(_level, line) = row
+      json.string(line)
+    })
+  Ok(
+    json.to_string(
+      json.object([
+        #("duration_ms", json.int(duration)),
+        #("captured", json.array(entries, of: fn(j) { j })),
+      ]),
+    ),
+  )
 }
 
 // -- runtime_kill_lsp ----------------------------------------------------

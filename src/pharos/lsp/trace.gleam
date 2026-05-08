@@ -23,6 +23,7 @@ import gleam/int
 import pharos/log
 import pharos/log/entry.{type LogEntry, Debug, LogEntry}
 import pharos/log/ring
+import pharos/log/trace_ring
 
 const target: String = "pharos/lsp/trace"
 
@@ -45,46 +46,49 @@ pub fn incoming(bytes: BitArray) -> Nil {
 }
 
 fn emit(direction: String, bytes: BitArray) -> Nil {
-  // M10 emit-side prefilter. Without this short-circuit, every wire
-  // chunk in BOTH directions casts an Emit message to the writer
-  // actor, even when the trace target is silenced. A
-  // parallel-issued runtime_trace_lsp + producer race left the very
-  // first emit at the OLD filter (sync filter set in M9.5 closed the
-  // in-actor race but not the at-emitter race). Reading the cache
-  // here means producers see the new filter as soon as
-  // `set_target_global` returns, with no mailbox-ordering dependency.
+  // Render once, write to the always-on `trace_ring` unconditionally,
+  // then fall through to the gated log path.
+  //
+  // Why unconditional: the persistent_term emit-side filter check
+  // (`trace_filter_is_on`) closes the at-emitter race for
+  // sequentially-issued runtime_trace_lsp. The remaining residual is
+  // parallel dispatch: when the MCP server hands hover and trace_lsp
+  // to different worker processes at the same instant, hover's first
+  // emit can fire before trace_lsp's `process.call` reaches the
+  // writer. With an always-on dedicated trace ring, the producer
+  // always writes; the consumer (`runtime_trace_lsp`) reads from the
+  // ring. No filter toggle, no race.
+  //
+  // Cost: one ETS insert per wire chunk in production. Bounded by
+  // `trace_ring.default_capacity` (100). At ~50-200 wire chunks/sec
+  // under heavy LSP traffic, ~us per ETS insert = negligible CPU.
+  let total = bit_array.byte_size(bytes)
+  let truncated = case total > max_body_bytes {
+    True ->
+      case bit_array.slice(bytes, at: 0, take: max_body_bytes) {
+        Ok(prefix) -> prefix
+        Error(_) -> bytes
+      }
+    False -> bytes
+  }
+  let body = render_bytes(truncated)
+  let fields = [
+    #("direction", direction),
+    #("bytes", int.to_string(total)),
+    #("body", body),
+  ]
+  let log_entry = build_entry(fields)
+  let line = entry.render(log_entry)
+  trace_ring.insert(line, Debug)
+
+  // Gated path: fan out to the general log (stderr, file, log_ring
+  // for runtime_log_tail) only when the trace target is enabled. The
+  // M11 fix that wrote to the log ring directly stays — under heavy
+  // traffic the writer's mailbox cap can drop entries, ETS bypasses.
   case trace_filter_is_on() {
     False -> Nil
     True -> {
-      let total = bit_array.byte_size(bytes)
-      let truncated = case total > max_body_bytes {
-        True ->
-          case bit_array.slice(bytes, at: 0, take: max_body_bytes) {
-            Ok(prefix) -> prefix
-            Error(_) -> bytes
-          }
-        False -> bytes
-      }
-      let body = render_bytes(truncated)
-      let fields = [
-        #("direction", direction),
-        #("bytes", int.to_string(total)),
-        #("body", body),
-      ]
-      // M11: write the trace line directly to the ring buffer instead
-      // of relying solely on the writer actor's mailbox path. The
-      // writer applies a producer-side mailbox-depth cap (defaults to
-      // 1000) so under heavy LSP traffic, trace casts get coalesced
-      // into a single `dropped=N` warn line — runtime_trace_lsp then
-      // returns no actual wire entries. ETS inserts are lock-free and
-      // bypass the cap, so the ring is the guaranteed capture.
-      // `pharos/log/writer.fan_out` skips the ring for this target so
-      // the entry is not double-inserted when the writer keeps up.
-      let log_entry = build_entry(fields)
-      let line = entry.render(log_entry)
       ring.insert(line, Debug)
-      // Best-effort fan-out for stderr / file sinks. May still drop
-      // at the mailbox cap; ring already has the entry.
       log.at_with_fields(target, Debug, "lsp wire", fields)
     }
   }

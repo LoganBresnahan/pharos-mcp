@@ -28,6 +28,7 @@ import pharos/config.{type Config}
 import pharos/log
 import pharos/log/entry
 import pharos/log/filter
+import pharos/log/trace_ring
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/post_didopen_drained
 import pharos/lsp/dyn_sup
@@ -96,6 +97,7 @@ fn do_boot() -> Result(Pid, String) {
   // language overrides at merge time.
   diagnostics_cache.init()
   post_didopen_drained.init()
+  trace_ring.init(trace_ring.default_capacity)
   registry.init()
   inflight.init()
   request_workers.init()
