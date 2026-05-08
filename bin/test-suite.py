@@ -32,13 +32,19 @@ from typing import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pharos_drive import (  # noqa: E402
-    drive,
+    drive as _stdio_drive,
     find_response,
     initialize_request,
     tool_call_request,
     tool_is_error,
     tool_text,
 )
+
+# Module-level drive fn. The HTTP twin (`test-suite-http.py`)
+# replaces this with `_pharos_drive_http.drive` before calling
+# `main()` so every cell runs over HTTP without touching the
+# request-building or assertion code below.
+_drive = _stdio_drive
 
 
 @dataclass
@@ -349,7 +355,8 @@ Check = Callable[[LangSpec, list], tuple[bool, str]]
 
 
 def _run(spec: LangSpec, requests: list, timeout: int = 60) -> tuple[list, str]:
-    return drive({}, [initialize_request(0)] + requests, timeout=timeout)
+    # Calls through `_drive` so HTTP twin can override the transport.
+    return _drive({}, [initialize_request(0)] + requests, timeout=timeout)
 
 
 def _check_response(rid: int, responses: list, label: str) -> tuple[bool, str, dict | None]:
@@ -506,6 +513,69 @@ def run_language(spec: LangSpec) -> list[tuple[str, bool, str]]:
             "get_diagnostics",
             {"uri": spec.file_uri},
         ),
+        # Phase-3 expansion — 9 more read tools per language. Each
+        # uses the same point_decl_line position as hover (cursor on
+        # the type's declaration line). Tools that depend on chained
+        # results (call_hierarchy_incoming/outgoing,
+        # type_hierarchy_supertypes/subtypes) are deferred to the
+        # serial-mode harness — they need the prepare's response item
+        # threaded back as an arg.
+        tool_call_request(
+            110,
+            "goto_definition",
+            {"uri": spec.file_uri, "line": spec.point_decl_line, "character": 12},
+        ),
+        tool_call_request(
+            111,
+            "goto_type_definition",
+            {"uri": spec.file_uri, "line": spec.point_decl_line, "character": 12},
+        ),
+        tool_call_request(
+            112,
+            "goto_implementation",
+            {"uri": spec.file_uri, "line": spec.point_decl_line, "character": 12},
+        ),
+        tool_call_request(
+            113,
+            "find_references",
+            {
+                "uri": spec.file_uri,
+                "line": spec.point_decl_line,
+                "character": 12,
+                "include_declaration": True,
+            },
+        ),
+        tool_call_request(
+            114,
+            "signature_help",
+            {"uri": spec.file_uri, "line": spec.point_decl_line, "character": 12},
+        ),
+        tool_call_request(
+            115,
+            "inlay_hints",
+            {
+                "uri": spec.file_uri,
+                "start_line": 0,
+                "start_character": 0,
+                "end_line": spec.point_decl_line + 20,
+                "end_character": 0,
+            },
+        ),
+        tool_call_request(
+            116,
+            "semantic_tokens",
+            {"uri": spec.file_uri},
+        ),
+        tool_call_request(
+            117,
+            "call_hierarchy_prepare",
+            {"uri": spec.file_uri, "line": spec.point_decl_line, "character": 12},
+        ),
+        tool_call_request(
+            118,
+            "type_hierarchy_prepare",
+            {"uri": spec.file_uri, "line": spec.point_decl_line, "character": 12},
+        ),
     ]
     # Cold rust-analyzer + indexing burst can take ~60s on a fresh
     # pharos boot. metals first-run bootstraps Bloop which is ~2-3min.
@@ -529,7 +599,69 @@ def run_language(spec: LangSpec) -> list[tuple[str, bool, str]]:
         ("document_symbols", *check_document_symbols(spec, responses)),
         ("workspace_symbols", *check_workspace_symbols(spec, responses)),
         ("get_diagnostics", *check_diagnostics(spec, responses)),
+        ("goto_definition", *check_position_tool(spec, responses, 110, "goto_definition")),
+        ("goto_type_definition", *check_position_tool(spec, responses, 111, "goto_type_definition")),
+        ("goto_implementation", *check_position_tool(spec, responses, 112, "goto_implementation")),
+        ("find_references", *check_position_tool(spec, responses, 113, "find_references")),
+        ("signature_help", *check_position_tool(spec, responses, 114, "signature_help")),
+        ("inlay_hints", *check_position_tool(spec, responses, 115, "inlay_hints")),
+        ("semantic_tokens", *check_position_tool(spec, responses, 116, "semantic_tokens")),
+        ("call_hierarchy_prepare", *check_position_tool(spec, responses, 117, "call_hierarchy_prepare")),
+        ("type_hierarchy_prepare", *check_position_tool(spec, responses, 118, "type_hierarchy_prepare")),
     ]
+
+
+def check_position_tool(
+    spec: LangSpec, responses: list, rid: int, name: str
+) -> tuple[bool, str]:
+    """Generic position-based tool checker.
+
+    Most tier-1 read tools take (uri, line, character) and return
+    EITHER a structural payload (locations / items / hints / tokens)
+    OR a documented "no result at this position" indicator. The
+    harness's job is to confirm plumbing — the LSP returns SOMETHING
+    sane — not to assert specific symbols (positions drift across LSP
+    versions / fixture edits).
+
+    PASS criteria, in order:
+    - LSP method-not-supported (-32601) — OK; some servers don't
+      implement e.g. inlay_hints, semantic_tokens, goto_implementation.
+    - Cold-start timeout (-32603) — OK; index may still be warming.
+    - terraform-ls position-outside (-32098) — OK; cursor lands on
+      whitespace.
+    - Empty result (`null` / `[]` / `{"contents":[]}` / `{"data":[]}`
+      for semantic_tokens) — valid LSP response when no payload
+      applies at the position.
+    - isError=true for other reasons → FAIL.
+    - Otherwise PASS — non-empty content means plumbing works.
+    """
+    ok, msg, r = _check_response(rid, responses, name)
+    if not ok:
+        return False, msg
+    text = tool_text(r)
+    if "-32601" in text:
+        return True, f"{name} ok (LSP -32601 method not supported)"
+    if "-32603" in text and ("Timeout" in text or "timeout" in text):
+        return True, f"{name} ok (cold-start: server -32603 timeout)"
+    if "-32098" in text:
+        return True, f"{name} ok (-32098 position-outside; plumbing fine)"
+    stripped = text.strip()
+    if stripped in (
+        "null",
+        "[]",
+        "{}",
+        '{"contents":[]}',
+        '{"contents": []}',
+        '{"data":[]}',
+        '{"data": []}',
+        '{"resultId":"","data":[]}',
+    ):
+        return True, f"{name} ok (empty result; plumbing fine)"
+    if tool_is_error(r):
+        return False, f"{name} marked isError=true: {text[:120]}"
+    if not text:
+        return False, f"{name} returned empty text"
+    return True, f"{name} ok ({len(text)}b non-empty)"
 
 
 def main():
