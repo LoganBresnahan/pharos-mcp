@@ -129,6 +129,8 @@ fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
       methods: All,
       diagnostics_mode: parse_mode(override.diagnostics_mode),
       readiness_token: override.readiness_token,
+      readiness_timeout_ms: override.readiness_timeout_ms,
+      initialize_timeout_ms: override.initialize_timeout_ms,
     )
   LanguageConfig(
     id: option.unwrap(override.id, key),
@@ -252,6 +254,14 @@ fn merge_server(
       None -> default.readiness_token
       Some(_) -> ovr.readiness_token
     },
+    readiness_timeout_ms: case ovr.readiness_timeout_ms {
+      None -> default.readiness_timeout_ms
+      Some(_) -> ovr.readiness_timeout_ms
+    },
+    initialize_timeout_ms: case ovr.initialize_timeout_ms {
+      None -> default.initialize_timeout_ms
+      Some(_) -> ovr.initialize_timeout_ms
+    },
   )
 }
 
@@ -270,6 +280,8 @@ fn server_from_override(target_id: String, ovr: ServerOverride) -> ServerConfig 
     methods: parse_methods(ovr.methods, All),
     diagnostics_mode: parse_mode(ovr.diagnostics_mode),
     readiness_token: ovr.readiness_token,
+    readiness_timeout_ms: ovr.readiness_timeout_ms,
+    initialize_timeout_ms: ovr.initialize_timeout_ms,
   )
 }
 
@@ -316,6 +328,14 @@ fn merge_primary(
     readiness_token: case override.readiness_token {
       None -> primary.readiness_token
       Some(_) -> override.readiness_token
+    },
+    readiness_timeout_ms: case override.readiness_timeout_ms {
+      None -> primary.readiness_timeout_ms
+      Some(_) -> override.readiness_timeout_ms
+    },
+    initialize_timeout_ms: case override.initialize_timeout_ms {
+      None -> primary.initialize_timeout_ms
+      Some(_) -> override.initialize_timeout_ms
     },
   )
 }

@@ -87,6 +87,15 @@ pub type ServerOverride {
     methods: Option(List(String)),
     diagnostics_mode: Option(String),
     readiness_token: Option(String),
+    /// Override the post-handshake / post-didOpen drain budget. None
+    /// = use the bundled default (`languages.default_readiness_timeout_ms`,
+    /// 30s). Languages with slow indexing (rust-analyzer big workspace,
+    /// jdtls big project) tune up; nothing tunes down typically.
+    readiness_timeout_ms: Option(Int),
+    /// Override the `initialize` handshake budget. None = use the
+    /// bundled default (`languages.default_initialize_timeout_ms`,
+    /// 90s — accommodates jdtls cold start).
+    initialize_timeout_ms: Option(Int),
     /// Whole-blob replace of the server's `initialization_options`
     /// JSON sent at `initialize`. Stored as a TOML string containing
     /// JSON text (LSP-server upstream docs publish init options in
@@ -142,6 +151,10 @@ pub type LanguageOverride {
     /// server's blob is being replaced.
     initialization_options_json: Option(String),
     workspace_configuration_json: Option(String),
+    /// Flat-shape variants of the per-server timeout overrides;
+    /// patches the language's PRIMARY server. See ServerOverride.
+    readiness_timeout_ms: Option(Int),
+    initialize_timeout_ms: Option(Int),
   )
 }
 
@@ -556,6 +569,8 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       value,
       "workspace_configuration_json",
     ),
+    readiness_timeout_ms: decode_optional_int(value, "readiness_timeout_ms"),
+    initialize_timeout_ms: decode_optional_int(value, "initialize_timeout_ms"),
   )
 }
 
@@ -580,6 +595,8 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
     methods: decode_optional_string_list(value, "methods"),
     diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
     readiness_token: decode_optional_string(value, "readiness_token"),
+    readiness_timeout_ms: decode_optional_int(value, "readiness_timeout_ms"),
+    initialize_timeout_ms: decode_optional_int(value, "initialize_timeout_ms"),
     initialization_options_json: decode_optional_string(
       value,
       "initialization_options_json",
@@ -594,6 +611,13 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
 fn decode_optional_string(parent: Dynamic, key: String) -> Option(String) {
   case decode_field(parent, key, decode.string) {
     Ok(s) -> Some(s)
+    Error(_) -> None
+  }
+}
+
+fn decode_optional_int(parent: Dynamic, key: String) -> Option(Int) {
+  case decode_field(parent, key, decode.int) {
+    Ok(n) -> Some(n)
     Error(_) -> None
   }
 }

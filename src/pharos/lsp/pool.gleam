@@ -60,6 +60,11 @@ pub type SpawnSpec {
     readiness_token: option.Option(String),
     /// Wall-clock cap for the readiness drain.
     readiness_timeout_ms: Int,
+    /// Wall-clock cap for the `initialize` handshake. Per-server so
+    /// jdtls (heavy) gets headroom while faster servers can fail
+    /// fast. Mirrored from `ServerConfig.initialize_timeout_ms` with
+    /// the global default applied when None.
+    initialize_timeout_ms: Int,
   )
 }
 
@@ -125,12 +130,11 @@ type State {
   )
 }
 
-// jdtls cold start is 30-60s on small Java projects, more on big.
-// 90s covers the 99th percentile. Faster servers (rust-analyzer,
-// gopls, pyright, tsserver, next-ls) initialize in <10s so the
-// bumped default does not slow them down — only the blocked-on-
-// handshake failure mode pays the longer wait.
-const initialize_timeout_ms: Int = 90_000
+// initialize_timeout_ms is now per-server via SpawnSpec; the global
+// default lives in `pharos/lsp/languages.default_initialize_timeout_ms`.
+// SpawnSpec.initialize_timeout_ms is filled by callers (session.gleam)
+// from ServerConfig.initialize_timeout_ms with the default applied
+// when None.
 
 const default_call_timeout_ms: Int = 60_000
 
@@ -630,7 +634,7 @@ fn spawn_proc(
       spec.command,
       spec.args,
       spec.init_params,
-      initialize_timeout_ms,
+      spec.initialize_timeout_ms,
       spec.readiness_token,
       spec.readiness_timeout_ms,
     )

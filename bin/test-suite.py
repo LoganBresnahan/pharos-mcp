@@ -201,6 +201,21 @@ SPECS = {
         expected_diagnostic_substr="cannot",
         expect_diagnostics=False,
     ),
+    "erlang": LangSpec(
+        id="erlang",
+        workspace="/home/oof/erlang_dev",
+        file_uri="file:///home/oof/erlang_dev/src/erlang_dev.erl",
+        point_decl_line=8,  # `-record(point, ...)` line 9 (1-based)
+        constructor_name="new_point",
+        # ELP emits diagnostics for the deliberate spec mismatch but
+        # cold-start may not have run analysis yet. Tolerate empty.
+        expected_diagnostic_substr="not a number",
+        expect_diagnostics=False,
+        # Erlang record names are conventionally lowercase (`point`,
+        # not `Point`); the harness's `Point` landmark check doesn't
+        # fit. Constructor-name check still fires.
+        has_type_concept=False,
+    ),
     "javascript": LangSpec(
         id="javascript",
         workspace="/home/oof/javascript_dev",

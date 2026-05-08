@@ -19,6 +19,7 @@ import gleam/bit_array
 import gleam/erlang/process
 import gleam/json
 import gleam/list
+import gleam/option
 import gleam/result
 import pharos/log
 import pharos/lsp/languages.{
@@ -35,13 +36,9 @@ const content_modified_code: Int = -32_801
 
 const content_modified_retry_delay_ms: Int = 1000
 
-/// Budget the post-handshake `wait_for_ready` drain spends waiting
-/// for the LSP's indexing-progress token to reach `end`. Cold
-/// rust-analyzer against a large workspace consistently emits the
-/// `rustAnalyzer/Indexing` end notification within ~15s; 30s covers
-/// the 99th percentile. Servers without a `readiness_token` skip the
-/// drain entirely.
-const readiness_timeout_ms: Int = 30_000
+// Per-server `readiness_timeout_ms` lives on `ServerConfig` now. The
+// global default is `languages.default_readiness_timeout_ms` (30s).
+// `server_readiness_timeout_ms/1` resolves the two below.
 
 pub type SessionError {
   NotAFileUri(uri: String)
@@ -585,7 +582,8 @@ fn get_lsp_for_server(
       init_params: build_initialize_params(workspace, config, server),
       workspace_configuration: server.workspace_configuration,
       readiness_token: server.readiness_token,
-      readiness_timeout_ms: readiness_timeout_ms,
+      readiness_timeout_ms: server_readiness_timeout_ms(server),
+      initialize_timeout_ms: server_initialize_timeout_ms(server),
     )
   pool.get(pool, config.id, workspace, spec)
   |> result.map_error(fn(err) {
@@ -593,6 +591,24 @@ fn get_lsp_for_server(
       pool.ProcStartFailed(reason) -> SpawnFailed(reason)
     }
   })
+}
+
+/// Resolve the per-server readiness drain budget. ServerConfig's
+/// override wins; otherwise fall back to the bundled default.
+fn server_readiness_timeout_ms(server: languages.ServerConfig) -> Int {
+  case server.readiness_timeout_ms {
+    option.Some(n) -> n
+    option.None -> languages.default_readiness_timeout_ms
+  }
+}
+
+/// Resolve the per-server initialize handshake budget. Same shape as
+/// readiness — ServerConfig override wins; default covers most.
+fn server_initialize_timeout_ms(server: languages.ServerConfig) -> Int {
+  case server.initialize_timeout_ms {
+    option.Some(n) -> n
+    option.None -> languages.default_initialize_timeout_ms
+  }
 }
 
 // -- Internals ----------------------------------------------------------
@@ -676,7 +692,8 @@ fn get_lsp(
           init_params: build_initialize_params(workspace, config, server),
           workspace_configuration: server.workspace_configuration,
           readiness_token: server.readiness_token,
-          readiness_timeout_ms: readiness_timeout_ms,
+          readiness_timeout_ms: server_readiness_timeout_ms(server),
+          initialize_timeout_ms: server_initialize_timeout_ms(server),
         )
       pool.get(pool, config.id, workspace, spec)
       |> result.map_error(fn(err) {
@@ -925,7 +942,8 @@ fn drain_post_didopen_if_needed(
     True -> Nil
     False ->
       case post_didopen_drained.try_claim(server.id, workspace) {
-        True -> drain_and_mark(lsp, server, workspace)
+        True ->
+          drain_and_mark(lsp, server, workspace, server_readiness_timeout_ms(server))
         // Lost the race — another worker is already draining. Block
         // until they mark done so our subsequent proc.request does NOT
         // queue behind the drainer's WaitForReady in the proc actor's
@@ -942,9 +960,10 @@ fn drain_and_mark(
   lsp: Proc,
   server: languages.ServerConfig,
   workspace: String,
+  timeout_ms: Int,
 ) -> Nil {
   case
-    proc.wait_for_ready(lsp, server.readiness_token, readiness_timeout_ms)
+    proc.wait_for_ready(lsp, server.readiness_token, timeout_ms)
   {
     Ok(_) -> post_didopen_drained.mark_done(server.id, workspace)
     // Drain failed (transport error). Leave claim in place so future

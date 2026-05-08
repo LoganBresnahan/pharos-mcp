@@ -67,6 +67,16 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "methods = " <> render_methods(server.methods),
     "diagnostics_mode = " <> render_diagnostics_mode(server.diagnostics_mode),
     "readiness_token = " <> render_optional_string(server.readiness_token),
+    render_optional_int(
+      "readiness_timeout_ms",
+      server.readiness_timeout_ms,
+      "30000",
+    ),
+    render_optional_int(
+      "initialize_timeout_ms",
+      server.initialize_timeout_ms,
+      "90000",
+    ),
     render_init_options(server.initialization_options),
     render_workspace_config(server.workspace_configuration),
   ]
@@ -97,6 +107,26 @@ fn render_optional_string(s: option.Option(String)) -> String {
     Some(v) -> render_string(v)
   }
 }
+
+fn render_optional_int(
+  field_name: String,
+  value: option.Option(Int),
+  default_str: String,
+) -> String {
+  case value {
+    option.Some(n) ->
+      field_name <> " = " <> int_to_string(n)
+    option.None ->
+      "# "
+      <> field_name
+      <> " uses bundled default ("
+      <> default_str
+      <> "ms)"
+  }
+}
+
+@external(erlang, "erlang", "integer_to_binary")
+fn int_to_string(n: Int) -> String
 
 fn render_methods(scope: MethodScope) -> String {
   case scope {

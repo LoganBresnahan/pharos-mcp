@@ -196,3 +196,22 @@
 #
 # Parse failures log a warning and fall back to the bundled default,
 # so a typo in the override does not crash boot.
+#
+# 4) Per-server timeout overrides (M12 polish).
+#
+# `readiness_timeout_ms` (post-handshake / post-didOpen indexing-drain
+# budget) and `initialize_timeout_ms` (LSP `initialize` handshake
+# budget) are per-ServerConfig now. Defaults are 30s and 90s
+# respectively. Override when a workspace is large enough that cold
+# rust-analyzer / jdtls / elp blows past the bundled budgets:
+#
+# [languages.rust]
+# readiness_timeout_ms = 60000      # bigger budget for the post-didOpen drain
+#
+# [[languages.java.servers]]
+# id = "jdtls"
+# initialize_timeout_ms = 180000    # 3 minutes — for very large multi-module
+#                                   # gradle / maven projects
+#
+# Both fields work in flat (`[languages.<id>]` patches the primary
+# server) and per-server (`[[languages.<id>.servers]]`) shapes.

@@ -184,8 +184,30 @@ pub type ServerConfig {
     /// `$/progress` token name the server emits during readiness
     /// work (typically initial indexing). `None` skips the wait.
     readiness_token: Option(String),
+    /// How long to wait for `readiness_token` to reach `kind: "end"`
+    /// before giving up. `None` uses the global default
+    /// (30s — see `default_readiness_timeout_ms`). Servers with slow
+    /// indexing on big workspaces (rust-analyzer, jdtls) can override
+    /// to e.g. 60000-90000.
+    readiness_timeout_ms: Option(Int),
+    /// How long to wait for the `initialize` handshake response
+    /// before failing. `None` uses the global default
+    /// (90s — see `default_initialize_timeout_ms`). jdtls cold start
+    /// can take 30-60s, so the global default already accommodates;
+    /// override here to TIGHTEN the budget for fast servers if a
+    /// faster fail-fast is desired.
+    initialize_timeout_ms: Option(Int),
   )
 }
+
+/// Used when a `ServerConfig.readiness_timeout_ms` is `None`.
+/// Matches what `session.gleam` previously hard-coded.
+pub const default_readiness_timeout_ms: Int = 30_000
+
+/// Used when a `ServerConfig.initialize_timeout_ms` is `None`.
+/// Matches what `pool.gleam` previously hard-coded (after the M12
+/// wave-2 jdtls bump from 30s to 90s).
+pub const default_initialize_timeout_ms: Int = 90_000
 
 pub type LanguageConfig {
   LanguageConfig(
@@ -245,6 +267,9 @@ pub fn default_registry() -> Dict(String, LanguageConfig) {
     #("zig", zig()),
     #("cpp", cpp()),
     #("java", java()),
+    // BEAM-native — pharos itself runs on the BEAM, so erlang
+    // support is in our wheelhouse.
+    #("erlang", erlang()),
   ])
 }
 
@@ -295,6 +320,8 @@ fn rust() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: Some("rustAnalyzer/Indexing"),
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -319,6 +346,8 @@ fn go() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: Some("setup"),
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -361,6 +390,8 @@ fn typescript() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -433,6 +464,8 @@ fn elixir() -> LanguageConfig {
         // next-ls's progress token shape varies; skip drain. Pharos's
         // content-modified retry catches cold-start races.
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -457,6 +490,8 @@ fn ruby() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -480,6 +515,8 @@ fn zig() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -510,6 +547,38 @@ fn cpp() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn erlang() -> LanguageConfig {
+  LanguageConfig(
+    id: "erlang",
+    file_extensions: [".erl", ".hrl"],
+    root_markers: ["rebar.config", "erlang.mk", "rebar3.config", ".git"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // ELP (WhatsApp/erlang-language-platform). Rust-based; built
+        // for WhatsApp's massive Erlang codebase but works on any
+        // rebar3/erlang.mk project. Pre-built binaries shipped per
+        // OTP version at https://github.com/WhatsApp/erlang-language-platform/releases.
+        // Alternative: erlang_ls (mature, BEAM-native) — override via
+        // pharos.toml if preferred. ELP is the default because
+        // releases are recent and active.
+        id: "elp",
+        command: "elp",
+        args: ["server"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -538,6 +607,8 @@ fn java() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -561,6 +632,8 @@ fn gleam() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -589,6 +662,8 @@ fn lua() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -618,6 +693,8 @@ fn bash() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
@@ -653,6 +730,8 @@ fn python() -> LanguageConfig {
         // does not reliably push notifications. Pull mode wins.
         diagnostics_mode: Pull,
         readiness_token: Some("Indexing"),
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
       ServerConfig(
         id: "ruff",
@@ -667,6 +746,8 @@ fn python() -> LanguageConfig {
         ]),
         diagnostics_mode: Pull,
         readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
       ),
     ],
   )
