@@ -26,8 +26,8 @@
 import gleam/json
 import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
-import pharos/tools/tier1/session
-import pharos/tools/tier1/tool_helpers
+import pharos/tools/session
+import pharos/tools/tool_helpers
 
 pub const default_timeout_ms: Int = 60_000
 

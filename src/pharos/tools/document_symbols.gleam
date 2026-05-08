@@ -9,8 +9,8 @@
 import gleam/json
 import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
-import pharos/tools/tier1/session
-import pharos/tools/tier1/tool_helpers
+import pharos/tools/session
+import pharos/tools/tool_helpers
 
 // Same headroom as hover/find_references — 5s is too tight when the
 // proc actor is mid-drain on cold start (M11 polish B1).

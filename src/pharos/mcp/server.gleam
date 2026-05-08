@@ -22,26 +22,26 @@ import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/mcp/content_block
 import pharos/mcp/request_workers
-import pharos/tools/tier1/diagnostics
-import pharos/tools/tier1/document_symbols
-import pharos/tools/tier1/find_references
-import pharos/tools/tier1/goto_definition
-import pharos/tools/tier1/hover
-import pharos/tools/tier1/workspace_symbols
-import pharos/tools/tier2/apply_workspace_edit
-import pharos/tools/tier2/call_hierarchy
-import pharos/tools/tier2/code_actions
-import pharos/tools/tier2/format_document
-import pharos/tools/tier2/goto_implementation
-import pharos/tools/tier2/inlay_hints
-import pharos/tools/tier2/goto_type_definition
-import pharos/tools/tier2/lsp_request_raw
+import pharos/tools/diagnostics
+import pharos/tools/document_symbols
+import pharos/tools/find_references
+import pharos/tools/goto_definition
+import pharos/tools/hover
+import pharos/tools/workspace_symbols
+import pharos/tools/apply_workspace_edit
+import pharos/tools/call_hierarchy
+import pharos/tools/code_actions
+import pharos/tools/format_document
+import pharos/tools/goto_implementation
+import pharos/tools/inlay_hints
+import pharos/tools/goto_type_definition
+import pharos/tools/lsp_request_raw
 import pharos/tools/registry as tool_registry
-import pharos/tools/tier4
-import pharos/tools/tier2/rename_preview
-import pharos/tools/tier2/semantic_tokens
-import pharos/tools/tier2/signature_help
-import pharos/tools/tier2/type_hierarchy
+import pharos/tools/debug
+import pharos/tools/rename_preview
+import pharos/tools/semantic_tokens
+import pharos/tools/signature_help
+import pharos/tools/type_hierarchy
 
 const protocol_version: String = "2024-11-05"
 
@@ -271,7 +271,7 @@ fn tools_list_response(id: Id) -> String {
 /// (`pharos/config.tools`) becomes its instantiated JSON; the rest
 /// drop out before `tools/list` ever sees them.
 fn allowed_tool_definitions() -> List(Json) {
-  let tier1_2 = [
+  let curated = [
     #("echo", echo_tool_definition),
     #("get_diagnostics", get_diagnostics_tool_definition),
     #("hover", hover_tool_definition),
@@ -308,7 +308,7 @@ fn allowed_tool_definitions() -> List(Json) {
     ),
     #("lsp_request_raw", lsp_request_raw_tool_definition),
   ]
-  list.append(tier1_2, tier4.named_definitions())
+  list.append(curated, debug.named_definitions())
   |> list.filter_map(fn(pair) {
     let #(name, builder) = pair
     case tool_registry.is_allowed(name) {
@@ -852,7 +852,7 @@ fn dispatch_tool_call(
       handle_lsp_request_raw(pool, id, arguments)
 
     Ok(#(name, arguments)) ->
-      case tier4.dispatch(pool, name, arguments) {
+      case debug.dispatch(pool, name, arguments) {
         Some(Ok(payload)) ->
           success_response(id, fn() { tool_text_result(payload, False) })
         Some(Error(reason)) ->

@@ -36,8 +36,8 @@ import pharos/lsp/diagnostics_cache
 import pharos/lsp/languages.{type LanguageConfig, type ServerConfig, Pull, Push}
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
-import pharos/tools/tier1/session
-import pharos/tools/tier1/tool_helpers
+import pharos/tools/session
+import pharos/tools/tool_helpers
 import pharos/workspace_root
 
 const default_drain_window_ms: Int = 8000
@@ -132,7 +132,7 @@ fn attempt_single(
           case result, retries_left > 0 {
             Error(TransportFailed(_)), True -> {
               log.warn_at(
-                "pharos/tools/tier1/diagnostics",
+                "pharos/tools/diagnostics",
                 "transport error during diagnostics; evicting and retrying once",
               )
               evict_for_uri(pool, file_uri, config)
@@ -251,7 +251,7 @@ fn fetch_items_one(
     Ok(items) -> items
     Error(reason) -> {
       log.warn_at(
-        "pharos/tools/tier1/diagnostics",
+        "pharos/tools/diagnostics",
         "server `"
           <> server.id
           <> "` diagnostics fetch failed: "

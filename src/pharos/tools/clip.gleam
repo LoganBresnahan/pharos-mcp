@@ -9,7 +9,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/list
 import gleam/string
-import pharos/tools/tier1/tool_helpers
+import pharos/tools/tool_helpers
 
 /// Clip the supplied Dynamic — expected to be a JSON array — to the
 /// first `limit` elements and re-encode as JSON text. If the value

@@ -1,4 +1,4 @@
-//// Tests for `pharos/tools/tier1/session.build_client_capabilities/0`.
+//// Tests for `pharos/tools/session.build_client_capabilities/0`.
 ////
 //// Until M8 Stage 2 pharos sent `{}` as ClientCapabilities at the
 //// LSP initialize handshake. rust-analyzer (and likely others)
@@ -12,7 +12,7 @@
 import gleam/dynamic/decode
 import gleam/json
 import gleeunit/should
-import pharos/tools/tier1/session
+import pharos/tools/session
 
 pub fn capabilities_has_workspace_and_text_document_test() {
   let payload = serialize(session.build_client_capabilities())

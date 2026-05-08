@@ -1,27 +1,24 @@
-//// MCP tool: `hover`.
+//// MCP tool: `goto_definition`.
 ////
-//// Wraps LSP `textDocument/hover`. Returns the server's hover
-//// payload — type signature, doc comments, etc. — verbatim as JSON.
-//// LSP's response shape:
-////   { contents: MarkupContent | string | MarkedString[],
-////     range?: Range }
-//// We pass the entire `result` value through; the LLM reads
-//// whichever shape the server sends.
+//// Wraps LSP `textDocument/definition`. Returns the location(s)
+//// where the symbol at the given position is defined. Server may
+//// return:
+////   - a single Location
+////   - a list of Location
+////   - a list of LocationLink (3.14+)
+////   - null
+//// We pass the result through verbatim as JSON; the LLM reads
+//// whichever variant the server sent.
 
 import gleam/json
 import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
-import pharos/tools/tier1/session
-import pharos/tools/tier1/tool_helpers
+import pharos/tools/session
+import pharos/tools/tool_helpers
 
-// Cold rust-analyzer + concurrent worker queueing through the proc
-// actor (post-didOpen drain serialization, M11 polish B1) makes the
-// previous 5s default too tight when multiple tools fan out at once.
-// 30s matches `find_references`. `request_with_content_modified_retry`
-// still catches the rare mid-call indexing reset.
-const default_timeout_ms: Int = 30_000
+const default_timeout_ms: Int = 5000
 
-pub type HoverError {
+pub type GotoDefinitionError {
   SessionFailed(reason: String)
   RequestFailed(reason: String)
 }
@@ -31,7 +28,7 @@ pub fn handle(
   file_uri: String,
   line: Int,
   character: Int,
-) -> Result(String, HoverError) {
+) -> Result(String, GotoDefinitionError) {
   let params =
     json.object([
       #("textDocument", json.object([#("uri", json.string(file_uri))])),
@@ -47,7 +44,7 @@ pub fn handle(
   case
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
       session.request_with_content_modified_retry(fn() {
-        proc.request(lsp, "textDocument/hover", params, default_timeout_ms)
+        proc.request(lsp, "textDocument/definition", params, default_timeout_ms)
       })
     })
   {

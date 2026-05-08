@@ -99,7 +99,7 @@ pub fn with_session_and_retry(
         Ok(value) -> Ok(value)
         Error(lifecycle.ClientFailure(reason)) -> {
           log.warn_at(
-            "pharos/tools/tier1/session",
+            "pharos/tools/session",
             "transport error; evicting and retrying once",
           )
           let _ = reason
@@ -129,7 +129,7 @@ pub fn with_session_and_retry_for_method(
         Ok(value) -> Ok(value)
         Error(lifecycle.ClientFailure(reason)) -> {
           log.warn_at(
-            "pharos/tools/tier1/session",
+            "pharos/tools/session",
             "transport error (method=" <> method <> "); evicting and retrying once",
           )
           let _ = reason
@@ -224,7 +224,7 @@ pub fn with_workspace_session_and_retry(
         Ok(value) -> Ok(value)
         Error(lifecycle.ClientFailure(_)) -> {
           log.warn_at(
-            "pharos/tools/tier1/session",
+            "pharos/tools/session",
             "workspace transport error; evicting and retrying once",
           )
           retry_workspace_after_evict(pool, workspace_uri_hint, body)
@@ -252,7 +252,7 @@ pub fn with_workspace_session_and_retry_by_language(
         Ok(value) -> Ok(value)
         Error(lifecycle.ClientFailure(_)) -> {
           log.warn_at(
-            "pharos/tools/tier1/session",
+            "pharos/tools/session",
             "workspace transport error (by-language); evicting and retrying once",
           )
           retry_workspace_for_language_after_evict(
@@ -494,7 +494,7 @@ pub fn prepare_all_covering_method(
         }
         Error(err) -> {
           log.warn_at(
-            "pharos/tools/tier1/session",
+            "pharos/tools/session",
             "skipping server `"
               <> server.id
               <> "` for method `"
@@ -539,7 +539,7 @@ fn prepare_all_with_selector(
         }
         Error(err) -> {
           log.warn_at(
-            "pharos/tools/tier1/session",
+            "pharos/tools/session",
             "skipping server `"
               <> server.id
               <> "` for method `"

@@ -22,8 +22,8 @@ import pharos/log
 import pharos/lsp/lifecycle
 import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
-import pharos/tools/tier1/session
-import pharos/tools/tier1/tool_helpers
+import pharos/tools/session
+import pharos/tools/tool_helpers
 
 const default_timeout_ms: Int = 5000
 
@@ -108,7 +108,7 @@ fn merge_responses(
             Ok(items) -> list.append(acc, items)
             Error(_) -> {
               log.warn_at(
-                "pharos/tools/tier2/code_actions",
+                "pharos/tools/code_actions",
                 "server `"
                   <> server_id
                   <> "` returned non-array codeAction response; skipping",
@@ -118,7 +118,7 @@ fn merge_responses(
           }
         Error(err) -> {
           log.warn_at(
-            "pharos/tools/tier2/code_actions",
+            "pharos/tools/code_actions",
             "server `"
               <> server_id
               <> "` codeAction request failed: "

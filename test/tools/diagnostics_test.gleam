@@ -1,4 +1,4 @@
-//// Tests for `pharos/tools/tier1/diagnostics`.
+//// Tests for `pharos/tools/diagnostics`.
 ////
 //// Stub — test cases land alongside the implementation in
 //// Milestone 3.

@@ -1,4 +1,4 @@
-//// Tests for `pharos/tools/tier2/apply_workspace_edit`.
+//// Tests for `pharos/tools/apply_workspace_edit`.
 ////
 //// Cover three layers:
 ////   1. Pure FFI splice (`apply_text_edits/2`): single, multi, overlap,
@@ -12,7 +12,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
 import gleeunit/should
-import pharos/tools/tier2/apply_workspace_edit
+import pharos/tools/apply_workspace_edit
 
 @external(erlang, "pharos_fs_ffi", "shell")
 fn shell(cmd: String) -> String
