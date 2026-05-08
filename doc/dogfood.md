@@ -4,6 +4,28 @@ End-to-end test plan exercised through the live MCP bridge. Each step
 records: tool invocation, expected outcome, pass/fail criterion. Run
 top-to-bottom — later steps depend on earlier servers being warm.
 
+## Prereqs (binary runs only)
+
+Burrito's runtime cache key is `pharos_erts-<erts_ver>_<app_ver>` — it
+does not include payload bytes, so a rebuild of the same `app_version`
+silently re-runs old beams from the prior extract. ADR-020 captures the
+mechanism. Until that's fixed (deferred; see ADR-020 deferral note),
+clear the cache before every full-binary dogfood run:
+
+```sh
+rm -rf ~/.local/share/.burrito/pharos_erts-*
+mix release --overwrite
+node /home/oof/pharos/npm/scripts/postinstall.js   # warmup re-extract
+# Then /mcp reconnect pharos in Claude Code
+```
+
+Daily iteration uses `pharos-dev` (no cache, hits `_build/dev/lib/*/ebin`
+directly, fast). Note: `pharos-dev` runs interactive Erlang, NOT
+`-noshell -mode embedded -noinput` like the release — the stdio bug
+class fixed in commit e857dce is invisible there. Any change touching
+`pharos_stdin_ffi`, `writer`, NDJSON framing, or port operations must be
+verified against the binary, not just `pharos-dev`.
+
 ## Test workspaces
 
 | Language | Workspace | Test file | Symbols |
