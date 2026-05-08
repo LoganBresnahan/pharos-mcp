@@ -29,7 +29,7 @@ import pharos/tools/session
 import pharos/tools/tool_helpers
 import pharos/tools/workspace_edit
 
-const default_timeout_ms: Int = 10_000
+const default_timeout_ms: Int = 30_000
 
 pub type RenamePreviewError {
   SessionFailed(reason: String)

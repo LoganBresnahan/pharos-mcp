@@ -15,7 +15,10 @@ import pharos/tools/clip
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
-const default_timeout_ms: Int = 5000
+// Bumped from 5s to 30s for parity with hover/document_symbols.
+// The proc actor serializes concurrent requests; tighter timeouts
+// expire under heavy multi-tool dispatch (M13 testing surfaced).
+const default_timeout_ms: Int = 30_000
 
 pub const default_limit: Int = 50
 

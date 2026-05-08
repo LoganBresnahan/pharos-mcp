@@ -25,7 +25,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
-const default_timeout_ms: Int = 5000
+const default_timeout_ms: Int = 30_000
 
 pub type CodeActionsError {
   SessionFailed(reason: String)

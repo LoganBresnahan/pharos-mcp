@@ -26,7 +26,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
-pub const default_timeout_ms: Int = 10_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type InlayHintsError {
   SessionFailed(reason: String)
