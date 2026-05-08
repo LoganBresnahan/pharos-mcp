@@ -125,7 +125,12 @@ type State {
   )
 }
 
-const initialize_timeout_ms: Int = 30_000
+// jdtls cold start is 30-60s on small Java projects, more on big.
+// 90s covers the 99th percentile. Faster servers (rust-analyzer,
+// gopls, pyright, tsserver, next-ls) initialize in <10s so the
+// bumped default does not slow them down — only the blocked-on-
+// handshake failure mode pays the longer wait.
+const initialize_timeout_ms: Int = 90_000
 
 const default_call_timeout_ms: Int = 60_000
 

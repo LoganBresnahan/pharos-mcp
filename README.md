@@ -178,10 +178,14 @@ a binary is missing.
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
 | TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server typescript` |
 | Python | `pyright-langserver` (types/hover/goto) **+** `ruff` (formatting / lint / fixes) | `npm install -g pyright` and `pip install ruff` (or `uv tool install ruff`) |
-| Elixir | `elixir-ls` | Download a release from [elixir-lsp/elixir-ls](https://github.com/elixir-lsp/elixir-ls/releases) and put `language_server.sh` (or `language_server.bat`) on PATH symlinked as `elixir-ls`. Mix-archive installs work too. |
-| Gleam | `gleam` (built-in `lsp` subcommand) | Install Gleam itself — `brew install gleam`, `asdf install gleam latest`, or follow [gleam.run/getting-started](https://gleam.run/getting-started/installing/). |
+| Elixir | `next-ls` (default) — alternatives: `elixir-ls` (heavier, includes dialyzer), `start_expert` (alpha; will become the official LSP) | `gh release download v0.23.4 --pattern next_ls_linux_amd64 --output ~/.local/bin/next-ls --repo elixir-tools/next-ls && chmod +x ~/.local/bin/next-ls` (Linux). macOS: `brew install elixir-tools/tap/next-ls`. To switch: pin `[languages.elixir] command = "elixir-ls"` in pharos.toml. |
+| Gleam | `gleam lsp` (built into the gleam compiler) | **Currently broken upstream at gleam 1.16.** `gleam lsp` panics on stdin EOF (`Receiving LSP message: RecvError` in language-server/src/messages.rs:188). Affects every LSP host that closes stdin gracefully, not just pharos. Track at [gleam-lang/gleam](https://github.com/gleam-lang/gleam). pharos config wired and ready when upstream lands a fix. |
 | Lua | `lua-language-server` (sumneko/luals) | `brew install lua-language-server` or asdf. Tarball releases at [LuaLS/lua-language-server](https://github.com/LuaLS/lua-language-server/releases). |
-| Bash | `bash-language-server` | `npm install -g bash-language-server` |
+| Bash | `bash-language-server` | `npm install -g bash-language-server`. Diagnostics come via `shellcheck` (`apt install shellcheck` / `brew install shellcheck`); without it bash-language-server still serves hover/goto/document-symbols. |
+| Ruby | `ruby-lsp` (Shopify) | `gem install ruby-lsp`. Project must have `Gemfile.lock` — run `bundle install` once before pharos can talk to the workspace. |
+| Zig | `zls` | Per-zig-version. asdf: `asdf plugin add zls && asdf install zls 0.16.0 && asdf set -u zls 0.16.0`. Direct: download release matching your zig version from [zigtools/zls](https://github.com/zigtools/zls/releases). |
+| C / C++ | `clangd` | `apt install clangd-18 && sudo update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-18 100` (Linux). macOS: `brew install llvm`. clangd needs `compile_commands.json` for non-trivial projects; generate via `bear -- make` or CMake's `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. |
+| Java | `jdtls` (Eclipse JDT Language Server) | `mkdir -p ~/.local/lib/jdtls && cd ~/.local/lib/jdtls && curl -L https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz \| tar xz && ln -sf $(pwd)/bin/jdtls ~/.local/bin/jdtls && chmod +x ~/.local/bin/jdtls`. JDK 17+ required. Cold start 30-60s — pharos's initialize timeout is bumped to 90s to accommodate. |
 
 Python uses two servers via ADR-019 method routing: pyright owns
 hover, goto, types, references; ruff owns formatting, lint
@@ -436,6 +440,32 @@ rm ~/.local/bin/pharos            # if installed via direct download
 rm -rf ~/.config/pharos           # config files (TOML + language registry)
 rm -rf ~/.cache/pharos            # log files
 ```
+
+## Known limitations
+
+- **Gleam LSP (`gleam lsp`) panics on stdin EOF** at gleam 1.16. Pharos's
+  config entry is wired but currently unusable. Reproducer outside pharos:
+  `echo 'Content-Length: 90\n\n{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | gleam lsp`
+  → `Fatal compiler bug! Receiving LSP message: RecvError`. Tracking
+  upstream; nothing pharos can do until gleam fixes its mpsc receive
+  handler. As soon as a fixed gleam release lands, pharos will work
+  unchanged.
+- **Java cold start is 30-60s.** jdtls boots a full Eclipse JDT engine in
+  Java. Pharos bumps `initialize_timeout_ms` to 90s globally to
+  accommodate; faster servers (rust-analyzer, gopls, pyright, tsserver,
+  next-ls) all initialize in <10s so the longer ceiling does not slow
+  them down.
+- **Bash diagnostics need `shellcheck`** to surface anything beyond
+  syntax errors. Hover/goto/document-symbols work without it.
+- **Windows is untested.** Pharos's Erlang `os:find_executable/1` should
+  resolve `command = "rust-analyzer"` against `%PATH%` + `%PATHEXT%`
+  on Windows the same way `which` does on Linux/macOS, and absolute
+  paths in pharos.toml are accepted by Erlang on Windows. No CI
+  coverage for Windows yet, so confirmed-working only on Linux/macOS
+  as of M11. M13 distribution adds Windows binaries + smoke tests.
+- **Windows path overrides:** prefer forward slashes
+  (`C:/Users/me/.local/bin/rust-analyzer.exe`) in pharos.toml — Erlang
+  accepts `/` on Windows and TOML doesn't need backslash escaping.
 
 ## Why?
 

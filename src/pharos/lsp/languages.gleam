@@ -240,6 +240,11 @@ pub fn default_registry() -> Dict(String, LanguageConfig) {
     #("gleam", gleam()),
     #("lua", lua()),
     #("bash", bash()),
+    // M12 wave 2 — broader-coverage languages.
+    #("ruby", ruby()),
+    #("zig", zig()),
+    #("cpp", cpp()),
+    #("java", java()),
   ])
 }
 
@@ -410,24 +415,128 @@ fn elixir() -> LanguageConfig {
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
-        // elixir-ls. Install via release archive
-        // (https://github.com/elixir-lsp/elixir-ls/releases) and put
-        // `language_server.sh` (Linux/macOS) or `language_server.bat`
-        // (Windows) on PATH symlinked as `elixir-ls`. Mix-archive
-        // installs work too; users override `command` if their entry
-        // point differs.
-        id: "elixir-ls",
-        command: "elixir-ls",
+        // next-ls. Active fork of the Elixir LSP space, faster cold
+        // start than elixir-ls (drops dialyzer integration on
+        // purpose). Install via release tarball from
+        // https://github.com/elixir-tools/next-ls/releases — pre-built
+        // binaries for darwin/linux/windows, no mix-archive compile.
+        // The official `expert` LSP (elixir-lang/expert) is alpha;
+        // milestone 0.2 brings it to next-ls feature parity, 0.3 to
+        // elixir-ls parity. Re-evaluate default when expert ships 0.2.
+        id: "next-ls",
+        command: "next-ls",
+        args: ["--stdio"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        // next-ls's progress token shape varies; skip drain. Pharos's
+        // content-modified retry catches cold-start races.
+        readiness_token: None,
+      ),
+    ],
+  )
+}
+
+fn ruby() -> LanguageConfig {
+  LanguageConfig(
+    id: "ruby",
+    file_extensions: [".rb"],
+    root_markers: ["Gemfile", "Rakefile", ".ruby-version"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // ruby-lsp (Shopify). Install via `gem install ruby-lsp`.
+        // Modern, supersedes solargraph for most users. Future M13
+        // could layer standardrb-lsp via ADR-019 routing; not yet.
+        id: "ruby-lsp",
+        command: "ruby-lsp",
         args: [],
         initialization_options: json.object([]),
         workspace_configuration: None,
         methods: All,
         diagnostics_mode: Push,
-        // elixir-ls progress tokens are non-uniform across versions
-        // (`mix-deps`, `compile-elixir`, project setup variants). Skip
-        // the readiness drain — the M9 retry-on-content-modified path
-        // and the post-didOpen drain (when a token IS present) catch
-        // the cases that matter.
+        readiness_token: None,
+      ),
+    ],
+  )
+}
+
+fn zig() -> LanguageConfig {
+  LanguageConfig(
+    id: "zig",
+    file_extensions: [".zig", ".zon"],
+    root_markers: ["build.zig", "build.zig.zon"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // zls (zigtools/zls). Per-zig-version; install via asdf
+        // plugin or download release matching local zig.
+        id: "zls",
+        command: "zls",
+        args: [],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+      ),
+    ],
+  )
+}
+
+fn cpp() -> LanguageConfig {
+  LanguageConfig(
+    id: "cpp",
+    // Cover both C and C++ extensions; clangd handles both via
+    // compile_commands.json (or .clangd config).
+    file_extensions: [".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"],
+    root_markers: [
+      "compile_commands.json", "compile_flags.txt", ".clangd",
+      "CMakeLists.txt", ".git",
+    ],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // clangd ships with LLVM. `apt install clangd-18` (or the
+        // bundled-with-LLVM tarball). `--background-index` builds an
+        // on-disk index in `.cache/clangd/` so subsequent starts are
+        // fast.
+        id: "clangd",
+        command: "clangd",
+        args: ["--background-index"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+      ),
+    ],
+  )
+}
+
+fn java() -> LanguageConfig {
+  LanguageConfig(
+    id: "java",
+    file_extensions: [".java"],
+    root_markers: [
+      "pom.xml", "build.gradle", "build.gradle.kts", ".project", ".classpath",
+    ],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // jdtls (Eclipse JDT Language Server). Heavy — full Eclipse
+        // JDT engine in-process. Cold start 10-30s on small projects,
+        // longer on big. Install via Eclipse tarball
+        // (https://download.eclipse.org/jdtls/snapshots/), the
+        // `bin/jdtls` shell launcher handles JDK + classpath.
+        id: "jdtls",
+        command: "jdtls",
+        args: [],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
         readiness_token: None,
       ),
     ],
