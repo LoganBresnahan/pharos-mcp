@@ -92,6 +92,24 @@ SPECS = {
         # message text varies across pyright versions.
         expected_diagnostic_substr="reportAssignmentType",
     ),
+    # M12 wave 1 — owner ecosystem + easy LSPs. Owner installs the
+    # binary (see README install table) before running these.
+    "gleam": LangSpec(
+        id="gleam",
+        workspace="/home/oof/gleam_dev",
+        file_uri="file:///home/oof/gleam_dev/src/gleam_dev.gleam",
+        point_decl_line=8,  # `pub type Point {` line 9 (1-based)
+        constructor_name="new_point",
+        # gleam's LSP emits diagnostics for unused imports / unused
+        # locals; "_unused" pattern matches the gleam-stdlib idiom of
+        # leading underscore. The fixture has no deliberate type error
+        # — gleam projects refuse to compile with type errors so
+        # "structurally pass" is the better gate.
+        expected_diagnostic_substr="unused",
+        # gleam-lsp does not always emit diagnostics on freshly-spawned
+        # workspaces; the harness's cold-start tolerance covers this.
+        expect_diagnostics=False,
+    ),
 }
 
 

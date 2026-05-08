@@ -235,6 +235,11 @@ pub fn default_registry() -> Dict(String, LanguageConfig) {
     #("go", go()),
     #("typescript", typescript()),
     #("python", python()),
+    // M12 wave 1 — owner ecosystem languages plus easy-LSP additions.
+    #("elixir", elixir()),
+    #("gleam", gleam()),
+    #("lua", lua()),
+    #("bash", bash()),
   ])
 }
 
@@ -395,6 +400,118 @@ fn typescript_section_settings() -> Json {
       json.object([#("enabled", json.bool(True))]),
     ),
   ])
+}
+
+fn elixir() -> LanguageConfig {
+  LanguageConfig(
+    id: "elixir",
+    file_extensions: [".ex", ".exs"],
+    root_markers: ["mix.exs"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // elixir-ls. Install via release archive
+        // (https://github.com/elixir-lsp/elixir-ls/releases) and put
+        // `language_server.sh` (Linux/macOS) or `language_server.bat`
+        // (Windows) on PATH symlinked as `elixir-ls`. Mix-archive
+        // installs work too; users override `command` if their entry
+        // point differs.
+        id: "elixir-ls",
+        command: "elixir-ls",
+        args: [],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        // elixir-ls progress tokens are non-uniform across versions
+        // (`mix-deps`, `compile-elixir`, project setup variants). Skip
+        // the readiness drain — the M9 retry-on-content-modified path
+        // and the post-didOpen drain (when a token IS present) catch
+        // the cases that matter.
+        readiness_token: None,
+      ),
+    ],
+  )
+}
+
+fn gleam() -> LanguageConfig {
+  LanguageConfig(
+    id: "gleam",
+    file_extensions: [".gleam"],
+    root_markers: ["gleam.toml"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // The gleam compiler ships an LSP. `gleam lsp` boots it on
+        // stdio. Requires `gleam` on PATH.
+        id: "gleam-lsp",
+        command: "gleam",
+        args: ["lsp"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+      ),
+    ],
+  )
+}
+
+fn lua() -> LanguageConfig {
+  LanguageConfig(
+    id: "lua",
+    file_extensions: [".lua"],
+    // sumneko's `.luarc.json` family + selene/stylua TOMLs cover most
+    // configured projects; `.git` is the fallback for bare scripts.
+    root_markers: [
+      ".luarc.json", ".luarc.jsonc", "selene.toml", ".stylua.toml", ".git",
+    ],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // sumneko/luals — install via release tarball or
+        // `brew install lua-language-server` / asdf. Boots on stdio
+        // by default.
+        id: "lua-language-server",
+        command: "lua-language-server",
+        args: [],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+      ),
+    ],
+  )
+}
+
+fn bash() -> LanguageConfig {
+  LanguageConfig(
+    id: "bash",
+    // bash-language-server happily handles plain `.sh` and bash-only
+    // `.bash` scripts. POSIX `sh` overlap is acceptable —
+    // bash-language-server reports compatibility mode itself.
+    file_extensions: [".sh", ".bash"],
+    // Bare shell scripts often live in a wider project; `.git` keeps
+    // us pointing at the repo root. Power users can override via
+    // pharos.toml when their layout differs.
+    root_markers: [".git"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // npm package: `npm install -g bash-language-server`. The
+        // `start` subcommand boots stdio mode.
+        id: "bash-language-server",
+        command: "bash-language-server",
+        args: ["start"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+      ),
+    ],
+  )
 }
 
 fn python() -> LanguageConfig {

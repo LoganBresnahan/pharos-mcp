@@ -178,6 +178,10 @@ a binary is missing.
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
 | TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server typescript` |
 | Python | `pyright-langserver` (types/hover/goto) **+** `ruff` (formatting / lint / fixes) | `npm install -g pyright` and `pip install ruff` (or `uv tool install ruff`) |
+| Elixir | `elixir-ls` | Download a release from [elixir-lsp/elixir-ls](https://github.com/elixir-lsp/elixir-ls/releases) and put `language_server.sh` (or `language_server.bat`) on PATH symlinked as `elixir-ls`. Mix-archive installs work too. |
+| Gleam | `gleam` (built-in `lsp` subcommand) | Install Gleam itself — `brew install gleam`, `asdf install gleam latest`, or follow [gleam.run/getting-started](https://gleam.run/getting-started/installing/). |
+| Lua | `lua-language-server` (sumneko/luals) | `brew install lua-language-server` or asdf. Tarball releases at [LuaLS/lua-language-server](https://github.com/LuaLS/lua-language-server/releases). |
+| Bash | `bash-language-server` | `npm install -g bash-language-server` |
 
 Python uses two servers via ADR-019 method routing: pyright owns
 hover, goto, types, references; ruff owns formatting, lint

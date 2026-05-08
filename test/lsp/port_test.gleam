@@ -45,11 +45,13 @@ pub fn receive_data_times_out_when_subprocess_is_silent_test() {
 }
 
 pub fn spawning_a_nonexistent_binary_returns_error_test() {
-  // Burrito-supported platforms all reject this path; the FFI catches
-  // the error from open_port and returns a SpawnFailed instead of
-  // panicking.
+  // C1 dogfood (Phase C of M11 polish) added a filesystem
+  // existence + executable-bit check in the FFI's absolute-path branch
+  // so a missing override path surfaces the typed `BinaryNotFound`
+  // user-facing message instead of the generic `SpawnFailed("enoent")`
+  // wrapper. Test asserts on the new behavior.
   case port.spawn("/definitely/not/a/real/binary", [], "/tmp") {
-    Error(port.SpawnFailed(_)) -> Nil
+    Error(port.BinaryNotFound(_)) -> Nil
     other -> {
       should.fail()
       let _ = other
