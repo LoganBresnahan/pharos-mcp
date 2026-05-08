@@ -700,6 +700,24 @@ The two distribution-blocking bugs that surfaced during M11 stdio dogfood are al
 - **`npm/vendor/` is gitignored** — only the package scaffolding (`package.json`, `bin/pharos.js`, `scripts/postinstall.js`, `README.md`) is committed. CI populates `vendor/` at publish time.
 - **Sub-package split** vs the current single-pkg scaffold: the postinstall warmup runs from the meta package after npm resolves the right sub-package, so the meta package's `bin/pharos.js` does the platform pick-up but the binaries live in the matching sub-package's `vendor/`. Adjust `bin/pharos.js`'s `binary_path()` to look up the resolved sub-package path via `require.resolve`.
 
+#### HTTP transport test parity
+
+Every dogfood test pharos has today drives stdio (`bin/_pharos_drive.py` spawns pharos-dev with default `PHAROS_TRANSPORT=stdio`). The HTTP code path (`pharos/mcp/http.gleam`, `mist`, `Mcp-Session-Id` routing for server-initiated requests) has shipped since M5 + M8 Stage 0 but is **not exercised by any automated test or live dogfood**. Could ship broken; we would not know.
+
+M13 must close this gap by mirroring every stdio test surface against HTTP. Concrete deliverables:
+
+- **`bin/_pharos_drive_http.py`** — analogue of `_pharos_drive.py`. Boots pharos with `PHAROS_TRANSPORT=http`, reads the bound port from `PHAROS_HTTP_PORT_FILE` (or autodiscovers via stderr log line), drives requests via curl/python-requests against `http://127.0.0.1:<port>/mcp`, includes `Mcp-Session-Id` header from the `initialize` response on subsequent calls.
+- **`bin/test-suite-http.py`** — same SPECS, same Tier-1 tool set, same 52 cells across 13 langs. Runs against HTTP transport instead of stdio. Aim for 52/52 PASS parity.
+- **HTTP-only test surfaces** that have no stdio analogue — promote these from the "Testing that needs to be done" section:
+  - Session-id issuance + validation on every subsequent request.
+  - Server-initiated request routing back to the originating client (`workspace/applyEdit` on a session-tagged HTTP connection).
+  - Idle session eviction (configured via `session_idle_timeout_ms`).
+  - SSE heartbeat re-arm under sustained streaming (M8 Stage 2 second pass tests this manually; promote to scripted).
+- **`bin/test-suite-both.py`** — runs against `PHAROS_TRANSPORT=both`. Drives stdio AND HTTP at the same time with overlapping tool calls. Confirms the in-flight tracker (M9 ADR-016) keys per-session and that cancellation on one transport does not disturb the other.
+- **All `bin/test-*.py` override-verification scripts** (test-missing-binary, test-config-override, test-subserver-override, test-init-options-override, test-workspace-config-override) get HTTP twins. Pure mechanical — same TOML overrides, just different transport.
+
+Acceptance criterion before any release tag: `python3 bin/test-suite.py && python3 bin/test-suite-http.py && python3 bin/test-suite-both.py` returns 0 across all 13 languages.
+
 #### Open M13 question — burrito vs tarball for the npm channel
 
 M11 dogfood (Run 4) surfaced repeated friction with Burrito's self-extracting model: 50s cold-extract races against MCP host timeouts (fixed via npm postinstall warmup), opaque xz payload that's hard to inspect when debugging, and an extract-cache layer that fights the dev iteration loop. Burrito's only real win over a plain tarball is the single-file UX for direct GitHub Release downloads.
