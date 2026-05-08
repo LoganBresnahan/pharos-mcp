@@ -906,19 +906,69 @@ fn ensure_doc_opened(
 /// pair short-circuit on the ETS-backed marker. wait_for_ready Error
 /// returns leave the entry absent so the next call retries (matches
 /// the transport-error retry semantics in `with_session_and_retry`).
+/// Poll interval for non-claiming workers waiting on the drainer to
+/// finish. ETS lookups are cheap; 100ms keeps wakeup latency low
+/// without burning CPU.
+const drain_poll_interval_ms: Int = 100
+
+/// Maximum time a non-claiming worker waits for the drainer to mark
+/// done before proceeding anyway. If drainer fails or stalls, the
+/// content-modified retry path absorbs the residual race.
+const drain_wait_budget_ms: Int = 45_000
+
 fn drain_post_didopen_if_needed(
   lsp: Proc,
   server: languages.ServerConfig,
   workspace: String,
 ) -> Nil {
-  case post_didopen_drained.is_marked(server.id, workspace) {
+  case post_didopen_drained.is_done(server.id, workspace) {
     True -> Nil
     False ->
-      case
-        proc.wait_for_ready(lsp, server.readiness_token, readiness_timeout_ms)
-      {
-        Ok(_) -> post_didopen_drained.mark(server.id, workspace)
-        Error(_) -> Nil
+      case post_didopen_drained.try_claim(server.id, workspace) {
+        True -> drain_and_mark(lsp, server, workspace)
+        // Lost the race — another worker is already draining. Block
+        // until they mark done so our subsequent proc.request does NOT
+        // queue behind the drainer's WaitForReady in the proc actor's
+        // mailbox (which would expire proc.request's small actor.call
+        // timeout — `5s + 5s buffer` for hover/document_symbols — and
+        // crash the worker silently). Polling stays out of the proc
+        // actor; the drainer alone serializes through it.
+        False -> wait_for_drain_done(server, workspace, drain_wait_budget_ms)
+      }
+  }
+}
+
+fn drain_and_mark(
+  lsp: Proc,
+  server: languages.ServerConfig,
+  workspace: String,
+) -> Nil {
+  case
+    proc.wait_for_ready(lsp, server.readiness_token, readiness_timeout_ms)
+  {
+    Ok(_) -> post_didopen_drained.mark_done(server.id, workspace)
+    // Drain failed (transport error). Leave claim in place so future
+    // workers don't redrive — the proc itself is broken and the M9
+    // retry-on-transport-error wrapper at the tool layer spawns a
+    // fresh proc.
+    Error(_) -> Nil
+  }
+}
+
+fn wait_for_drain_done(
+  server: languages.ServerConfig,
+  workspace: String,
+  remaining_ms: Int,
+) -> Nil {
+  case remaining_ms <= 0 {
+    True -> Nil
+    False ->
+      case post_didopen_drained.is_done(server.id, workspace) {
+        True -> Nil
+        False -> {
+          process.sleep(drain_poll_interval_ms)
+          wait_for_drain_done(server, workspace, remaining_ms - drain_poll_interval_ms)
+        }
       }
   }
 }

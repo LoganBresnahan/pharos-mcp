@@ -20,12 +20,29 @@
 @external(erlang, "pharos_post_didopen_drained_ffi", "init")
 pub fn init() -> Nil
 
-/// Record that `(server_id, workspace)` has completed its
-/// post-didOpen drain. Called only after `wait_for_ready/3` returns
-/// Ok — Error paths leave the entry absent so the next call retries.
-@external(erlang, "pharos_post_didopen_drained_ffi", "mark")
-pub fn mark(server_id: String, workspace: String) -> Nil
+/// Atomic test-and-set: returns True to the FIRST worker per
+/// `(server_id, workspace)` (it should now run `proc.wait_for_ready`
+/// and call `mark_done/2` afterward); returns False to every
+/// subsequent worker (they skip the drain — relying on the existing
+/// retry-on-content-modified path to absorb any cold-start race).
+///
+/// First-claim-wins exists because `proc.wait_for_ready` is an
+/// `actor.call` with a 35s timeout. Two concurrent workers both
+/// calling it queue behind each other in the proc actor's mailbox;
+/// the second's caller-side deadline expires while waiting for the
+/// first's 30s drain to complete, the worker crashes silently
+/// (spawn_unlinked), and the inflight counter leaks.
+@external(erlang, "pharos_post_didopen_drained_ffi", "try_claim")
+pub fn try_claim(server_id: String, workspace: String) -> Bool
 
-/// True when `(server_id, workspace)` has already been drained.
-@external(erlang, "pharos_post_didopen_drained_ffi", "is_marked")
-pub fn is_marked(server_id: String, workspace: String) -> Bool
+/// Called by the claiming worker after `proc.wait_for_ready` returned
+/// Ok. Future workers see `is_done/2 == true` and skip both the claim
+/// and the drain.
+@external(erlang, "pharos_post_didopen_drained_ffi", "mark_done")
+pub fn mark_done(server_id: String, workspace: String) -> Nil
+
+/// True when `(server_id, workspace)` has already been drained
+/// successfully. Workers consult this BEFORE attempting `try_claim`
+/// to avoid even the ETS `insert_new` cost on the warm path.
+@external(erlang, "pharos_post_didopen_drained_ffi", "is_done")
+pub fn is_done(server_id: String, workspace: String) -> Bool

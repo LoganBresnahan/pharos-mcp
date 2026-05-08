@@ -12,7 +12,9 @@ import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
 
-const default_timeout_ms: Int = 5000
+// Same headroom as hover/find_references — 5s is too tight when the
+// proc actor is mid-drain on cold start (M11 polish B1).
+const default_timeout_ms: Int = 30_000
 
 pub type DocumentSymbolsError {
   SessionFailed(reason: String)

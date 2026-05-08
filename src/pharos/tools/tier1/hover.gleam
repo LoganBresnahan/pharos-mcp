@@ -14,7 +14,12 @@ import pharos/lsp/pool.{type Pool}
 import pharos/tools/tier1/session
 import pharos/tools/tier1/tool_helpers
 
-const default_timeout_ms: Int = 5000
+// Cold rust-analyzer + concurrent worker queueing through the proc
+// actor (post-didOpen drain serialization, M11 polish B1) makes the
+// previous 5s default too tight when multiple tools fan out at once.
+// 30s matches `find_references`. `request_with_content_modified_retry`
+// still catches the rare mid-call indexing reset.
+const default_timeout_ms: Int = 30_000
 
 pub type HoverError {
   SessionFailed(reason: String)
