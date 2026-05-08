@@ -225,7 +225,15 @@ pub fn get(
   spec: SpawnSpec,
 ) -> Result(Proc, GetError) {
   let Pool(subject) = pool
-  actor.call(subject, default_call_timeout_ms, fn(reply) {
+  // Caller-side timeout MUST exceed the server's initialize budget +
+  // buffer for any post-handshake work pool does (workspace_config
+  // push, ETS bridge writes). 30s headroom on top of initialize.
+  // Without this the pool actor processes the spawn correctly but the
+  // caller's actor.call expires first, the worker crashes silently
+  // (spawn_unlinked), and drive() never sees a response. Same bug
+  // class as the post-didOpen drain race fixed in B1.
+  let call_timeout = spec.initialize_timeout_ms + 30_000
+  actor.call(subject, call_timeout, fn(reply) {
     Get(language, workspace, spec, reply)
   })
 }

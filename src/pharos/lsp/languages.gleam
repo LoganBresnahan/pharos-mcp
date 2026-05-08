@@ -270,6 +270,17 @@ pub fn default_registry() -> Dict(String, LanguageConfig) {
     // BEAM-native — pharos itself runs on the BEAM, so erlang
     // support is in our wheelhouse.
     #("erlang", erlang()),
+    // M12 wave 3 — JVM polyglot + LISP + functional + universals.
+    #("scala", scala()),
+    #("clojure", clojure()),
+    #("haskell", haskell()),
+    #("perl", perl()),
+    #("html", html()),
+    #("css", css()),
+    #("json", json_lang()),
+    #("yaml", yaml()),
+    #("markdown", markdown()),
+    #("terraform", terraform()),
   ])
 }
 
@@ -542,6 +553,272 @@ fn cpp() -> LanguageConfig {
         id: "clangd",
         command: "clangd",
         args: ["--background-index"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn scala() -> LanguageConfig {
+  LanguageConfig(
+    id: "scala",
+    file_extensions: [".scala", ".sbt", ".sc", ".mill"],
+    root_markers: [
+      "build.sbt", "build.sc", "build.mill", "project.scala", ".scala-build",
+      ".bsp", ".git",
+    ],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // metals — Scala Meta. Install via coursier:
+        // `cs install metals scala-cli`. First-run on a fresh project
+        // bootstraps Bloop (downloads via coursier) before LSP
+        // initialize replies — 180s ceiling covers that. Subsequent
+        // runs are fast (<10s) because the bootstrap is cached.
+        id: "metals",
+        command: "metals",
+        args: [],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: Some(180_000),
+      ),
+    ],
+  )
+}
+
+fn clojure() -> LanguageConfig {
+  LanguageConfig(
+    id: "clojure",
+    file_extensions: [".clj", ".cljs", ".cljc", ".edn"],
+    root_markers: [
+      "deps.edn", "project.clj", "shadow-cljs.edn", "build.boot",
+      "bb.edn", ".git",
+    ],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // clojure-lsp native binary (no JVM cold-start). Download from
+        // https://github.com/clojure-lsp/clojure-lsp/releases.
+        id: "clojure-lsp",
+        command: "clojure-lsp",
+        args: [],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn haskell() -> LanguageConfig {
+  LanguageConfig(
+    id: "haskell",
+    file_extensions: [".hs", ".lhs"],
+    root_markers: [
+      "stack.yaml", "cabal.project", "package.yaml", "*.cabal", "hie.yaml",
+      ".git",
+    ],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // HLS via ghcup. The `-wrapper` script picks the right
+        // haskell-language-server-X.Y.Z to match the project's GHC
+        // version.
+        id: "hls",
+        command: "haskell-language-server-wrapper",
+        args: ["--lsp"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn perl() -> LanguageConfig {
+  LanguageConfig(
+    id: "perl",
+    file_extensions: [".pl", ".pm", ".t", ".pod"],
+    root_markers: [
+      "Makefile.PL", "Build.PL", "cpanfile", "dist.ini", ".git",
+    ],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // PLS (FractalBoy/perl-language-server). Install via
+        // `cpanm PLS`; binary is `pls`. Stdio mode is default.
+        id: "pls",
+        command: "pls",
+        args: [],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn html() -> LanguageConfig {
+  LanguageConfig(
+    id: "html",
+    file_extensions: [".html", ".htm"],
+    root_markers: ["package.json", ".git"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // vscode-html-language-server, shipped via the
+        // `vscode-langservers-extracted` npm package alongside CSS
+        // and JSON LSPs.
+        id: "vscode-html",
+        command: "vscode-html-language-server",
+        args: ["--stdio"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn css() -> LanguageConfig {
+  LanguageConfig(
+    id: "css",
+    file_extensions: [".css", ".scss", ".sass", ".less"],
+    root_markers: ["package.json", ".git"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        id: "vscode-css",
+        command: "vscode-css-language-server",
+        args: ["--stdio"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+/// `json` is a Gleam stdlib module name, so the local helper avoids
+/// shadowing.
+fn json_lang() -> LanguageConfig {
+  LanguageConfig(
+    id: "json",
+    file_extensions: [".json", ".jsonc", ".json5"],
+    root_markers: ["package.json", ".git"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        id: "vscode-json",
+        command: "vscode-json-language-server",
+        args: ["--stdio"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn yaml() -> LanguageConfig {
+  LanguageConfig(
+    id: "yaml",
+    file_extensions: [".yaml", ".yml"],
+    root_markers: [".git"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // yaml-language-server (RedHat). Separate npm package from
+        // vscode-langservers-extracted.
+        id: "yaml-language-server",
+        command: "yaml-language-server",
+        args: ["--stdio"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn markdown() -> LanguageConfig {
+  LanguageConfig(
+    id: "markdown",
+    file_extensions: [".md", ".markdown"],
+    root_markers: [".git"],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // marksman — Rust binary, single download. Excellent for
+        // wiki-style docs with cross-references.
+        id: "marksman",
+        command: "marksman",
+        args: ["server"],
+        initialization_options: json.object([]),
+        workspace_configuration: None,
+        methods: All,
+        diagnostics_mode: Push,
+        readiness_token: None,
+        readiness_timeout_ms: None,
+        initialize_timeout_ms: None,
+      ),
+    ],
+  )
+}
+
+fn terraform() -> LanguageConfig {
+  LanguageConfig(
+    id: "terraform",
+    file_extensions: [".tf", ".tfvars", ".hcl"],
+    root_markers: [
+      ".terraform.lock.hcl", "main.tf", "versions.tf", ".terraform", ".git",
+    ],
+    root_promotion: NoPromotion,
+    servers: [
+      ServerConfig(
+        // HashiCorp's terraform-ls. Distributed via
+        // releases.hashicorp.com (NOT GitHub Releases).
+        id: "terraform-ls",
+        command: "terraform-ls",
+        args: ["serve"],
         initialization_options: json.object([]),
         workspace_configuration: None,
         methods: All,
