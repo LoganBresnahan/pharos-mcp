@@ -182,6 +182,45 @@ Run 1: 2026-05-06 (initial dogfood — defects + limitations identified).
 Run 2: 2026-05-06 (post-M9.5 regression — first round of fixes shipped).
 Run 3: 2026-05-06 (post-M10 Group A+B regression — wait_for_ready + emit-side prefilter + cold-start hint).
 Run 4: 2026-05-07 (post-M11 — apply_workspace_edit + inlay_hints + semantic_tokens + type_hierarchy + diagnostics-cache rekey + trace-ring fix + stdio held-stdin fix + npm postinstall warmup).
+Run 5: 2026-05-08 (post-M11 regression on burrito after D-M11-3 chained-fix landed — 0 reconnects, all 14 phases clean).
+
+### Run 5 — burrito post-fix regression summary
+
+Pharos rebuilt at c001c4d, fresh burrito extract via npm postinstall.
+Single MCP connection — no reconnects needed across the whole run.
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 0 | PASS | echo + apps + ETS tables (cache/inflight/request_workers/proc_subjects/log_ring) all present at expected sizes. |
+| 1 | PASS | hover/refs/rename across rust/go/ts/python; go + ts diagnostics returned the expected type-errors. Python diagnostics deferred to P13 (multi-server merge). |
+| 2 | PASS | call_hierarchy_prepare → incoming → outgoing all returned the expected items via the schema-fixed object decoder. |
+| 3 | PASS | lsp_request_raw textDocument/hover round-trips identical to typed hover. |
+| 4 | PASS | runtime_memory healthy (~53MB total, 15MB processes). |
+| 5 | PASS | runtime_kill_lsp rust + immediate hover re-spawned cleanly. |
+| 6 | PASS | log_clear / log_level cycles. |
+| 7 | PASS (smoke) | trace_calls correctly gated off; trace_lsp empty during quiet window (synchronous toggle/sleep/snapshot — by design). |
+| 8 | PASS | dry-run reports byte delta without writing; real apply persists; overlapping ranges abort with the offending pair surfaced verbatim. |
+| 9 | PASS (rust) | 4 inlay hints (`: &str`, `: Point`, `x:`, `y:`) for the rust scratch range. |
+| 10 | PASS (rust) | full document semantic tokens — data array length divisible by 5, resultId returned. |
+| 11 | PASS (server-side -32601, plumbing OK) | type_hierarchy_prepare against rust-analyzer returns -32601 — matches the updated tool description (rust-analyzer + pyright + gopls + tsserver all currently unimplemented at the LSP layer). |
+| 12 | PASS | 3 LSP-method round-trips fired in one MCP message produced 6 trace entries (3 out + 3 in pairs). No `dropped=N` warn. M11 direct-ring-write fix solid. |
+| 13 | PASS | get_diagnostics on python returns the merged publishDiagnostics envelope with the pyright type-error item. Multi-server merge (pyright + ruff) post-c001c4d works under the burrito runtime. |
+| 14 | PASS | Entire Run 5 ran through burrito with zero `Actor discarding unexpected message` warns, zero stdio stalls. M11 stdio fix continues to hold. |
+
+### Defect status (post-M11, post-Run-5)
+
+All M11-era defects closed:
+
+- **D-M11-1** CLOSED (d570f0e): MCP host stringification of object args.
+- **D-M11-2** CLOSED (814b1f5): type_hierarchy tool description accuracy.
+- **D-M11-3** CLOSED (814b1f5 + c001c4d): three-bug chain in multi-server diagnostics merge — didOpen ordering, Pull-mode cache shadowing, codepoint-vs-byte indexing in strip_brackets.
+
+No new defects surfaced during Run 5.
+
+### Known limitations (still acceptable)
+
+- Cold-start of multi-server python (pyright + ruff) costs ~30s through `wait_for_ready` because pyright doesn't emit the configured readiness token. Workaround: warm with hover before get_diagnostics, or raise `timeout_ms`. Not blocking.
+- `runtime_trace_lsp` returns empty when no LSP traffic occurs during its synchronous sleep window. By design — issue traffic in parallel via the burst pattern from P12 if you need a live capture.
 
 ### Run 4 — M11 post-fix regression summary
 
