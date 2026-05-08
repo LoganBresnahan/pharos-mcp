@@ -30,6 +30,10 @@ erl_crash.dump
 .DS_Store
 Thumbs.db
 
+# Python (bin/test-*.py helpers)
+__pycache__/
+*.pyc
+
 # npm package's bundled binaries — populated at release time by
 # copying from /burrito_out/. The scaffolding under /npm/
 # (package.json, bin/, scripts/, README.md) IS committed.
