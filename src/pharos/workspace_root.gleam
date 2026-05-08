@@ -111,8 +111,14 @@ fn ascend(
 }
 
 fn has_any_marker(dir: String, markers: List(String)) -> Bool {
+  // Markers can be regular files (`Cargo.toml`, `mix.exs`, etc.) OR
+  // directories (`.git` — universal project root marker; in worktrees
+  // it's a file but in normal repos it's a directory). Accept either
+  // so the bash language entry's `.git` fallback works in regular
+  // repos too.
   list.any(markers, fn(marker) {
-    is_regular_file(join_path(dir, marker))
+    let path = join_path(dir, marker)
+    is_regular_file(path) || is_directory(path)
   })
 }
 
