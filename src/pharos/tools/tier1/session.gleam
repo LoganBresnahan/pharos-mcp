@@ -453,21 +453,26 @@ pub fn prepare_all_covering_method(
   let servers = languages.servers_covering_method(config, method)
   let prepared =
     list.filter_map(servers, fn(server) {
-      // M11 fix: didOpen targets THIS server, not the language's
-      // primary. Without per-server didOpen, secondary servers
-      // (ruff in python's pyright+ruff pair) never receive document
-      // state and `textDocument/diagnostic` against them surfaces
-      // as a transport error in the merge path.
-      let _ =
-        ensure_doc_opened_for_server_id(
-          pool,
-          config,
-          workspace,
-          file_uri,
-          server.id,
-        )
+      // Spawn the LSP first — pool.ensure_open requires the proc to
+      // already be cached (`NoCachedClient` otherwise) so didOpen
+      // must come AFTER get_lsp_for_server, not before.
       case get_lsp_for_server(pool, config, workspace, server) {
-        Ok(proc) -> Ok(#(server, proc))
+        Ok(proc) -> {
+          // M11 fix: didOpen targets THIS server, not the language's
+          // primary. Without per-server didOpen, secondary servers
+          // (ruff in python's pyright+ruff pair) never receive
+          // document state and `textDocument/diagnostic` against
+          // them surfaces as a transport error in the merge path.
+          let _ =
+            ensure_doc_opened_for_server_id(
+              pool,
+              config,
+              workspace,
+              file_uri,
+              server.id,
+            )
+          Ok(#(server, proc))
+        }
         Error(err) -> {
           log.warn_at(
             "pharos/tools/tier1/session",
@@ -500,16 +505,18 @@ fn prepare_all_with_selector(
   let servers = select_servers(config, method)
   let prepared =
     list.filter_map(servers, fn(server) {
-      let _ =
-        ensure_doc_opened_for_server_id(
-          pool,
-          config,
-          workspace,
-          file_uri,
-          server.id,
-        )
       case get_lsp_for_server(pool, config, workspace, server) {
-        Ok(proc) -> Ok(#(server.id, proc))
+        Ok(proc) -> {
+          let _ =
+            ensure_doc_opened_for_server_id(
+              pool,
+              config,
+              workspace,
+              file_uri,
+              server.id,
+            )
+          Ok(#(server.id, proc))
+        }
         Error(err) -> {
           log.warn_at(
             "pharos/tools/tier1/session",

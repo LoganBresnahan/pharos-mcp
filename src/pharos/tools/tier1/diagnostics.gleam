@@ -181,9 +181,14 @@ fn attempt_merge(
       let server_results =
         list.map(prepared, fn(entry) {
           let #(server, lsp) = entry
-          let items = case fetch_items_cached(file_uri, server.id) {
-            option.Some(cached) -> cached
-            option.None -> fetch_items_one(server, lsp, file_uri, timeout_ms)
+          let items = case server.diagnostics_mode {
+            Push ->
+              case fetch_items_cached(file_uri, server.id) {
+                option.Some(cached) -> cached
+                option.None ->
+                  fetch_items_one(server, lsp, file_uri, timeout_ms)
+              }
+            Pull -> fetch_items_one(server, lsp, file_uri, timeout_ms)
           }
           #(server.id, items)
         })
@@ -343,13 +348,20 @@ fn merge_items_arrays(server_results: List(#(String, String))) -> String {
   }
 }
 
+/// Strip the outer `[`...`]` of a JSON array string and trim
+/// whitespace from the body. Operates on BYTES — `string:length/1`
+/// counts codepoints, but `binary:part/3` uses byte offsets, and
+/// JSON arrays containing multi-byte UTF-8 (e.g. pyright messages
+/// with `\xc2\xa0` NBSP pairs) have byte length > codepoint length.
+/// Mixing the two indexing schemes silently corrupts the suffix
+/// check and drops the array — surfaced in M11 dogfood Run 4 as
+/// pyright's items vanishing from the merged python diagnostic
+/// result. Bytes only here.
 fn strip_brackets(json_array: String) -> String {
   let trimmed = string_trim(json_array)
-  case string_starts_with(trimmed, "[") && string_ends_with(trimmed, "]") {
-    True -> {
-      let body = string_slice(trimmed, 1, string_length(trimmed) - 2)
-      string_trim(body)
-    }
+  let n = byte_size(trimmed)
+  case n >= 2 && byte_at(trimmed, 0) == 91 && byte_at(trimmed, n - 1) == 93 {
+    True -> string_trim(binary_part(trimmed, 1, n - 2))
     False -> ""
   }
 }
@@ -357,34 +369,14 @@ fn strip_brackets(json_array: String) -> String {
 @external(erlang, "string", "trim")
 fn string_trim(s: String) -> String
 
-fn string_starts_with(s: String, prefix: String) -> Bool {
-  case string_slice(s, 0, string_length(prefix)) == prefix {
-    True -> True
-    False -> False
-  }
-}
-
-fn string_ends_with(s: String, suffix: String) -> Bool {
-  let s_len = string_length(s)
-  let suf_len = string_length(suffix)
-  case s_len >= suf_len {
-    False -> False
-    True -> string_slice(s, s_len - suf_len, suf_len) == suffix
-  }
-}
-
 @external(erlang, "binary", "part")
 fn binary_part(bin: String, start: Int, len: Int) -> String
 
-fn string_slice(s: String, start: Int, len: Int) -> String {
-  case start >= 0 && len >= 0 && start + len <= string_length(s) {
-    True -> binary_part(s, start, len)
-    False -> ""
-  }
-}
+@external(erlang, "erlang", "byte_size")
+fn byte_size(s: String) -> Int
 
-@external(erlang, "string", "length")
-fn string_length(s: String) -> Int
+@external(erlang, "binary", "at")
+fn byte_at(s: String, idx: Int) -> Int
 
 fn string_join(parts: List(String), sep: String) -> String {
   case parts {

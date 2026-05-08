@@ -46,6 +46,13 @@ cd "$ORIG_CWD"
 # `pharos:main/0` is our stdin loop and returns when EOF closes stdin.
 # halt(0) exits the BEAM cleanly afterward.
 #
+# -noinput is load-bearing under MCP-host stdio: without it, Erlang's
+# `prim_tty` driver claims fd 0 and emits a `driver_select stealing
+# control of fd=0` error to fd 1 once pharos opens its own
+# `{fd, 0, 0}` port for synchronous per-line stdin (M11 fix; mirrors
+# rel/vm.args.eex for the burrito release). The stray error line
+# corrupts the MCP NDJSON stream and the host hangs up.
+#
 # Code paths use absolute paths anchored at PROJECT_ROOT so they
 # resolve correctly regardless of where erl was invoked from. Forwarded
 # argv (`-- "$@"`) lands in `init:get_plain_arguments/0` so meta flags
@@ -53,5 +60,6 @@ cd "$ORIG_CWD"
 exec erl \
   -pa $PROJECT_ROOT/_build/dev/lib/*/ebin \
   -noshell \
+  -noinput \
   -eval "pharos:main(), halt(0)." \
   -- "$@"
