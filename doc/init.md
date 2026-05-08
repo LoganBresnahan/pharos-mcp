@@ -637,10 +637,10 @@ The dogfood-driven cleanup that has to happen before strangers ever see pharos. 
 
 **Architectural polish (the M9.5 dogfood promised these would land before public ship):**
 
-- **`runtime_trace_lsp` parallel race fix.** Sync `SetTargetSync` (M9.5) closed most of the race; the residual is when trace_lsp + producer dispatch in parallel and the producer's first emit beats SetTargetSync into the writer's mailbox. Fix shape: pre-filter at emit side via persistent_term — `trace.gleam` reads filter cache before casting `Emit`. ~30 lines.
-- **`wait_for_ready` improvement.** Current implementation returns before rust-analyzer indexing kicks in (noted in `find_references.gleam:21`). Poll the `rustAnalyzer/Indexing` progress token until the `end` notification before serving the FIRST request to a freshly-spawned proc. Eliminates the cold-start `null` failure mode that the description hint above only papers over.
-- **In-flight cancel via per-request worker.** Deferred from M9 (`adr/016-cancel-propagation.md` covers the policy). Spawn a supervised per-request process so MCP `notifications/cancelled` triggers `process.send_exit` immediately instead of waiting on LSP cooperation.
-- **Multi-LSP method routing (ADR-019).** python = pyright + ruff for full coverage (formatting + lint + type-aware in one language). Same architecture covers TypeScript + eslint-language-server, future ruby + solargraph + standardrb-lsp, etc. ~2 days.
+- **`runtime_trace_lsp` parallel race fix.** **CLOSED** in commit `e2c9a0f` (M11 polish, B2): always-on dedicated `pharos_trace_ring` (cap 100) that producers write to unconditionally; `runtime_trace_lsp` reads the delta. No filter toggle, no race. Builds on M10's emit-side persistent_term filter (commit `03650cb`).
+- **`wait_for_ready` improvement.** **CLOSED** in commit `ddf3a9c` (M11 polish, B1): post-didOpen drain of the indexing burst, tracked per `(server.id, workspace)` in `pharos_post_didopen_drained` so the second drain runs once per workspace per server. Side fix: `prepare_for_method` had the same M11 ordering bug as the merge path (c001c4d) — get_lsp_for_server now runs before ensure_doc_opened_for_server_id.
+- **In-flight cancel via per-request worker.** **CLOSED** in commit `10078bf` (M10): async stdio dispatch + per-request worker (`pharos/stdio_worker` + `pharos/mcp/request_workers`); MCP `notifications/cancelled` triggers `process.send_exit` against the dispatcher pid. ADR-016's deferred follow-up done.
+- **Multi-LSP method routing (ADR-019).** **CLOSED** in commit `40aab59` (M10): python = pyright + ruff via per-method routing, ADR-019 stages 1-3 shipped.
 
 **Inherited M10 charter items:**
 
