@@ -700,6 +700,20 @@ The two distribution-blocking bugs that surfaced during M11 stdio dogfood are al
 - **`npm/vendor/` is gitignored** — only the package scaffolding (`package.json`, `bin/pharos.js`, `scripts/postinstall.js`, `README.md`) is committed. CI populates `vendor/` at publish time.
 - **Sub-package split** vs the current single-pkg scaffold: the postinstall warmup runs from the meta package after npm resolves the right sub-package, so the meta package's `bin/pharos.js` does the platform pick-up but the binaries live in the matching sub-package's `vendor/`. Adjust `bin/pharos.js`'s `binary_path()` to look up the resolved sub-package path via `require.resolve`.
 
+#### Open M13 question — burrito vs tarball for the npm channel
+
+M11 dogfood (Run 4) surfaced repeated friction with Burrito's self-extracting model: 50s cold-extract races against MCP host timeouts (fixed via npm postinstall warmup), opaque xz payload that's hard to inspect when debugging, and an extract-cache layer that fights the dev iteration loop. Burrito's only real win over a plain tarball is the single-file UX for direct GitHub Release downloads.
+
+Decide before M13 ships:
+
+- **Option A — keep Burrito for both channels.** Same binary on Releases and inside npm sub-packages. M11's npm postinstall warmup hides the cold-extract from MCP users. Continues the M11 architecture as-is. Cost: every npm install pays the warmup at install time; every binary upgrade re-extracts.
+- **Option B — tarball-per-target for npm, Burrito for Releases.** Two channels, two packagings. npm sub-pkgs ship `pharos_<target>.tar.xz` containing pre-built ERTS + beams; postinstall does `tar -xJf` into a stable path; Node shim `exec`s the raw `erl` invocation. GitHub Release still ships single Burrito binary for direct-download users. Cost: two release artifacts to build, two test paths.
+- **Option C — tarball for both.** Drop Burrito entirely. Direct download becomes a tarball the user extracts themselves. Cost: GitHub Release loses single-file UX; readme has to teach users to `tar -xJf` and add to PATH.
+
+Each option's effect on the M11 stdio fix layer is identical — that lives in pharos's own code (`-noinput`, `{fd,0,0}` port, etc.) and survives all three packagings.
+
+Decision criterion for the owner: how much do you weight the GitHub-Release direct-download UX vs the npm-install runtime cost? The owner will pick when M13 prep starts.
+
 ## Testing that needs to be done
 
 Test surfaces uncovered as work progressed. None blocking on the path the owner is on right now; promote to a milestone task when the corresponding code lands or when release prep starts. Each entry is a pointer to the gap, not a test plan — when picked up the implementer writes the actual harness/script.
