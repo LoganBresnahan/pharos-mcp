@@ -1,6 +1,6 @@
 # 018. LSP binary path resolution
 
-**Status:** Proposed
+**Status:** Accepted (M9.5, dogfooded across rust/go/ts/py in M11 Run 5)
 **Date:** 2026-05-06
 
 ## Context
