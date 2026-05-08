@@ -29,6 +29,7 @@ import pharos/log
 import pharos/log/entry
 import pharos/log/filter
 import pharos/lsp/diagnostics_cache
+import pharos/lsp/post_didopen_drained
 import pharos/lsp/dyn_sup
 import pharos/lsp/inflight
 import pharos/lsp/registry
@@ -94,6 +95,7 @@ fn do_boot() -> Result(Pid, String) {
   // AFTER config.load so persistent_term carries the user's
   // language overrides at merge time.
   diagnostics_cache.init()
+  post_didopen_drained.init()
   registry.init()
   inflight.init()
   request_workers.init()

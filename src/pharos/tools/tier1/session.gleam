@@ -26,6 +26,7 @@ import pharos/lsp/languages.{
 }
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/post_didopen_drained
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/registry
 import pharos/workspace_root
@@ -336,6 +337,7 @@ pub fn prepare(pool: Pool, file_uri: String) -> Result(Proc, SessionError) {
   let workspace = promote_root(raw_workspace, config)
   use lsp <- result.try(get_lsp(pool, config, workspace))
   let _ = ensure_doc_opened(pool, config, workspace, file_uri)
+  let _ = drain_post_didopen_if_needed_primary(lsp, config, workspace)
   Ok(lsp)
 }
 
@@ -409,10 +411,29 @@ pub fn prepare_for_method(
           <> config.id
           <> "])",
       ))
-    Ok(server) -> {
-      let _ = ensure_doc_opened(pool, config, workspace, file_uri)
-      get_lsp_for_server(pool, config, workspace, server)
-    }
+    Ok(server) ->
+      // Mirror the M11 merge-path order fix (c001c4d): pool.ensure_open
+      // returns NoCachedClient when the proc has not been spawned yet,
+      // and the result is silently dropped. So get_lsp_for_server runs
+      // FIRST, then ensure_doc_opened_for_server_id targets the
+      // method-specific server (which may not be the language's
+      // primary), then drain the post-didOpen indexing burst once per
+      // (server, workspace).
+      case get_lsp_for_server(pool, config, workspace, server) {
+        Ok(lsp) -> {
+          let _ =
+            ensure_doc_opened_for_server_id(
+              pool,
+              config,
+              workspace,
+              file_uri,
+              server.id,
+            )
+          let _ = drain_post_didopen_if_needed(lsp, server, workspace)
+          Ok(lsp)
+        }
+        Error(err) -> Error(err)
+      }
   }
 }
 
@@ -471,6 +492,7 @@ pub fn prepare_all_covering_method(
               file_uri,
               server.id,
             )
+          let _ = drain_post_didopen_if_needed(proc, server, workspace)
           Ok(#(server, proc))
         }
         Error(err) -> {
@@ -515,6 +537,7 @@ fn prepare_all_with_selector(
               file_uri,
               server.id,
             )
+          let _ = drain_post_didopen_if_needed(proc, server, workspace)
           Ok(#(server.id, proc))
         }
         Error(err) -> {
@@ -867,6 +890,52 @@ fn ensure_doc_opened(
     Error(_) -> config.id
   }
   ensure_doc_opened_for_server_id(pool, config, workspace, file_uri, server_id)
+}
+
+/// Drain the post-didOpen indexing burst for `(server.id, workspace)`
+/// once. rust-analyzer (and any LSP whose `readiness_token` matches
+/// indexing progress) only starts indexing AFTER didOpen — the
+/// post-handshake `wait_for_ready` in proc's initialiser sees no
+/// progress to wait on. Without this second drain the first request
+/// races indexing and surfaces as `null` or `-32801 content modified`.
+///
+/// Servers without a `readiness_token` (typescript-language-server,
+/// ruff) skip the drain — `proc.wait_for_ready` is a no-op for them.
+///
+/// Idempotent: subsequent calls for the same `(server.id, workspace)`
+/// pair short-circuit on the ETS-backed marker. wait_for_ready Error
+/// returns leave the entry absent so the next call retries (matches
+/// the transport-error retry semantics in `with_session_and_retry`).
+fn drain_post_didopen_if_needed(
+  lsp: Proc,
+  server: languages.ServerConfig,
+  workspace: String,
+) -> Nil {
+  case post_didopen_drained.is_marked(server.id, workspace) {
+    True -> Nil
+    False ->
+      case
+        proc.wait_for_ready(lsp, server.readiness_token, readiness_timeout_ms)
+      {
+        Ok(_) -> post_didopen_drained.mark(server.id, workspace)
+        Error(_) -> Nil
+      }
+  }
+}
+
+/// Like `drain_post_didopen_if_needed/3` but resolves the language's
+/// primary server first. Used by single-server prepare paths
+/// (`prepare/2`, `prepare_for_method/3`) where the caller has the
+/// LanguageConfig but not a specific ServerConfig.
+fn drain_post_didopen_if_needed_primary(
+  lsp: Proc,
+  config: LanguageConfig,
+  workspace: String,
+) -> Nil {
+  case languages.primary_server(config) {
+    Ok(server) -> drain_post_didopen_if_needed(lsp, server, workspace)
+    Error(_) -> Nil
+  }
 }
 
 /// Like `ensure_doc_opened/4` but targets one explicit `server_id`
