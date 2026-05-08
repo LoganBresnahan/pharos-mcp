@@ -40,9 +40,12 @@ verified against the binary, not just `pharos-dev`.
 Boot-time behavior the live MCP host can't reach. Run via:
 
 ```sh
-python3 bin/test-missing-binary.py   # ADR-018 BinaryNotFound surfacing
-python3 bin/test-config-override.py  # PHAROS_CONFIG_FILE [languages.<id>] override
-python3 bin/test-suite.py            # Tier 1 regression across rust/go/ts/py (C3)
+python3 bin/test-missing-binary.py            # ADR-018 BinaryNotFound surfacing
+python3 bin/test-config-override.py           # PHAROS_CONFIG_FILE [languages.<id>] override
+python3 bin/test-subserver-override.py        # [[languages.<id>.servers]] sub-server override
+python3 bin/test-init-options-override.py     # initialization_options_json whole-blob replace
+python3 bin/test-workspace-config-override.py # workspace_configuration_json whole-blob replace
+python3 bin/test-suite.py                     # Tier 1 regression across rust/go/ts/py (C3)
 ```
 
 Each script spawns `bin/pharos-dev`, sends NDJSON requests on stdin,

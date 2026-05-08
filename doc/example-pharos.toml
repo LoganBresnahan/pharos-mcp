@@ -140,3 +140,59 @@
 # file_extensions = [".hs"]
 # root_markers = ["cabal.project", "stack.yaml"]
 # diagnostics_mode = "push"
+#
+# 3) JSON-string overrides for the deep-nested fields.
+#
+# `initialization_options_json` and `workspace_configuration_json`
+# replace whole blobs (no deep-merge — predictable, simple). LSP
+# vendor docs publish init options as JSON, so paste from upstream
+# verbatim. Wrapped in TOML triple-quoted strings.
+#
+# To see the bundled default before overriding, run:
+#
+#     pharos --print-language-config rust
+#
+# (or call the `runtime_language_config` MCP tool from inside Claude
+# Code). The output is paste-ready: copy the full block, edit the
+# fields you want changed, save back into pharos.toml.
+#
+# Example: turn off rust-analyzer's `checkOnSave` (Cargo `cargo check`
+# on every save runs slow on big workspaces).
+#
+# [languages.rust]
+# initialization_options_json = '''
+# {
+#   "checkOnSave": false,
+#   "check": {"command": "check"},
+#   "procMacro": {"enable": true}
+# }
+# '''
+#
+# Same shape works per-sub-server when the language has multiple:
+#
+# [[languages.python.servers]]
+# id = "pyright"
+# initialization_options_json = '''
+# {"reportMissingImports": "warning"}
+# '''
+#
+# Workspace-configuration is the response pharos sends when an LSP
+# pulls `workspace/configuration` (typescript-language-server is the
+# primary user). Top level MUST be a JSON object whose keys are the
+# section names the server queries:
+#
+# [languages.typescript]
+# workspace_configuration_json = '''
+# {
+#   "typescript": {
+#     "preferences": {"importModuleSpecifier": "shortest"},
+#     "format": {"enable": false}
+#   },
+#   "javascript": {
+#     "preferences": {"importModuleSpecifier": "shortest"}
+#   }
+# }
+# '''
+#
+# Parse failures log a warning and fall back to the bundled default,
+# so a typo in the override does not crash boot.
