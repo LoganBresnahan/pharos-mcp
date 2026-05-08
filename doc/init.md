@@ -700,6 +700,22 @@ The two distribution-blocking bugs that surfaced during M11 stdio dogfood are al
 - **`npm/vendor/` is gitignored** — only the package scaffolding (`package.json`, `bin/pharos.js`, `scripts/postinstall.js`, `README.md`) is committed. CI populates `vendor/` at publish time.
 - **Sub-package split** vs the current single-pkg scaffold: the postinstall warmup runs from the meta package after npm resolves the right sub-package, so the meta package's `bin/pharos.js` does the platform pick-up but the binaries live in the matching sub-package's `vendor/`. Adjust `bin/pharos.js`'s `binary_path()` to look up the resolved sub-package path via `require.resolve`.
 
+#### README overhaul
+
+Current README has good bones (install table, language registry table) but missing pieces / sections to redo before public ship:
+
+- **No CLI-flag section.** `--version`, `--help`, `--print-default-config`, `--print-language-config <lang>`, `--doctor`, `--purge-cache` all exist; users see them only via `--help` output. Add a top-level "CLI" section.
+- **Per-server timeouts not surfaced.** The 90s default `initialize_timeout_ms` and 30s `readiness_timeout_ms` (M12 polish) plus their override knobs do not appear anywhere in user-visible docs except inline in example-pharos.toml. Promote to Configuration section.
+- **`runtime_language_config` MCP tool not mentioned.** Same gap — it's the LLM-callable companion to `--print-language-config` but the README never names it.
+- **JSON-string override examples** (initialization_options_json / workspace_configuration_json) live in example-pharos.toml only. README's Configuration section should at least link to them.
+- **Tool surface: 4 surface categories (read/write/debug/raw)** are documented; the FILTER syntax for `tools = [...]` in pharos.toml could use a worked example beyond category aliases.
+- **"Updating" section** outdated — refers to npm flow that won't exist until M13 publishes.
+- **Status banner** says "Milestone 10 (pre-distribution polish)" — out of date as of M11+M12.
+- **Quickstart** missing — the path from "I just heard about pharos" to "I see a hover response" should be a single block, not scattered through Install + Language servers + Configuration.
+- **Trouble­shooting** section missing — common failure modes (binary not on PATH, cold-start LSP timeout, jdtls JDK version, etc.) deserve a digest.
+
+Treat the overhaul as one M13 PR, not piecemeal edits. New section ordering proposal: Quickstart → Install → Language servers → CLI → Configuration → Tool surface → Troubleshooting → Known limitations → Why → Documentation → Development → License.
+
 #### HTTP transport test parity
 
 Every dogfood test pharos has today drives stdio (`bin/_pharos_drive.py` spawns pharos-dev with default `PHAROS_TRANSPORT=stdio`). The HTTP code path (`pharos/mcp/http.gleam`, `mist`, `Mcp-Session-Id` routing for server-initiated requests) has shipped since M5 + M8 Stage 0 but is **not exercised by any automated test or live dogfood**. Could ship broken; we would not know.
@@ -717,6 +733,40 @@ M13 must close this gap by mirroring every stdio test surface against HTTP. Conc
 - **All `bin/test-*.py` override-verification scripts** (test-missing-binary, test-config-override, test-subserver-override, test-init-options-override, test-workspace-config-override) get HTTP twins. Pure mechanical — same TOML overrides, just different transport.
 
 Acceptance criterion before any release tag: `python3 bin/test-suite.py && python3 bin/test-suite-http.py && python3 bin/test-suite-both.py` returns 0 across all 13 languages.
+
+#### Full test matrix — every tool × every language × both transports
+
+The current `bin/test-suite.py` exercises 4 of pharos's ~21 tools (hover, document_symbols, workspace_symbols, get_diagnostics). The other 17 are covered only by the manual `doc/dogfood.md` plan run through Claude Code. Pharos cannot tag a release until every tool surface is automatable. Treat this as the M13 release blocker after the HTTP test parity above.
+
+Tool inventory and current state:
+
+**Read tools (12) — 4 covered, 8 uncovered:**
+- ✓ hover, document_symbols, workspace_symbols, get_diagnostics
+- ✗ goto_definition, goto_type_definition, goto_implementation, find_references, signature_help, call_hierarchy_prepare/incoming/outgoing, type_hierarchy_prepare/supertypes/subtypes, inlay_hints, semantic_tokens
+
+**Write tools (4) — 0 covered:**
+- ✗ rename_preview, format_document, code_actions, apply_workspace_edit (apply_workspace_edit needs round-trip: edit → verify file content → revert)
+
+**Raw (1) — 0 covered:**
+- ✗ lsp_request_raw
+
+**Debug / runtime (15) — 0 covered:**
+- ✗ echo, runtime_processes, runtime_pid_info, runtime_supervision_tree, runtime_ets_tables, runtime_memory, runtime_applications, runtime_scheduler_util, runtime_log_tail, runtime_log_clear, runtime_log_level, runtime_trace_lsp, runtime_kill_lsp, runtime_trace_calls, runtime_language_config
+
+**Out-of-band (current; keep + extend):**
+- ✓ test-missing-binary, test-config-override, test-subserver-override, test-init-options-override, test-workspace-config-override
+
+**Test-harness deliverables for M13:**
+
+- `bin/test-tier1-full.py` — every read tool × every applicable language. ~30 LOC per tool stanza. Drives via stdio.
+- `bin/test-write.py` — rename_preview / format_document / code_actions / apply_workspace_edit per language. apply_workspace_edit needs round-trip semantics (mutate → verify → revert).
+- `bin/test-raw.py` — single language, raw `textDocument/hover` via lsp_request_raw, assert response shape mirrors the wrapped `hover` tool.
+- `bin/test-debug.py` — language-agnostic, single pharos boot, every runtime_* + echo. ~30 min work; no LSP needed.
+- `bin/test-edges.py` — cold-start tolerance (post-didOpen drain race, transport-error retry, mid-call cancel, content-modified retry). Needs deterministic LSP-side behavior, may use a stub LSP rather than real ones.
+
+Each of the above ALSO needs an HTTP twin per the section above. Final acceptance: every test (stdio + http + both) green on every applicable language.
+
+Net: ~21 tools × ~13 langs × 2 transports ≈ ~500 cell asserts, plus out-of-band + edges. Real work. Plan it as a dedicated M13 milestone (call it M13.5 if it slips).
 
 #### Open M13 question — burrito vs tarball for the npm channel
 
