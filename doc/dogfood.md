@@ -35,6 +35,20 @@ verified against the binary, not just `pharos-dev`.
 | TypeScript | `/home/oof/typescript_dev` | `src/index.ts` | `Point`, `newPoint`, `unused` |
 | Python   | `/home/oof/python_dev`     | `main.py`         | `Point`, `new_point`, `wrong_type` |
 
+## Out-of-band tests (driven via stdio, no MCP host)
+
+Boot-time behavior the live MCP host can't reach. Run via:
+
+```sh
+python3 bin/test-missing-binary.py   # ADR-018 BinaryNotFound surfacing
+python3 bin/test-config-override.py  # PHAROS_CONFIG_FILE [languages.<id>] override
+python3 bin/test-suite.py            # Tier 1 regression across rust/go/ts/py (C3)
+```
+
+Each script spawns `bin/pharos-dev`, sends NDJSON requests on stdin,
+parses responses, asserts shape. Exits non-zero on regression. Use as a
+quick CI-style smoke before live dogfood.
+
 ## Phase 0 — sanity
 
 | # | Tool | Args | Expected |

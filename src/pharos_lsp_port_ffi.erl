@@ -9,6 +9,7 @@
 %% them as the variants declared in `lsp/port.gleam`.
 
 -module(pharos_lsp_port_ffi).
+-include_lib("kernel/include/file.hrl").
 -export([spawn/3, send/2, receive_data/2, close/1, connect/2, decode_port_data/1]).
 
 %% Decode a raw mailbox payload that gleam_otp's selector handed us
@@ -58,20 +59,40 @@ spawn(Command, Args, Cwd) ->
     end.
 
 %% Resolve a command to an absolute filesystem path. Absolute
-%% commands (starting with `/`) are passed through. Bare names go
-%% through `os:find_executable/1` which consults `$PATH`. Returns
-%% `{ok, StringPath}` (Erlang string, not binary, since open_port's
-%% spawn_executable wants a string) or `{error, not_found}` when no
-%% PATH entry contains a matching executable.
+%% commands (starting with `/`) get a filesystem existence + executable
+%% check so a non-existent override path surfaces as the typed
+%% `BinaryNotFound` user-facing message instead of falling through to
+%% open_port and crashing with `enoent` (which the upstream describer
+%% formatted as "subprocess spawn failed: enoent" — a generic and
+%% un-actionable wrapper). Bare names go through
+%% `os:find_executable/1` which consults `$PATH` (already does the
+%% executability check). Returns `{ok, StringPath}` (Erlang string,
+%% not binary, since open_port's spawn_executable wants a string) or
+%% `{error, not_found}` when no executable is reachable.
 resolve_command(Command) when is_binary(Command) ->
     case Command of
         <<$/, _/binary>> ->
-            {ok, binary_to_list(Command)};
+            CmdStr = binary_to_list(Command),
+            case is_executable_file(CmdStr) of
+                true -> {ok, CmdStr};
+                false -> {error, not_found}
+            end;
         _ ->
             case os:find_executable(binary_to_list(Command)) of
                 false -> {error, not_found};
                 Path -> {ok, Path}
             end
+    end.
+
+%% True when Path is a regular file (or a symlink that resolves to one)
+%% and has at least one executable bit set. Mirrors the implicit
+%% contract `os:find_executable/1` enforces for bare names.
+is_executable_file(Path) ->
+    case file:read_file_info(Path, [{time, posix}]) of
+        {ok, #file_info{type = regular, mode = Mode}} ->
+            Mode band 8#111 =/= 0;
+        _ ->
+            false
     end.
 
 %% Write raw bytes to the subprocess's stdin. The framing layer
