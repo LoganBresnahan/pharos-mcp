@@ -55,11 +55,19 @@ cd "$ORIG_CWD"
 #
 # Code paths use absolute paths anchored at PROJECT_ROOT so they
 # resolve correctly regardless of where erl was invoked from. Forwarded
-# argv (`-- "$@"`) lands in `init:get_plain_arguments/0` so meta flags
-# like `--doctor` and `--purge-cache` work via this wrapper.
+# argv (`-extra "$@"`) lands in `init:get_plain_arguments/0` so meta
+# flags like `--doctor`, `--purge-cache`, and `--print-language-config`
+# work via this wrapper.
+#
+# `-extra` (not `--`) is required under `-noinput`. The `--` alias for
+# `-extra` does NOT propagate plain arguments when `-noinput` is in
+# effect — empirically confirmed; meta flags silently fell through to
+# the normal boot path otherwise. The M11 stdio fix added `-noinput`
+# for the burrito-release prim_tty issue and quietly broke meta-flag
+# forwarding here at the same time.
 exec erl \
   -pa $PROJECT_ROOT/_build/dev/lib/*/ebin \
   -noshell \
   -noinput \
   -eval "pharos:main(), halt(0)." \
-  -- "$@"
+  -extra "$@"

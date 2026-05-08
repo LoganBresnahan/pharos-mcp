@@ -19,10 +19,12 @@
 //// runtime-configuration CLI flags. See `doc/example-pharos.toml`
 //// and the README for the full surface.
 
+import gleam/dict
 import gleam/erlang/process.{type Pid}
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 import pharos/cli
 import pharos/config.{type Config}
 import pharos/log
@@ -34,6 +36,7 @@ import pharos/lsp/post_didopen_drained
 import pharos/lsp/dyn_sup
 import pharos/lsp/inflight
 import pharos/lsp/registry
+import pharos/lsp/registry_toml
 import pharos/mcp/request_workers
 import pharos/supervisor as root_supervisor
 
@@ -192,6 +195,10 @@ fn handle_meta_flags(args: List(String)) -> MetaOutcome {
       io.println(default_config_template)
       Handled
     }
+    Some(PrintLanguageConfig(language)) -> {
+      print_language_config(language)
+      Handled
+    }
     Some(Doctor) -> {
       let _exit = cli.doctor()
       Handled
@@ -207,22 +214,66 @@ type MetaFlag {
   VersionRequested
   HelpRequested
   PrintDefaultConfig
+  PrintLanguageConfig(String)
   Doctor
   PurgeCache
 }
 
 fn match_meta(args: List(String)) -> Option(MetaFlag) {
-  list.fold_until(args, None, fn(_acc, arg) {
-    case arg {
-      "--version" | "-V" -> list.Stop(Some(VersionRequested))
-      "--help" | "-h" -> list.Stop(Some(HelpRequested))
-      "--print-default-config" -> list.Stop(Some(PrintDefaultConfig))
-      "--doctor" -> list.Stop(Some(Doctor))
-      "--purge-cache" -> list.Stop(Some(PurgeCache))
-      _ -> list.Continue(None)
-    }
-  })
+  // Two-arg flags (`--print-language-config <id>`) handled before
+  // the single-arg fold so the fold doesn't see the language name in
+  // isolation and treat it as an unknown.
+  case match_print_language_config(args) {
+    Some(flag) -> Some(flag)
+    None ->
+      list.fold_until(args, None, fn(_acc, arg) {
+        case arg {
+          "--version" | "-V" -> list.Stop(Some(VersionRequested))
+          "--help" | "-h" -> list.Stop(Some(HelpRequested))
+          "--print-default-config" -> list.Stop(Some(PrintDefaultConfig))
+          "--doctor" -> list.Stop(Some(Doctor))
+          "--purge-cache" -> list.Stop(Some(PurgeCache))
+          _ -> list.Continue(None)
+        }
+      })
+  }
 }
+
+fn match_print_language_config(args: List(String)) -> Option(MetaFlag) {
+  case args {
+    ["--print-language-config", language, ..] ->
+      Some(PrintLanguageConfig(language))
+    [first, ..rest] ->
+      case string.starts_with(first, "--print-language-config=") {
+        True ->
+          Some(PrintLanguageConfig(string.drop_start(first, 24)))
+        False -> match_print_language_config(rest)
+      }
+    [] -> None
+  }
+}
+
+fn print_language_config(language: String) -> Nil {
+  let registry = registry.cached()
+  case dict.get(registry, language) {
+    Error(_) ->
+      // Route through the unbuffered stdio FFI: io.println goes via
+      // Erlang's `:user` group leader which the M11 `-noinput` flag
+      // makes flaky under pharos-dev / burrito release stdio. The
+      // FFI helper bypasses `:user` and writes directly to fd 1.
+      stdio_write_line(
+        "language `"
+        <> language
+        <> "` not found in registry. Known: "
+        <> string.join(dict.keys(registry), ", "),
+      )
+    Ok(config) -> stdio_write_line(registry_toml.render_language(config))
+  }
+}
+
+@external(erlang, "pharos_stdin_ffi", "write_line")
+fn stdio_write_line(body: String) -> Nil
+
 
 fn usage() -> String {
   "Usage: pharos [FLAG]
@@ -238,6 +289,16 @@ Flags
                              starter file with comments. Redirect
                              into ~/.config/pharos/pharos.toml to
                              begin overriding defaults.
+  --print-language-config <lang>
+                             Print the bundled config for one
+                             language as TOML — copy + edit the
+                             output to override individual fields
+                             via pharos.toml's `[languages.<id>]`
+                             and `[[languages.<id>.servers]]` blocks.
+                             Useful when the override is a JSON-string
+                             field (initialization_options_json,
+                             workspace_configuration_json) and you
+                             want to start from the bundled default.
   --doctor                   Self-diagnostic. Resolves Config the
                              same way a normal boot does, probes
                              each language server's binary on PATH,

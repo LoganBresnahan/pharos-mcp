@@ -87,6 +87,22 @@ pub type ServerOverride {
     methods: Option(List(String)),
     diagnostics_mode: Option(String),
     readiness_token: Option(String),
+    /// Whole-blob replace of the server's `initialization_options`
+    /// JSON sent at `initialize`. Stored as a TOML string containing
+    /// JSON text (LSP-server upstream docs publish init options in
+    /// JSON, so users can paste from those docs verbatim). Parse
+    /// failures log a warning and fall back to bundled defaults so
+    /// boot doesn't crash on a typo. See
+    /// `pharos --print-language-config <lang>` for the bundled
+    /// blob to start from.
+    initialization_options_json: Option(String),
+    /// Whole-blob replace of the server's `workspace_configuration`
+    /// payload — the response pharos sends when the LSP pulls
+    /// `workspace/configuration` (used heavily by
+    /// typescript-language-server's `[typescript]` and `[javascript]`
+    /// settings). Same TOML-string-of-JSON shape as
+    /// `initialization_options_json`. Parse failure → warn + fall back.
+    workspace_configuration_json: Option(String),
   )
 }
 
@@ -119,6 +135,13 @@ pub type LanguageOverride {
     diagnostics_mode: Option(String),
     readiness_token: Option(String),
     servers: Option(List(ServerOverride)),
+    /// Flat-shape variants of the per-server JSON overrides. Patches
+    /// the language's PRIMARY (first-listed) server. For multi-server
+    /// languages prefer the per-server form via
+    /// `[[languages.<id>.servers]]` to be explicit about which
+    /// server's blob is being replaced.
+    initialization_options_json: Option(String),
+    workspace_configuration_json: Option(String),
   )
 }
 
@@ -525,6 +548,14 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
     readiness_token: decode_optional_string(value, "readiness_token"),
     servers: decode_optional_servers_list(value),
+    initialization_options_json: decode_optional_string(
+      value,
+      "initialization_options_json",
+    ),
+    workspace_configuration_json: decode_optional_string(
+      value,
+      "workspace_configuration_json",
+    ),
   )
 }
 
@@ -549,6 +580,14 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
     methods: decode_optional_string_list(value, "methods"),
     diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
     readiness_token: decode_optional_string(value, "readiness_token"),
+    initialization_options_json: decode_optional_string(
+      value,
+      "initialization_options_json",
+    ),
+    workspace_configuration_json: decode_optional_string(
+      value,
+      "workspace_configuration_json",
+    ),
   )
 }
 

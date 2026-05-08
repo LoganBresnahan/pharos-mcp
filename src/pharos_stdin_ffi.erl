@@ -15,7 +15,8 @@
 %% before the call returns) so MCP hosts see responses promptly.
 
 -module(pharos_stdin_ffi).
--export([read_line/0, write_line/1, stdin_port/0, decode_port_event/1]).
+-export([read_line/0, write_line/1, stdin_port/0, decode_port_event/1,
+         debug_append/2]).
 
 %% Decode a raw Port-mailbox payload sent to a process that owns the
 %% stdin port. Returns one of three Gleam-shaped tags:
@@ -104,4 +105,11 @@ write_line(Body) when is_binary(Body) ->
     Port = erlang:open_port({fd, 1, 1}, [out, binary]),
     true = erlang:port_command(Port, [Body, $\n]),
     erlang:port_close(Port),
+    nil.
+
+%% Dev-only: append Data to Path. Used for transient debug logging
+%% from CLI flag handlers under -noshell -noinput where standard I/O
+%% routing is ambiguous. Errors swallowed.
+debug_append(Path, Data) when is_binary(Path), is_binary(Data) ->
+    file:write_file(Path, Data, [append]),
     nil.

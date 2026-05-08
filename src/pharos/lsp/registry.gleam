@@ -34,7 +34,8 @@
 //// resulting primary server's matching fields.
 
 import gleam/dict.{type Dict}
-import gleam/json
+import gleam/dynamic/decode
+import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import pharos/config.{type LanguageOverride, type ServerOverride}
@@ -232,8 +233,16 @@ fn merge_server(
       Some(xs) -> xs
       None -> default.args
     },
-    initialization_options: default.initialization_options,
-    workspace_configuration: default.workspace_configuration,
+    initialization_options: parse_init_options_or(
+      ovr.initialization_options_json,
+      default.initialization_options,
+      default.id,
+    ),
+    workspace_configuration: parse_workspace_config_or(
+      ovr.workspace_configuration_json,
+      default.workspace_configuration,
+      default.id,
+    ),
     methods: parse_methods(ovr.methods, default.methods),
     diagnostics_mode: case ovr.diagnostics_mode {
       None -> default.diagnostics_mode
@@ -289,8 +298,16 @@ fn merge_primary(
       Some(xs) -> xs
       None -> primary.args
     },
-    initialization_options: primary.initialization_options,
-    workspace_configuration: primary.workspace_configuration,
+    initialization_options: parse_init_options_or(
+      override.initialization_options_json,
+      primary.initialization_options,
+      primary.id,
+    ),
+    workspace_configuration: parse_workspace_config_or(
+      override.workspace_configuration_json,
+      primary.workspace_configuration,
+      primary.id,
+    ),
     methods: primary.methods,
     diagnostics_mode: case override.diagnostics_mode {
       None -> primary.diagnostics_mode
@@ -308,5 +325,109 @@ fn parse_mode(raw: Option(String)) -> DiagnosticsMode {
     Some("pull") | Some("Pull") | Some("PULL") -> Pull
     Some("push") | Some("Push") | Some("PUSH") -> Push
     _ -> Push
+  }
+}
+
+// -- JSON-string overrides -----------------------------------------------
+
+/// Whole-blob replace for `initialization_options`. Validates that the
+/// user-supplied string parses as JSON (any shape — object, array,
+/// scalar) and, on success, returns it as a `Json` passthrough value.
+/// Parse failure logs a warning and falls back to the bundled default
+/// so a typo in pharos.toml does not crash boot.
+fn parse_init_options_or(
+  raw: Option(String),
+  fallback: Json,
+  server_id: String,
+) -> Json {
+  case raw {
+    None -> fallback
+    Some(text) ->
+      case json.parse(text, decode.dynamic) {
+        Ok(_) -> json_passthrough(text)
+        Error(err) -> {
+          log.warn_at(
+            "pharos/lsp/registry",
+            "initialization_options_json for `"
+              <> server_id
+              <> "` did not parse as JSON ("
+              <> describe_json_decode_error(err)
+              <> "); using bundled default",
+          )
+          fallback
+        }
+      }
+  }
+}
+
+/// Whole-blob replace for `workspace_configuration`. Input must be a
+/// JSON OBJECT whose top-level keys are the section names the LSP
+/// pulls (`typescript`, `javascript`, etc.); each value is its own
+/// JSON fragment. Erlang FFI splits the object into key→raw-bytes
+/// pairs so each value passes through gleam_json verbatim. Anything
+/// other than a top-level object falls back with a warning.
+fn parse_workspace_config_or(
+  raw: Option(String),
+  fallback: Option(Dict(String, Json)),
+  server_id: String,
+) -> Option(Dict(String, Json)) {
+  case raw {
+    None -> fallback
+    Some(text) ->
+      case workspace_config_pairs(text) {
+        Ok(pairs) ->
+          Some(
+            list.map(pairs, fn(pair) {
+              let #(key, value_text) = pair
+              #(key, json_passthrough(value_text))
+            })
+            |> dict.from_list,
+          )
+        Error(reason) -> {
+          log.warn_at(
+            "pharos/lsp/registry",
+            "workspace_configuration_json for `"
+              <> server_id
+              <> "` invalid ("
+              <> reason
+              <> "); using bundled default",
+          )
+          fallback
+        }
+      }
+  }
+}
+
+fn describe_json_decode_error(err: json.DecodeError) -> String {
+  case err {
+    json.UnexpectedEndOfInput -> "unexpected end of input"
+    json.UnexpectedByte(b) -> "unexpected byte " <> b
+    json.UnexpectedSequence(s) -> "unexpected sequence " <> s
+    json.UnableToDecode(_) -> "shape did not match decoder"
+  }
+}
+
+@external(erlang, "pharos_json_passthrough_ffi", "raw")
+fn json_passthrough(text: String) -> Json
+
+@external(erlang, "pharos_json_passthrough_ffi", "parse_object_to_raw_pairs")
+fn workspace_config_pairs_ffi(text: String) -> Result(
+  List(#(String, String)),
+  WorkspaceConfigError,
+)
+
+type WorkspaceConfigError {
+  NotAnObject
+  ParseFailed
+}
+
+fn workspace_config_pairs(
+  text: String,
+) -> Result(List(#(String, String)), String) {
+  case workspace_config_pairs_ffi(text) {
+    Ok(pairs) -> Ok(pairs)
+    Error(NotAnObject) ->
+      Error("top-level value must be a JSON object (section names → settings)")
+    Error(ParseFailed) -> Error("text did not parse as JSON")
   }
 }

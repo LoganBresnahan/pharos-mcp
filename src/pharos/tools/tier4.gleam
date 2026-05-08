@@ -17,6 +17,7 @@
 //// params, decides this is tier4, calls `dispatch/3`, and wraps the
 //// returned text in the standard JSON-RPC envelope.
 
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/int
@@ -30,6 +31,8 @@ import pharos/log
 import pharos/log/entry
 import pharos/log/trace_ring
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/registry
+import pharos/lsp/registry_toml
 import pharos/runtime
 
 const default_processes_limit: Int = 100
@@ -63,6 +66,7 @@ pub fn named_definitions() -> List(#(String, fn() -> Json)) {
     #("runtime_trace_lsp", runtime_trace_lsp_definition),
     #("runtime_kill_lsp", runtime_kill_lsp_definition),
     #("runtime_trace_calls", runtime_trace_calls_definition),
+    #("runtime_language_config", runtime_language_config_definition),
   ]
 }
 
@@ -88,6 +92,7 @@ pub fn dispatch(
     "runtime_trace_lsp" -> Some(handle_trace_lsp(arguments))
     "runtime_kill_lsp" -> Some(handle_kill_lsp(pool, arguments))
     "runtime_trace_calls" -> Some(handle_trace_calls(arguments))
+    "runtime_language_config" -> Some(handle_language_config(arguments))
     _ -> None
   }
 }
@@ -1003,3 +1008,84 @@ fn int_dynamic(n: Int) -> Dynamic
 
 @external(erlang, "timer", "sleep")
 fn sleep(ms: Int) -> Nil
+
+// -- runtime_language_config ---------------------------------------------
+
+fn runtime_language_config_definition() -> Json {
+  json.object([
+    #("name", json.string("runtime_language_config")),
+    #(
+      "description",
+      json.string(
+        "Print the bundled-default registry entry for one language as "
+          <> "TOML. Output is paste-ready: copy into pharos.toml's "
+          <> "`[languages.<id>]` and `[[languages.<id>.servers]]` "
+          <> "blocks, edit one or more fields, save. Use when you need "
+          <> "to override `initialization_options_json` or "
+          <> "`workspace_configuration_json` (whole-blob replace) and "
+          <> "want the bundled default as a starting point. Mirrors "
+          <> "the `pharos --print-language-config <lang>` CLI flag.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "language",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "Language id, e.g. `rust`, `python`, `typescript`. "
+                      <> "Match against the registry's keys; case-sensitive.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #("required", json.preprocessed_array([json.string("language")])),
+      ]),
+    ),
+  ])
+}
+
+fn handle_language_config(args: Option(Dynamic)) -> ToolResult {
+  case decode_string_field(args, "language") {
+    Error(reason) ->
+      Error("Invalid runtime_language_config params: " <> reason)
+    Ok(language) -> {
+      let registry = registry.cached()
+      case dict.get(registry, language) {
+        Error(_) -> {
+          let known =
+            dict.keys(registry)
+            |> string_join(", ")
+          Error(
+            "language `"
+            <> language
+            <> "` not found in registry. Known: "
+            <> known,
+          )
+        }
+        Ok(config) -> Ok(registry_toml.render_language(config))
+      }
+    }
+  }
+}
+
+@external(erlang, "lists", "join")
+fn list_join(sep: String, xs: List(String)) -> List(String)
+
+fn string_join(xs: List(String), sep: String) -> String {
+  list_join(sep, xs)
+  |> list_iolist_to_binary
+}
+
+@external(erlang, "erlang", "iolist_to_binary")
+fn list_iolist_to_binary(xs: List(String)) -> String
