@@ -129,6 +129,13 @@ SPECS = {
         # gleam-lsp does not always emit diagnostics on freshly-spawned
         # workspaces; the harness's cold-start tolerance covers this.
         expect_diagnostics=False,
+        # gleam-lsp 1.16.0 panics ("Receiving LSP message: RecvError")
+        # on stdin close mid-drain when many requests are in-flight,
+        # specifically reproducible under the burrito-built runtime;
+        # serial mode dispatches one-at-a-time and dodges the race.
+        # Dev-wrapper stdio doesn't trigger it but serial is a no-op
+        # cost for a 13-tool harness.
+        serial_mode=True,
     ),
     "elixir": LangSpec(
         id="elixir",
