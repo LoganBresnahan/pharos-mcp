@@ -69,6 +69,7 @@ pub fn named_definitions() -> List(#(String, fn() -> Json)) {
     #("runtime_trace_calls", runtime_trace_calls_definition),
     #("runtime_language_config", runtime_language_config_definition),
     #("runtime_set_tool_timeout", runtime_set_tool_timeout_definition),
+    #("runtime_effective_tool_config", runtime_effective_tool_config_definition),
   ]
 }
 
@@ -96,6 +97,8 @@ pub fn dispatch(
     "runtime_trace_calls" -> Some(handle_trace_calls(arguments))
     "runtime_language_config" -> Some(handle_language_config(arguments))
     "runtime_set_tool_timeout" -> Some(handle_set_tool_timeout(arguments))
+    "runtime_effective_tool_config" ->
+      Some(handle_effective_tool_config(arguments))
     _ -> None
   }
 }
@@ -1248,4 +1251,232 @@ fn decode_optional_string(
       })
     }
   }
+}
+
+// -- runtime_effective_tool_config --------------------------------------
+
+fn runtime_effective_tool_config_definition() -> Json {
+  json.object([
+    #("name", json.string("runtime_effective_tool_config")),
+    #(
+      "description",
+      json.string(
+        "Inspect the per-tool timeout configuration as resolved RIGHT "
+          <> "NOW. Returns three sections: `session_overrides` (set "
+          <> "this session via runtime_set_tool_timeout, lost on "
+          <> "restart), `toml_overrides` (loaded from "
+          <> "[tool_config.<name>] / [tool_config.<name>.<lang>] in "
+          <> "pharos.toml), and `effective_summary` for any (tool, "
+          <> "lang) combo the LLM passes. Useful when a tool times "
+          <> "out unexpectedly and you need to see which layer is "
+          <> "winning. Pass `tool` alone to scope the dump; pass both "
+          <> "`tool` and `language` to compute the resolved value "
+          <> "with source attribution.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "tool",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "Optional tool name. If omitted, every tool with "
+                      <> "any override is included.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "language",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "Optional language id. When supplied alongside "
+                      <> "`tool`, the response includes an "
+                      <> "`effective_summary` resolving the timeout "
+                      <> "for that combo with source attribution.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn handle_effective_tool_config(args: Option(Dynamic)) -> ToolResult {
+  use tool_filter <- result.try(decode_optional_string(args, "tool"))
+  use language_filter <- result.try(decode_optional_string(args, "language"))
+
+  let session_snapshot = session_overrides.snapshot()
+  let toml_snapshot = config.cached().tool_config
+
+  let session_section =
+    render_session_overrides(session_snapshot, tool_filter)
+  let toml_section = render_toml_overrides(toml_snapshot, tool_filter)
+  let summary_section = case tool_filter, language_filter {
+    Some(t), Some(l) ->
+      ",\"effective_summary\":"
+      <> render_effective_summary(t, Some(l), session_snapshot, toml_snapshot)
+    Some(t), None ->
+      ",\"effective_summary\":"
+      <> render_effective_summary(t, None, session_snapshot, toml_snapshot)
+    _, _ -> ""
+  }
+
+  Ok(
+    "{\"session_overrides\":"
+      <> session_section
+      <> ",\"toml_overrides\":"
+      <> toml_section
+      <> summary_section
+      <> "}",
+  )
+}
+
+fn render_session_overrides(
+  snapshot: dict.Dict(String, session_overrides.ToolOverride),
+  tool_filter: Option(String),
+) -> String {
+  let entries =
+    snapshot
+    |> dict.to_list
+    |> list.filter(fn(pair) {
+      let #(name, _) = pair
+      case tool_filter {
+        None -> True
+        Some(t) -> name == t
+      }
+    })
+    |> list.map(fn(pair) {
+      let #(name, ovr) = pair
+      let global_part = case ovr.global {
+        None -> "null"
+        Some(n) -> int.to_string(n)
+      }
+      let langs_part =
+        ovr.languages
+        |> dict.to_list
+        |> list.map(fn(lp) {
+          let #(lang, ms) = lp
+          "\"" <> lang <> "\":" <> int.to_string(ms)
+        })
+        |> string_join(",")
+      "\""
+      <> name
+      <> "\":{\"global\":"
+      <> global_part
+      <> ",\"languages\":{"
+      <> langs_part
+      <> "}}"
+    })
+    |> string_join(",")
+  "{" <> entries <> "}"
+}
+
+fn render_toml_overrides(
+  snapshot: dict.Dict(String, config.ToolConfig),
+  tool_filter: Option(String),
+) -> String {
+  let entries =
+    snapshot
+    |> dict.to_list
+    |> list.filter(fn(pair) {
+      let #(name, _) = pair
+      case tool_filter {
+        None -> True
+        Some(t) -> name == t
+      }
+    })
+    |> list.map(fn(pair) {
+      let #(name, tc) = pair
+      let global_part = case tc.default_timeout_ms {
+        None -> "null"
+        Some(n) -> int.to_string(n)
+      }
+      let langs_part =
+        tc.languages
+        |> dict.to_list
+        |> list.map(fn(lp) {
+          let #(lang, sub) = lp
+          let sub_global = case sub.default_timeout_ms {
+            None -> "null"
+            Some(n) -> int.to_string(n)
+          }
+          "\"" <> lang <> "\":" <> sub_global
+        })
+        |> string_join(",")
+      "\""
+      <> name
+      <> "\":{\"default_timeout_ms\":"
+      <> global_part
+      <> ",\"languages\":{"
+      <> langs_part
+      <> "}}"
+    })
+    |> string_join(",")
+  "{" <> entries <> "}"
+}
+
+fn render_effective_summary(
+  tool: String,
+  lang: Option(String),
+  session_snapshot: dict.Dict(String, session_overrides.ToolOverride),
+  toml_snapshot: dict.Dict(String, config.ToolConfig),
+) -> String {
+  // Walk the same precedence stack as resolve_tool_timeout but
+  // also report which layer won.
+  let session_hit = session_overrides.get(tool, lang)
+  let toml_hit = case dict.get(toml_snapshot, tool) {
+    Error(_) -> None
+    Ok(tc) -> {
+      let per_lang = case lang {
+        None -> None
+        Some(l) ->
+          case dict.get(tc.languages, l) {
+            Ok(sub) -> sub.default_timeout_ms
+            Error(_) -> None
+          }
+      }
+      case per_lang {
+        Some(_) -> per_lang
+        None -> tc.default_timeout_ms
+      }
+    }
+  }
+  // Strip unused snapshot args (Gleam warns otherwise) — they were
+  // passed in case the caller wanted to render layer-by-layer in
+  // the future without re-fetching.
+  let _ = session_snapshot
+  let _ = toml_snapshot
+  let #(value, source) = case session_hit, toml_hit {
+    Some(n), _ -> #(int.to_string(n), "session_override")
+    None, Some(n) -> #(int.to_string(n), "toml")
+    None, None -> #("null", "compile_default")
+  }
+  let lang_part = case lang {
+    Some(l) -> "\"" <> l <> "\""
+    None -> "null"
+  }
+  "{\"tool\":\""
+  <> tool
+  <> "\",\"language\":"
+  <> lang_part
+  <> ",\"timeout_ms\":"
+  <> value
+  <> ",\"source\":\""
+  <> source
+  <> "\"}"
 }

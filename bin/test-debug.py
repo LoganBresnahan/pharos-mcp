@@ -84,6 +84,9 @@ def main() -> int:
         tool_call_request(15, "runtime_pid_info", {"pid": "<0.0.0>"}),
         # runtime_set_tool_timeout — session-scoped override (Phase 2,
         # ADR 021 layer 4). Smoke test: set + verify response shape.
+        # runtime_effective_tool_config (Phase 4) is exercised in
+        # test-tool-config.py because the harness here batches
+        # requests in parallel — the read can race ahead of the set.
         tool_call_request(
             16,
             "runtime_set_tool_timeout",

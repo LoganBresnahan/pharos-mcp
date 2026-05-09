@@ -27,6 +27,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pharos_drive import (  # noqa: E402
     drive,
+    drive_serial,
     find_response,
     initialize_request,
     tool_call_request,
@@ -278,6 +279,84 @@ def main() -> int:
                 f"PASS ({len(text)}b returned; runtime override 60s beat TOML 1ms)",
             )
         )
+
+    # Cell 6 (Phase 4) — runtime_effective_tool_config reflects the
+    # session override AND the TOML override correctly. Sequential
+    # drive: 1) load TOML 2) set session override 3) query.
+    print("--- cell 6: runtime_effective_tool_config introspection ---")
+    cfg = tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False)
+    try:
+        cfg.write(_toml_per_lang(45_000, 60_000))  # global=45s, rust=60s
+        cfg.close()
+        env = {"PHAROS_CONFIG_FILE": cfg.name}
+        # drive_serial enforces read-before-next-send so the session-
+        # override write commits to persistent_term before the
+        # introspection query reads it. drive() batches in parallel
+        # which races for this set+query interaction.
+        responses_a, _ = drive_serial(
+            env,
+            [
+                initialize_request(0),
+                tool_call_request(
+                    61,
+                    "runtime_set_tool_timeout",
+                    {"tool": "find_references", "timeout_ms": 75_000},
+                ),
+                tool_call_request(
+                    62,
+                    "runtime_effective_tool_config",
+                    {"tool": "find_references", "language": "rust"},
+                ),
+            ],
+            per_request_timeout=30,
+        )
+    finally:
+        try:
+            os.unlink(cfg.name)
+        except OSError:
+            pass
+    set_resp = find_response(responses_a, 61)
+    eff_resp = find_response(responses_a, 62)
+    if set_resp is None or tool_is_error(set_resp):
+        cells.append(
+            (False, "effective-config", f"set call failed: {tool_text(set_resp)[:200]}")
+        )
+    elif eff_resp is None:
+        cells.append(
+            (False, "effective-config", "no runtime_effective_tool_config response")
+        )
+    elif tool_is_error(eff_resp):
+        cells.append(
+            (False, "effective-config", f"errored: {tool_text(eff_resp)[:300]}")
+        )
+    else:
+        text = tool_text(eff_resp)
+        # Resolution: per-call=None → session_global=75000 wins over
+        # TOML-rust=60000 wins over TOML-global=45000.
+        # source should be "session_override".
+        ok = (
+            '"session_overrides"' in text
+            and '"toml_overrides"' in text
+            and '"effective_summary"' in text
+            and '"timeout_ms":75000' in text
+            and '"source":"session_override"' in text
+        )
+        if ok:
+            cells.append(
+                (
+                    True,
+                    "effective-config",
+                    "PASS (session=75s beat TOML rust=60s beat TOML global=45s)",
+                )
+            )
+        else:
+            cells.append(
+                (
+                    False,
+                    "effective-config",
+                    f"shape/source unexpected: {text[:400]}",
+                )
+            )
 
     passed = sum(1 for ok, *_ in cells if ok)
     total = len(cells)
