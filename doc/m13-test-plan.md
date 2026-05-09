@@ -442,3 +442,37 @@ the SUFFICIENT-ON-USEFULNESS gate. Both required.
   enough observability without dedicated perf tests yet.
 - Crash-recovery beyond what `test-edges.py` covers (e.g. BEAM-level
   hot-restart of pharos itself). Out of release-blocker scope.
+
+## Phase results (rolling — last update 2026-05-09)
+
+| Phase | Status | Cell totals |
+|---|---|---|
+| 1 — debug + lang-agnostic | DONE | 15/15 |
+| 2 — `lsp_request_raw` | DONE | covered in test-suite |
+| 3 — tier1 read tools (stdio dev) | DONE | 247/247 (19 light langs) |
+| 4 — write tools (stdio dev) | DONE | 76/76 |
+| 5 — edges (stdio dev) | DONE | 2/2 + sub-server override + JSON-string overrides |
+| 6 — HTTP twin (dev) | DONE | 246/247 tier1, 76/76 write |
+| 7 — both-transports isolation | DONE | dev + burrito PASS |
+| 8 — burrito dogfood (final binary) | DONE | stdio 309/312, HTTP 310/312 |
+| 9 — chained tools | DONE | 28/28 stdio + 28/28 HTTP |
+| 10 — serial-mode (heavy LSPs) | DONE v2 | 38/39 (perl find_references caps at 120s) |
+| 11 — burrito HTTP `:crypto` fix | DONE | 1-line fix in mix.exs |
+| 11a — burrito edge retries verify | DONE | 2/2 |
+| 12 — `[tool_config.<name>] default_timeout_ms` | DONE | 3/3 verification cells |
+
+Known transients (LSP-side, not pharos):
+- `gleam.workspace_symbols` — gleam-lsp returns transport error on
+  mid-cold-start workspace symbol query; reproducible on dev + burrito.
+- `scala.workspace_symbols` — metals BSP bootstrap race; same shape.
+- `perl.find_references` — perl/PLS exceeds 120s/req serial cap on
+  cold project-wide reference lookup.
+
+Phase 8 sub-fix landed during this round:
+- gleam marked `serial_mode=True` in test-suite.py — gleam-lsp 1.16.0
+  panics on stdin close mid-drain when 10+ tool requests are in flight
+  on the shared lsp_proc, but only when pharos itself runs from the
+  burrito release runtime. Dev-wrapper stdio doesn't trip it. HTTP
+  unaffected (per-POST serialization). Serial mode dispatches one
+  request at a time and dodges the race; result jumps from 0/13 to
+  12/13 (the workspace_symbols transient remains).
