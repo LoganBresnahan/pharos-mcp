@@ -39,6 +39,9 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 017a | [lsp_proc under simple_one_for_one](017a-lsp-proc-simple-one-for-one.md) | Accepted |
 | 018 | [LSP binary path resolution](018-lsp-binary-path-resolution.md) | Proposed |
 | 019 | [Multi-LSP method routing per language](019-multi-lsp-method-routing.md) | Proposed |
+| 020 | [Hot code reload tool for dev iteration](020-hot-code-reload-dev-tool.md) | Proposed (Deferred) |
+| 021 | [Timeout resolution stack, per-tool × per-lang config, LLM-driven session overrides](021-timeout-resolution-and-autotune.md) | Accepted |
+| 022 | [Logging conventions: structured fields canonical, file rotation, ring target-prefix filter](022-logging-conventions.md) | Accepted |
 
 ## Anticipated future ADRs
 
@@ -46,8 +49,8 @@ Written when the corresponding decision actually arises with tradeoffs — not p
 
 | # | Title | Trigger |
 |---|-------|---------|
-| 020 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
-| 021 | Config file format and location | Override registry promoted to first-class config |
-| 022 | Bridge port discovery mechanism | Extension repo bootstraps |
-| 023 | Workspace root determination | First multi-root project test runs |
-| 024 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
+| 023 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
+| 024 | Bridge port discovery mechanism | Extension repo bootstraps |
+| 025 | Workspace root determination | First multi-root project test runs |
+| 026 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
+| 027 | Config file format and location (formalize) | Override registry promoted to first-class config |
