@@ -180,10 +180,7 @@ def main() -> int:
 
     # Cell 4 (Phase 1.4) — per-tool x per-lang override beats per-tool
     # global. Pin 1ms global, 60s for `rust` specifically. Call with
-    # the rust file URI; expect success (per-lang wins). The
-    # corresponding negative case — different lang, hits 1ms global —
-    # is untestable here without a second LSP fixture; cell 5 below
-    # uses stderr proof instead.
+    # the rust file URI; expect success (per-lang wins).
     print("--- cell 4: per-tool x per-lang override (rust) ---")
     responses, stderr = _run(
         _toml_per_lang(1, 60_000),
@@ -217,6 +214,70 @@ def main() -> int:
                     f"PASS ({len(text)}b returned; per-lang 60s beat global 1ms)",
                 )
             )
+
+    # Cell 5 (Phase 2) — runtime_set_tool_timeout. Pin 1ms global
+    # via TOML; in the SAME session, fire runtime_set_tool_timeout
+    # to bump find_references to 60s; then fire find_references
+    # without a per-call timeout_ms. The session override should
+    # beat the TOML 1ms.
+    print("--- cell 5: runtime_set_tool_timeout beats TOML config ---")
+    cfg = tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False)
+    try:
+        cfg.write(_toml(1))
+        cfg.close()
+        env = {"PHAROS_CONFIG_FILE": cfg.name}
+        responses, stderr = drive(
+            env,
+            [
+                initialize_request(0),
+                tool_call_request(
+                    51,
+                    "runtime_set_tool_timeout",
+                    {"tool": "find_references", "timeout_ms": 60_000},
+                ),
+                tool_call_request(
+                    52,
+                    "find_references",
+                    {
+                        "uri": RUST_FILE,
+                        "line": 7,
+                        "character": 12,
+                        "include_declaration": True,
+                    },
+                ),
+            ],
+            timeout=120,
+        )
+    finally:
+        try:
+            os.unlink(cfg.name)
+        except OSError:
+            pass
+    set_resp = find_response(responses, 51)
+    fr_resp = find_response(responses, 52)
+    if set_resp is None or tool_is_error(set_resp):
+        cells.append(
+            (False, "runtime-set-override", f"set call failed: {tool_text(set_resp)[:200]}")
+        )
+    elif fr_resp is None:
+        cells.append((False, "runtime-set-override", "no find_references response"))
+    elif tool_is_error(fr_resp):
+        cells.append(
+            (
+                False,
+                "runtime-set-override",
+                f"override didn't beat TOML 1ms: {tool_text(fr_resp)[:200]}",
+            )
+        )
+    else:
+        text = tool_text(fr_resp)
+        cells.append(
+            (
+                True,
+                "runtime-set-override",
+                f"PASS ({len(text)}b returned; runtime override 60s beat TOML 1ms)",
+            )
+        )
 
     passed = sum(1 for ok, *_ in cells if ok)
     total = len(cells)

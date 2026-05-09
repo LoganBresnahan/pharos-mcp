@@ -57,6 +57,8 @@
     trace_filter_cache_is_on/0,
     config_store/1,
     config_load/0,
+    session_overrides_store/1,
+    session_overrides_load/0,
     argv/0,
     burrito_cache_root/0,
     beam_version_info/0
@@ -661,6 +663,24 @@ config_load() ->
     try
         Cfg = persistent_term:get(pharos_config),
         {ok, Cfg}
+    catch
+        error:badarg -> {error, nil}
+    end.
+
+%% Session-scoped tool_config overrides (ADR 021 layer 4). The
+%% runtime_set_tool_timeout MCP tool writes here; resolve_tool_timeout
+%% reads. Map shape:
+%%   #{ ToolName => #{global => Option(Int), languages => #{Lang => Int}} }
+%% Stored under a distinct key from pharos_config so config reloads
+%% don't clobber session-scoped tuning.
+session_overrides_store(Map) ->
+    persistent_term:put(pharos_session_overrides, Map),
+    nil.
+
+session_overrides_load() ->
+    try
+        Map = persistent_term:get(pharos_session_overrides),
+        {ok, Map}
     catch
         error:badarg -> {error, nil}
     end.

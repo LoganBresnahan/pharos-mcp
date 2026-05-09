@@ -27,6 +27,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import pharos/config
+import pharos/tools/session_overrides
 import pharos/log
 import pharos/log/entry
 import pharos/log/trace_ring
@@ -67,6 +68,7 @@ pub fn named_definitions() -> List(#(String, fn() -> Json)) {
     #("runtime_kill_lsp", runtime_kill_lsp_definition),
     #("runtime_trace_calls", runtime_trace_calls_definition),
     #("runtime_language_config", runtime_language_config_definition),
+    #("runtime_set_tool_timeout", runtime_set_tool_timeout_definition),
   ]
 }
 
@@ -93,6 +95,7 @@ pub fn dispatch(
     "runtime_kill_lsp" -> Some(handle_kill_lsp(pool, arguments))
     "runtime_trace_calls" -> Some(handle_trace_calls(arguments))
     "runtime_language_config" -> Some(handle_language_config(arguments))
+    "runtime_set_tool_timeout" -> Some(handle_set_tool_timeout(arguments))
     _ -> None
   }
 }
@@ -1089,3 +1092,154 @@ fn string_join(xs: List(String), sep: String) -> String {
 
 @external(erlang, "erlang", "iolist_to_binary")
 fn list_iolist_to_binary(xs: List(String)) -> String
+
+// -- runtime_set_tool_timeout -------------------------------------------
+
+fn runtime_set_tool_timeout_definition() -> Json {
+  json.object([
+    #("name", json.string("runtime_set_tool_timeout")),
+    #(
+      "description",
+      json.string(
+        "Set a session-scoped `default_timeout_ms` for one MCP tool, "
+          <> "optionally narrowed to one language. Survives until "
+          <> "pharos restarts; takes precedence over `[tool_config.*]` "
+          <> "in pharos.toml. Use when an LSP timeout suggests the "
+          <> "default is too tight and you want every subsequent call "
+          <> "in this session to inherit the bump without passing "
+          <> "`timeout_ms` each time. Resolution stack: compile-time → "
+          <> "TOML per-tool → TOML per-tool×lang → THIS → per-call. "
+          <> "Returns the new effective configuration as JSON.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "tool",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "MCP tool name (e.g. `find_references`, "
+                      <> "`format_document`, `hover`).",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "language",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "Optional language id (e.g. `rust`, `java`, "
+                      <> "`scala`). Omit to set the per-tool global "
+                      <> "default. When supplied, the override only "
+                      <> "applies when pharos resolves a call's URI to "
+                      <> "this language.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "timeout_ms",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "New default timeout in milliseconds. Must be > 0.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.preprocessed_array([
+            json.string("tool"),
+            json.string("timeout_ms"),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn handle_set_tool_timeout(args: Option(Dynamic)) -> ToolResult {
+  use tool <- result.try(decode_string_field(args, "tool"))
+  use timeout_ms <- result.try(decode_required_int(args, "timeout_ms"))
+  use lang <- result.try(decode_optional_string(args, "language"))
+  case timeout_ms > 0 {
+    False -> Error("timeout_ms must be > 0 (got " <> int.to_string(timeout_ms) <> ")")
+    True -> {
+      session_overrides.set(tool, lang, timeout_ms)
+      let lang_text = case lang {
+        Some(l) -> l
+        None -> "*"
+      }
+      log.info_at(
+        "pharos/tool_config/autotune",
+        "session override applied: tool=" <> tool
+          <> " language=" <> lang_text
+          <> " timeout_ms=" <> int.to_string(timeout_ms),
+      )
+      Ok(
+        "{\"tool\":\""
+          <> tool
+          <> "\",\"language\":"
+          <> case lang {
+            Some(l) -> "\"" <> l <> "\""
+            None -> "null"
+          }
+          <> ",\"timeout_ms\":"
+          <> int.to_string(timeout_ms)
+          <> ",\"scope\":\"session\"}",
+      )
+    }
+  }
+}
+
+fn decode_required_int(
+  args: Option(Dynamic),
+  field: String,
+) -> Result(Int, String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use value <- decode.field(field, decode.int)
+    decode.success(value)
+  }
+  decode.run(raw, decoder)
+  |> result.map_error(fn(_) { "expected `" <> field <> ": int`" })
+}
+
+fn decode_optional_string(
+  args: Option(Dynamic),
+  field: String,
+) -> Result(Option(String), String) {
+  case args {
+    None -> Ok(None)
+    Some(raw) -> {
+      let decoder = {
+        use value <- decode.optional_field(
+          field,
+          None,
+          decode.map(decode.string, Some),
+        )
+        decode.success(value)
+      }
+      decode.run(raw, decoder)
+      |> result.map_error(fn(_) {
+        "expected optional `" <> field <> ": string`"
+      })
+    }
+  }
+}

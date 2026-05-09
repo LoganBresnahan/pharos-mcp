@@ -23,6 +23,7 @@ import pharos/lsp/languages
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/lsp/registry
+import pharos/tools/session_overrides
 import pharos/mcp/content_block
 import pharos/mcp/request_workers
 import pharos/tools/diagnostics
@@ -966,13 +967,13 @@ fn decode_get_diagnostics_arguments(
 }
 
 /// Resolve effective `default_timeout_ms` for a tool, optionally
-/// narrowed to a language. Order:
-///   1. user-passed `timeout_ms` arg (handled by the decoder's
-///      `optional_field`; this resolver only runs when the user
-///      didn't supply a value)
-///   2. `[tool_config.<name>.<lang>] default_timeout_ms = N`
-///   3. `[tool_config.<name>] default_timeout_ms = N`
-///   4. compiled-in const (each tool's `default_timeout_ms`)
+/// narrowed to a language. Order (later wins):
+///   1. compiled-in const (each tool's `default_timeout_ms`)
+///   2. `[tool_config.<name>] default_timeout_ms = N`
+///   3. `[tool_config.<name>.<lang>] default_timeout_ms = N`
+///   4. session override via `runtime_set_tool_timeout`
+///   5. user-passed `timeout_ms` arg (handled by the decoder before
+///      calling this resolver)
 ///
 /// Decoders that have a URI in scope pass `Some(lang_id)` after
 /// classifying the URI via `lang_from_uri`. Decoders without a URI
@@ -983,9 +984,13 @@ fn resolve_tool_timeout(
   lang: Option(String),
   compiled: Int,
 ) -> Int {
-  case config.tool_default_timeout_ms(name, lang) {
+  case session_overrides.get(name, lang) {
     Some(n) -> n
-    None -> compiled
+    None ->
+      case config.tool_default_timeout_ms(name, lang) {
+        Some(n) -> n
+        None -> compiled
+      }
   }
 }
 

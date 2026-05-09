@@ -82,6 +82,13 @@ def main() -> int:
         # known-bogus pid to verify the parse path. Real pid asserted
         # against the runtime_processes response after parsing.
         tool_call_request(15, "runtime_pid_info", {"pid": "<0.0.0>"}),
+        # runtime_set_tool_timeout — session-scoped override (Phase 2,
+        # ADR 021 layer 4). Smoke test: set + verify response shape.
+        tool_call_request(
+            16,
+            "runtime_set_tool_timeout",
+            {"tool": "find_references", "language": "rust", "timeout_ms": 90000},
+        ),
     ]
 
     responses, stderr = drive({}, requests, timeout=30)
@@ -258,6 +265,19 @@ def main() -> int:
             or "current_function" in text
         ),
         f"runtime_pid_info missing expected shape: {text[:200]}",
+    ))
+
+    # runtime_set_tool_timeout — accepted, response echoes settings.
+    r = find_response(responses, 16)
+    text = tool_text(r)
+    cells.append(check(
+        "runtime_set_tool_timeout",
+        r,
+        lambda: '"tool":"find_references"' in text
+                and '"language":"rust"' in text
+                and '"timeout_ms":90000' in text
+                and '"scope":"session"' in text,
+        f"runtime_set_tool_timeout response shape unexpected: {text[:300]}",
     ))
 
     passed = sum(1 for ok, *_ in cells if ok)
