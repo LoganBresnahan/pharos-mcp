@@ -107,18 +107,24 @@ pub fn start(
     False -> Nil
   }
 
-  let initial_state = build_initial_state(
-    filter,
-    ring_enabled,
-    stderr_enabled,
-    file_path,
-    file_max_bytes,
-    file_keep_rotated,
-  )
-
   seed_trace_cache_from_filter(filter)
 
-  actor.new(initial_state)
+  // Open the file inside the initialiser so the actor process owns
+  // the delayed_write proxy's controlling-process slot. Opening on
+  // the caller and passing the handle into the actor's state fails
+  // at the first write with NotOnControllingProcess.
+  actor.new_with_initialiser(2000, fn(subject) {
+    let state =
+      build_initial_state(
+        filter,
+        ring_enabled,
+        stderr_enabled,
+        file_path,
+        file_max_bytes,
+        file_keep_rotated,
+      )
+    Ok(actor.initialised(state) |> actor.returning(subject))
+  })
   |> actor.on_message(handle_message)
   |> actor.start()
   |> result.map(fn(started) {
@@ -168,16 +174,20 @@ pub fn start_supervised(
     False -> Nil
   }
 
-  let initial_state = build_initial_state(
-    filter,
-    ring_enabled,
-    stderr_enabled,
-    file_path,
-    file_max_bytes,
-    file_keep_rotated,
-  )
-
-  actor.new(initial_state)
+  // Same controlling-process consideration as `start/6` — open the
+  // file inside the initialiser on the actor process.
+  actor.new_with_initialiser(2000, fn(subject) {
+    let state =
+      build_initial_state(
+        filter,
+        ring_enabled,
+        stderr_enabled,
+        file_path,
+        file_max_bytes,
+        file_keep_rotated,
+      )
+    Ok(actor.initialised(state) |> actor.returning(subject))
+  })
   |> actor.on_message(handle_message)
   |> actor.start()
   |> result.map(fn(started) {
