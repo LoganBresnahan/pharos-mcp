@@ -480,14 +480,19 @@ rm -rf ~/.cache/pharos            # log files
 
 ## Known limitations
 
-- **Gleam LSP (`gleam lsp`) panics on stdin close** at gleam 1.16
-  when too many requests are in flight on the shared connection. The
-  M13 test harness drives gleam in serial mode and gets 12/13 cells
-  (the only failure is a transient `workspace_symbols` transport
-  error during cold start). Real-world usage through MCP hosts looks
-  fine because hosts dispatch one request at a time. Tracked
-  upstream; pharos requires no change once gleam fixes its mpsc
-  receive handler.
+- **Gleam LSP (`gleam lsp`) is stability-buggy at gleam 1.16.** Two
+  panic shapes surface, both `Receiving LSP message: RecvError`
+  inside `language-server/src/messages.rs:188`:
+  1. Stdin-close mid-drain when many requests are in flight on the
+     shared connection. Mitigated by serial-mode dispatch (`gleam`
+     is marked `serial_mode=True` in the test-suite); real MCP hosts
+     dispatch one request at a time so this rarely surfaces in normal
+     use.
+  2. `workspace/symbol` requests crash gleam-lsp regardless of
+     warm-up state. `workspace_symbols` is the only Tier-1 tool that
+     reliably fails on gleam; every other read/write tool works.
+  Both are tracked upstream; pharos requires no change once gleam
+  fixes its mpsc receive handler.
 - **Java cold start is 30-60s.** jdtls boots a full Eclipse JDT engine in
   Java. Pharos bumps `initialize_timeout_ms` to 90s globally to
   accommodate; faster servers (rust-analyzer, gopls, pyright, tsserver,
