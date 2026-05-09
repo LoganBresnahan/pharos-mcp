@@ -35,7 +35,15 @@ import pharos/workspace_root
 
 const content_modified_code: Int = -32_801
 
-const content_modified_retry_delay_ms: Int = 1000
+/// Linear backoff between content-modified retries. Two retries
+/// total: 1s after the first failure, 3s after the second. Total
+/// extra wait worst-case is 4s — well within every tool's 30s+
+/// per-call budget. Two retries (rather than one) cover ELP's
+/// "still loading" semantic where the LSP uses -32801 to mean
+/// "I'm indexing, try again later" rather than rust-analyzer's
+/// stricter "content modified mid-request" — ELP cold-start can
+/// take 5-30s and a single 1s retry is too tight.
+const content_modified_retry_delays_ms: List(Int) = [1000, 3000]
 
 // Per-server `readiness_timeout_ms` lives on `ServerConfig` now. The
 // global default is `languages.default_readiness_timeout_ms` (30s).
@@ -54,27 +62,41 @@ pub type RetryError {
   RetryRequestError(lifecycle.RequestError)
 }
 
-/// Wrap a single LSP `proc.request` call with a retry-once-on-
-/// content-modified policy. rust-analyzer emits `ServerError(-32801,
-/// "content modified")` mid-indexing; gopls / pyright /
-/// typescript-language-server do not, so the retry is a no-op for
-/// them. Sleeps `content_modified_retry_delay_ms` between attempts
-/// so the analyzer reaches a steady state before the second try.
+/// Wrap a single LSP `proc.request` call with a retry-on-content-
+/// modified policy. rust-analyzer emits `ServerError(-32801,
+/// "content modified")` mid-indexing; ELP uses the same code with
+/// `"still loading"` to mean "I'm indexing, try again later".
+/// gopls / pyright / typescript-language-server don't emit -32801
+/// so the retry is a no-op for them.
 ///
-/// Tools call this from inside `with_session_and_retry`'s body so
-/// the cold-start race that surfaced as `null` / `-32801` user-facing
-/// errors during the M9 dogfood becomes invisible after one retry.
+/// Two retries, with linear backoff: 1s after the first failure,
+/// 3s after the second. Two (not one) covers ELP's slower cold-
+/// start; the 4s worst-case extra wait stays within every tool's
+/// 30s+ per-call budget.
 pub fn request_with_content_modified_retry(
   request: fn() -> Result(a, lifecycle.RequestError),
 ) -> Result(a, lifecycle.RequestError) {
-  case request() {
+  retry_loop(request, content_modified_retry_delays_ms)
+}
+
+fn retry_loop(
+  request: fn() -> Result(a, lifecycle.RequestError),
+  remaining_delays: List(Int),
+) -> Result(a, lifecycle.RequestError) {
+  let result = request()
+  case result {
     Error(lifecycle.ServerError(code, _))
       if code == content_modified_code
-    -> {
-      process.sleep(content_modified_retry_delay_ms)
-      request()
-    }
-    other -> other
+    ->
+      case remaining_delays {
+        // Out of retries — surface the last -32801.
+        [] -> result
+        [delay, ..rest] -> {
+          process.sleep(delay)
+          retry_loop(request, rest)
+        }
+      }
+    _ -> result
   }
 }
 
