@@ -158,6 +158,13 @@ pub type LanguageOverride {
   )
 }
 
+/// Per-tool config knobs — `[tools.<name>]` blocks in pharos.toml.
+/// Currently carries only `default_timeout_ms`; designed to accept
+/// future tool-level fields without churning every callsite.
+pub type ToolConfig {
+  ToolConfig(default_timeout_ms: Option(Int))
+}
+
 pub type Config {
   Config(
     transport: Transport,
@@ -168,7 +175,23 @@ pub type Config {
     runtime: RuntimeConfig,
     bridge: BridgeConfig,
     languages: Dict(String, LanguageOverride),
+    /// `[tools.<name>] default_timeout_ms = N` block. Looks up by
+    /// MCP tool name (e.g. `"hover"`, `"format_document"`). Empty by
+    /// default; users opt-in to tune per-tool defaults without
+    /// passing `timeout_ms` on every call.
+    tool_config: Dict(String, ToolConfig),
   )
+}
+
+/// Effective default timeout for a tool name. Looks up the user
+/// override; returns `None` so the caller falls back to the
+/// compiled-in const (each tool's `default_timeout_ms`).
+pub fn tool_default_timeout_ms(name: String) -> Option(Int) {
+  let cfg = cached()
+  case dict.get(cfg.tool_config, name) {
+    Error(_) -> None
+    Ok(tc) -> tc.default_timeout_ms
+  }
 }
 
 // -- Defaults -------------------------------------------------------------
@@ -197,6 +220,7 @@ pub fn defaults() -> Config {
     runtime: RuntimeConfig(trace_calls_enabled: False),
     bridge: BridgeConfig(port: None),
     languages: dict.new(),
+    tool_config: dict.new(),
   )
 }
 
@@ -374,6 +398,48 @@ fn apply_toml(config: Config, parsed: Dynamic) -> Config {
   |> apply_section_runtime(parsed)
   |> apply_section_bridge(parsed)
   |> apply_section_languages(parsed)
+  |> apply_section_tool_config(parsed)
+}
+
+/// `[tool_config.<name>] default_timeout_ms = N` — per-tool override
+/// for the compiled-in `default_timeout_ms` const inside each tool.
+/// User opts in to tune defaults without passing `timeout_ms` on
+/// every call.
+///
+/// TOML shape:
+///
+///     [tool_config.format_document]
+///     default_timeout_ms = 90000
+///
+///     [tool_config.find_references]
+///     default_timeout_ms = 120000
+///
+/// Top-level `tools = [...]` (the surface filter) coexists with this
+/// section since one is a value and the other is a table-of-tables —
+/// distinct TOML keys, no collision.
+fn apply_section_tool_config(config: Config, parsed: Dynamic) -> Config {
+  case decode_field(parsed, "tool_config", decode.dict(decode.string, decode.dynamic)) {
+    Error(_) -> config
+    Ok(raw) -> {
+      let parsed_overrides =
+        raw
+        |> dict.to_list
+        |> list.map(fn(pair) {
+          let #(name, value) = pair
+          #(name, decode_tool_config(value))
+        })
+        |> dict.from_list
+      let merged =
+        dict.fold(parsed_overrides, config.tool_config, fn(acc, key, val) {
+          dict.insert(acc, key, val)
+        })
+      Config(..config, tool_config: merged)
+    }
+  }
+}
+
+fn decode_tool_config(value: Dynamic) -> ToolConfig {
+  ToolConfig(default_timeout_ms: decode_optional_int(value, "default_timeout_ms"))
 }
 
 fn apply_top_transport(config: Config, parsed: Dynamic) -> Config {

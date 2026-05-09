@@ -16,6 +16,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import pharos/config
 import pharos/log
 import pharos/lsp/inflight
 import pharos/lsp/pool.{type Pool}
@@ -911,17 +912,32 @@ fn decode_get_diagnostics_arguments(
   args: Option(Dynamic),
 ) -> Result(#(String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let fallback = resolve_tool_timeout("get_diagnostics", 20_000)
   let decoder = {
     use uri <- decode.field("uri", decode.string)
     use timeout_ms <- decode.optional_field(
       "timeout_ms",
-      20_000,
+      fallback,
       decode.int,
     )
     decode.success(#(uri, timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) { "expected `uri: string` (and optional `timeout_ms: int`)" })
+}
+
+/// Resolve effective `default_timeout_ms` for a tool. Order:
+///   1. user-passed `timeout_ms` arg (handled by `optional_field`)
+///   2. `[tool_config.<name>] default_timeout_ms = N` in pharos.toml
+///   3. compiled-in const (each tool's `default_timeout_ms`)
+///
+/// Called inside each decoder's fallback slot so the user-passed
+/// value still wins via `optional_field`. Phase 12 of M13 testing.
+fn resolve_tool_timeout(name: String, compiled: Int) -> Int {
+  case config.tool_default_timeout_ms(name) {
+    Some(n) -> n
+    None -> compiled
+  }
 }
 
 // -- Tier-1 LSP-backed tool handlers ------------------------------------
@@ -2293,7 +2309,7 @@ fn decode_find_references_arguments(
     )
     use timeout_ms <- decode.optional_field(
       "timeout_ms",
-      find_references.default_timeout_ms,
+      resolve_tool_timeout("find_references", find_references.default_timeout_ms),
       decode.int,
     )
     decode.success(#(uri, line, character, include_decl, timeout_ms))
@@ -2385,7 +2401,7 @@ fn decode_format_document_arguments(
     use uri <- decode.field("uri", decode.string)
     use timeout_ms <- decode.optional_field(
       "timeout_ms",
-      format_document.default_timeout_ms,
+      resolve_tool_timeout("format_document", format_document.default_timeout_ms),
       decode.int,
     )
     decode.success(#(uri, timeout_ms))
@@ -2423,7 +2439,7 @@ fn decode_semantic_tokens_arguments(
     use ec <- decode.optional_field("end_character", 0, decode.int)
     use timeout_ms <- decode.optional_field(
       "timeout_ms",
-      semantic_tokens.default_timeout_ms,
+      resolve_tool_timeout("semantic_tokens", semantic_tokens.default_timeout_ms),
       decode.int,
     )
     decode.success(#(uri, sl, sc, el, ec, timeout_ms))
@@ -2448,7 +2464,7 @@ fn decode_inlay_hints_arguments(
     use ec <- decode.field("end_character", decode.int)
     use timeout_ms <- decode.optional_field(
       "timeout_ms",
-      inlay_hints.default_timeout_ms,
+      resolve_tool_timeout("inlay_hints", inlay_hints.default_timeout_ms),
       decode.int,
     )
     decode.success(#(uri, sl, sc, el, ec, timeout_ms))
