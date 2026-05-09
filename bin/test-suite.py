@@ -383,10 +383,12 @@ def _run(spec: LangSpec, requests: list, timeout: int = 60) -> tuple[list, str]:
     # of serial_mode.
     full = [initialize_request(0)] + requests
     if spec.serial_mode and _drive is _stdio_drive:
-        # Per-request timeout = total budget / N, with a floor of 60s
-        # per request to handle individual cold-start work.
-        per_req = max(60, timeout // max(1, len(full)))
-        return _drive_serial({}, full, per_request_timeout=per_req)
+        # Heavy LSPs need a generous per-request budget — cold jdtls
+        # type-hierarchy can take 60s+; ruby-lsp cold goto is similar.
+        # 120s per request × 14 requests (init + 13 tools) = ~28 min
+        # worst-case wall, but most requests resolve fast after the
+        # first warms up.
+        return _drive_serial({}, full, per_request_timeout=120)
     return _drive({}, full, timeout=timeout)
 
 
