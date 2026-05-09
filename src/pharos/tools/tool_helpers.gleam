@@ -7,7 +7,9 @@
 //// MCP dispatch chain.
 
 import gleam/dynamic.{type Dynamic}
+import pharos/lsp/client
 import pharos/lsp/lifecycle
+import pharos/lsp/port
 
 @external(erlang, "erlang", "system_time")
 fn system_time(unit: ErlangTimeUnit) -> Int
@@ -36,13 +38,44 @@ pub fn next_id() -> Int {
 @external(erlang, "pharos_fs_ffi", "encode_json")
 pub fn json_encode(value: Dynamic) -> String
 
+/// Render a request-level error for the LLM. Distinguishes the
+/// shapes the LLM needs to choose its next action:
+///   - `port.Timeout` — the LSP didn't respond in the per-tool
+///     budget. Retry / bump `timeout_ms` / set a session default
+///     via `runtime_set_tool_timeout`.
+///   - `port.PortClosed(_)` — the LSP process exited
+///     unexpectedly. Don't retry blindly; surface as a real
+///     failure.
+///   - `lifecycle.ServerError(_, _)` — the LSP responded with a
+///     JSON-RPC error. The message tells the LLM what's wrong.
+///   - everything else — pass through with a clarifying prefix.
 pub fn describe_request_error(err: lifecycle.RequestError) -> String {
   case err {
-    lifecycle.ClientFailure(_) -> "LSP transport error"
+    lifecycle.ClientFailure(client_err) -> describe_client_error(client_err)
     lifecycle.ResponseDecodeError(reason) ->
       "response decode error: " <> reason
     lifecycle.ServerError(code, message) ->
       "server error " <> int_to_string(code) <> ": " <> message
+  }
+}
+
+fn describe_client_error(err: client.Error) -> String {
+  case err {
+    client.PortReceiveError(port.Timeout) ->
+      "tool timeout: LSP did not respond in time. The LSP may still be "
+      <> "indexing — pass a larger `timeout_ms` on this tool call, or call "
+      <> "`runtime_set_tool_timeout` to raise the default for this session, "
+      <> "or simply retry."
+    client.PortReceiveError(port.PortClosed(status)) ->
+      "LSP process exited unexpectedly (transport closed; exit status "
+      <> int_to_string(status)
+      <> ")"
+    client.PortSendError(_) ->
+      "LSP process exited unexpectedly (send failed; transport closed)"
+    client.FramingError(_) ->
+      "LSP protocol framing error (malformed message from server)"
+    client.SpawnError(_) ->
+      "LSP spawn error (subprocess could not start)"
   }
 }
 

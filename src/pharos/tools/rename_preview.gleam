@@ -29,7 +29,7 @@ import pharos/tools/session
 import pharos/tools/tool_helpers
 import pharos/tools/workspace_edit
 
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type RenamePreviewError {
   SessionFailed(reason: String)
@@ -43,6 +43,7 @@ pub fn handle(
   line: Int,
   character: Int,
   new_name: String,
+  timeout_ms: Int,
 ) -> Result(String, RenamePreviewError) {
   let params =
     json.object([
@@ -71,7 +72,7 @@ pub fn handle(
         capture_handler,
         fn() {
           session.request_with_content_modified_retry(fn() {
-            proc.request(lsp, "textDocument/rename", params, default_timeout_ms)
+            proc.request(lsp, "textDocument/rename", params, timeout_ms)
           })
         },
       )

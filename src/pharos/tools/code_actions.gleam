@@ -25,7 +25,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type CodeActionsError {
   SessionFailed(reason: String)
@@ -39,6 +39,7 @@ pub fn handle(
   start_character: Int,
   end_line: Int,
   end_character: Int,
+  timeout_ms: Int,
 ) -> Result(String, CodeActionsError) {
   let params =
     json.object([
@@ -82,7 +83,7 @@ pub fn handle(
         list.map(servers, fn(entry) {
           let #(server_id, lsp) = entry
           let result = session.request_with_content_modified_retry(fn() {
-            proc.request(lsp, "textDocument/codeAction", params, default_timeout_ms)
+            proc.request(lsp, "textDocument/codeAction", params, timeout_ms)
           })
           #(server_id, result)
         })

@@ -19,7 +19,7 @@ import pharos/tools/tool_helpers
 // previous 5s default too tight when multiple tools fan out at once.
 // 30s matches `find_references`. `request_with_content_modified_retry`
 // still catches the rare mid-call indexing reset.
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type HoverError {
   SessionFailed(reason: String)
@@ -31,6 +31,7 @@ pub fn handle(
   file_uri: String,
   line: Int,
   character: Int,
+  timeout_ms: Int,
 ) -> Result(String, HoverError) {
   let params =
     json.object([
@@ -47,7 +48,7 @@ pub fn handle(
   case
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
       session.request_with_content_modified_retry(fn() {
-        proc.request(lsp, "textDocument/hover", params, default_timeout_ms)
+        proc.request(lsp, "textDocument/hover", params, timeout_ms)
       })
     })
   {

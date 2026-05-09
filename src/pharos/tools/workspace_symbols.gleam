@@ -18,7 +18,7 @@ import pharos/tools/clip
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
-const default_timeout_ms: Int = 10_000
+pub const default_timeout_ms: Int = 30_000
 
 pub const default_limit: Int = 20
 
@@ -33,12 +33,13 @@ pub fn handle(
   query: String,
   limit: Int,
   language: Option(String),
+  timeout_ms: Int,
 ) -> Result(String, WorkspaceSymbolsError) {
   let params = json.object([#("query", json.string(query))])
 
   let body = fn(lsp) {
     session.request_with_content_modified_retry(fn() {
-      proc.request(lsp, "workspace/symbol", params, default_timeout_ms)
+      proc.request(lsp, "workspace/symbol", params, timeout_ms)
     })
   }
 

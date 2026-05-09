@@ -27,7 +27,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type TypeHierarchyError {
   SessionFailed(reason: String)
@@ -43,6 +43,7 @@ pub fn prepare(
   file_uri: String,
   line: Int,
   character: Int,
+  timeout_ms: Int,
 ) -> Result(String, TypeHierarchyError) {
   let params =
     json.object([
@@ -63,7 +64,7 @@ pub fn prepare(
           lsp,
           "textDocument/prepareTypeHierarchy",
           params,
-          default_timeout_ms,
+          timeout_ms,
         )
       })
     })
@@ -79,21 +80,24 @@ pub fn prepare(
 pub fn supertypes(
   pool: Pool,
   item: Dynamic,
+  timeout_ms: Int,
 ) -> Result(String, TypeHierarchyError) {
-  call_with_item(pool, "typeHierarchy/supertypes", item)
+  call_with_item(pool, "typeHierarchy/supertypes", item, timeout_ms)
 }
 
 pub fn subtypes(
   pool: Pool,
   item: Dynamic,
+  timeout_ms: Int,
 ) -> Result(String, TypeHierarchyError) {
-  call_with_item(pool, "typeHierarchy/subtypes", item)
+  call_with_item(pool, "typeHierarchy/subtypes", item, timeout_ms)
 }
 
 fn call_with_item(
   pool: Pool,
   method: String,
   item: Dynamic,
+  timeout_ms: Int,
 ) -> Result(String, TypeHierarchyError) {
   case decode.run(item, item_uri_decoder()) {
     Error(_) ->
@@ -107,7 +111,7 @@ fn call_with_item(
 
       case
         session.with_session_and_retry(pool, file_uri, fn(lsp) {
-          proc.request_raw(lsp, method, params_text, default_timeout_ms)
+          proc.request_raw(lsp, method, params_text, timeout_ms)
         })
       {
         Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))

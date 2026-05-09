@@ -14,7 +14,7 @@ import pharos/tools/tool_helpers
 
 // Same headroom as hover/find_references — 5s is too tight when the
 // proc actor is mid-drain on cold start (M11 polish B1).
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type DocumentSymbolsError {
   SessionFailed(reason: String)
@@ -24,6 +24,7 @@ pub type DocumentSymbolsError {
 pub fn handle(
   pool: Pool,
   file_uri: String,
+  timeout_ms: Int,
 ) -> Result(String, DocumentSymbolsError) {
   let params =
     json.object([
@@ -33,7 +34,7 @@ pub fn handle(
   case
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
       session.request_with_content_modified_retry(fn() {
-        proc.request(lsp, "textDocument/documentSymbol", params, default_timeout_ms)
+        proc.request(lsp, "textDocument/documentSymbol", params, timeout_ms)
       })
     })
   {

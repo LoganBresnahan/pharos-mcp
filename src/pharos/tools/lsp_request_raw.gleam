@@ -24,7 +24,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type LspRequestRawError {
   SessionFailed(reason: String)
@@ -36,12 +36,13 @@ pub fn handle(
   file_uri: String,
   method: String,
   params: Dynamic,
+  timeout_ms: Int,
 ) -> Result(String, LspRequestRawError) {
   let params_json = tool_helpers.json_encode(params)
 
   case
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
-      proc.request_raw(lsp, method, params_json, default_timeout_ms)
+      proc.request_raw(lsp, method, params_json, timeout_ms)
     })
   {
     Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))

@@ -17,7 +17,7 @@ import pharos/tools/tool_helpers
 // Bumped from 5s to 30s for parity with hover/document_symbols.
 // The proc actor serializes concurrent requests; tighter timeouts
 // expire under heavy multi-tool dispatch (M13 testing surfaced).
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type SignatureHelpError {
   SessionFailed(reason: String)
@@ -29,6 +29,7 @@ pub fn handle(
   file_uri: String,
   line: Int,
   character: Int,
+  timeout_ms: Int,
 ) -> Result(String, SignatureHelpError) {
   let params =
     json.object([
@@ -45,7 +46,7 @@ pub fn handle(
   case
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
       session.request_with_content_modified_retry(fn() {
-        proc.request(lsp, "textDocument/signatureHelp", params, default_timeout_ms)
+        proc.request(lsp, "textDocument/signatureHelp", params, timeout_ms)
       })
     })
   {

@@ -319,6 +319,32 @@ fn allowed_tool_definitions() -> List(Json) {
   })
 }
 
+/// Schema entry for the optional `timeout_ms` argument shared by
+/// every LSP-bound tool. The actual default is resolved through the
+/// `[tool_config.<name>]` / `[tool_config.<name>.<lang>]` stack at
+/// dispatch time, so the schema description stays generic.
+fn timeout_ms_property() -> #(String, Json) {
+  #(
+    "timeout_ms",
+    json.object([
+      #("type", json.string("integer")),
+      #(
+        "description",
+        json.string(
+          "Optional. How long pharos waits (in ms) for the LSP to "
+            <> "respond before failing the call. Falls back to the "
+            <> "per-tool default; that default can itself be overridden "
+            <> "in `pharos.toml` via "
+            <> "`[tool_config.<name>] default_timeout_ms` or per-language "
+            <> "via `[tool_config.<name>.<lang>] default_timeout_ms`. "
+            <> "Pass a larger value when the LSP is still cold-indexing "
+            <> "or the workspace is unusually large.",
+        ),
+      ),
+    ]),
+  )
+}
+
 fn position_arg_schema() -> Json {
   json.object([
     #(
@@ -364,6 +390,7 @@ fn position_arg_schema() -> Json {
             ),
           ]),
         ),
+        timeout_ms_property(),
       ]),
     ),
     #(
@@ -515,6 +542,7 @@ fn document_symbols_tool_definition() -> Json {
               "uri",
               json.object([#("type", json.string("string"))]),
             ),
+            timeout_ms_property(),
           ]),
         ),
         #("required", json.array(["uri"], of: json.string)),
@@ -606,6 +634,7 @@ fn workspace_symbols_tool_definition() -> Json {
                 ),
               ]),
             ),
+            timeout_ms_property(),
           ]),
         ),
         #(
@@ -943,11 +972,13 @@ fn resolve_tool_timeout(name: String, compiled: Int) -> Int {
 // -- Tier-1 LSP-backed tool handlers ------------------------------------
 
 fn handle_hover(pool: Pool, id: Id, arguments: Option(Dynamic)) -> String {
-  case decode_position_arguments(arguments) {
+  case
+    decode_position_with_timeout(arguments, "hover", hover.default_timeout_ms)
+  {
     Error(reason) ->
       error_response(Some(id), -32_602, "Invalid hover params: " <> reason)
-    Ok(#(uri, line, character)) ->
-      case hover.handle(pool, uri, line, character) {
+    Ok(#(uri, line, character, timeout_ms)) ->
+      case hover.handle(pool, uri, line, character, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(hover.SessionFailed(reason)) ->
@@ -963,15 +994,21 @@ fn handle_goto_definition(
   id: Id,
   arguments: Option(Dynamic),
 ) -> String {
-  case decode_position_arguments(arguments) {
+  case
+    decode_position_with_timeout(
+      arguments,
+      "goto_definition",
+      goto_definition.default_timeout_ms,
+    )
+  {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid goto_definition params: " <> reason,
       )
-    Ok(#(uri, line, character)) ->
-      case goto_definition.handle(pool, uri, line, character) {
+    Ok(#(uri, line, character, timeout_ms)) ->
+      case goto_definition.handle(pool, uri, line, character, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(goto_definition.SessionFailed(reason)) ->
@@ -1020,15 +1057,21 @@ fn handle_document_symbols(
   id: Id,
   arguments: Option(Dynamic),
 ) -> String {
-  case decode_uri_only_arguments(arguments) {
+  case
+    decode_uri_only_with_timeout(
+      arguments,
+      "document_symbols",
+      document_symbols.default_timeout_ms,
+    )
+  {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid document_symbols params: " <> reason,
       )
-    Ok(uri) ->
-      case document_symbols.handle(pool, uri) {
+    Ok(#(uri, timeout_ms)) ->
+      case document_symbols.handle(pool, uri, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(document_symbols.SessionFailed(reason)) ->
@@ -1051,7 +1094,7 @@ fn handle_workspace_symbols(
         -32_602,
         "Invalid workspace_symbols params: " <> reason,
       )
-    Ok(#(workspace_uri_hint, query, limit, language)) ->
+    Ok(#(workspace_uri_hint, query, limit, language, timeout_ms)) ->
       case
         workspace_symbols.handle(
           pool,
@@ -1059,6 +1102,7 @@ fn handle_workspace_symbols(
           query,
           limit,
           language,
+          timeout_ms,
         )
       {
         Ok(json_text) ->
@@ -1078,15 +1122,23 @@ fn handle_goto_type_definition(
   id: Id,
   arguments: Option(Dynamic),
 ) -> String {
-  case decode_position_arguments(arguments) {
+  case
+    decode_position_with_timeout(
+      arguments,
+      "goto_type_definition",
+      goto_type_definition.default_timeout_ms,
+    )
+  {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid goto_type_definition params: " <> reason,
       )
-    Ok(#(uri, line, character)) ->
-      case goto_type_definition.handle(pool, uri, line, character) {
+    Ok(#(uri, line, character, timeout_ms)) ->
+      case
+        goto_type_definition.handle(pool, uri, line, character, timeout_ms)
+      {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(goto_type_definition.SessionFailed(reason)) ->
@@ -1109,8 +1161,17 @@ fn handle_goto_implementation(
         -32_602,
         "Invalid goto_implementation params: " <> reason,
       )
-    Ok(#(uri, line, character, limit)) ->
-      case goto_implementation.handle(pool, uri, line, character, limit) {
+    Ok(#(uri, line, character, limit, timeout_ms)) ->
+      case
+        goto_implementation.handle(
+          pool,
+          uri,
+          line,
+          character,
+          limit,
+          timeout_ms,
+        )
+      {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(goto_implementation.SessionFailed(reason)) ->
@@ -1126,15 +1187,21 @@ fn handle_signature_help(
   id: Id,
   arguments: Option(Dynamic),
 ) -> String {
-  case decode_position_arguments(arguments) {
+  case
+    decode_position_with_timeout(
+      arguments,
+      "signature_help",
+      signature_help.default_timeout_ms,
+    )
+  {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid signature_help params: " <> reason,
       )
-    Ok(#(uri, line, character)) ->
-      case signature_help.handle(pool, uri, line, character) {
+    Ok(#(uri, line, character, timeout_ms)) ->
+      case signature_help.handle(pool, uri, line, character, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(signature_help.SessionFailed(reason)) ->
@@ -1150,15 +1217,21 @@ fn handle_call_hierarchy_prepare(
   id: Id,
   arguments: Option(Dynamic),
 ) -> String {
-  case decode_position_arguments(arguments) {
+  case
+    decode_position_with_timeout(
+      arguments,
+      "call_hierarchy_prepare",
+      call_hierarchy.default_timeout_ms,
+    )
+  {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid call_hierarchy_prepare params: " <> reason,
       )
-    Ok(#(uri, line, character)) ->
-      case call_hierarchy.prepare(pool, uri, line, character) {
+    Ok(#(uri, line, character, timeout_ms)) ->
+      case call_hierarchy.prepare(pool, uri, line, character, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(call_hierarchy.SessionFailed(reason)) ->
@@ -1175,18 +1248,25 @@ fn handle_call_hierarchy_calls(
   pool: Pool,
   id: Id,
   arguments: Option(Dynamic),
-  call: fn(Pool, Dynamic) -> Result(String, call_hierarchy.CallHierarchyError),
+  call: fn(Pool, Dynamic, Int) ->
+    Result(String, call_hierarchy.CallHierarchyError),
   tool_name: String,
 ) -> String {
-  case decode_call_hierarchy_item_arguments(arguments) {
+  case
+    decode_item_with_timeout(
+      arguments,
+      tool_name,
+      call_hierarchy.default_timeout_ms,
+    )
+  {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid " <> tool_name <> " params: " <> reason,
       )
-    Ok(item) ->
-      case call(pool, item) {
+    Ok(#(item, timeout_ms)) ->
+      case call(pool, item, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(call_hierarchy.SessionFailed(reason)) ->
@@ -1211,8 +1291,10 @@ fn handle_rename_preview(
         -32_602,
         "Invalid rename_preview params: " <> reason,
       )
-    Ok(#(uri, line, character, new_name)) ->
-      case rename_preview.handle(pool, uri, line, character, new_name) {
+    Ok(#(uri, line, character, new_name, timeout_ms)) ->
+      case
+        rename_preview.handle(pool, uri, line, character, new_name, timeout_ms)
+      {
         Ok(rendered) ->
           success_response(id, fn() { tool_text_result(rendered, False) })
         Error(rename_preview.SessionFailed(reason)) ->
@@ -1263,8 +1345,8 @@ fn handle_code_actions(
         -32_602,
         "Invalid code_actions params: " <> reason,
       )
-    Ok(#(uri, sl, sc, el, ec)) ->
-      case code_actions.handle(pool, uri, sl, sc, el, ec) {
+    Ok(#(uri, sl, sc, el, ec, timeout_ms)) ->
+      case code_actions.handle(pool, uri, sl, sc, el, ec, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(code_actions.SessionFailed(reason)) ->
@@ -1280,15 +1362,21 @@ fn handle_type_hierarchy_prepare(
   id: Id,
   arguments: Option(Dynamic),
 ) -> String {
-  case decode_position_arguments(arguments) {
+  case
+    decode_position_with_timeout(
+      arguments,
+      "type_hierarchy_prepare",
+      type_hierarchy.default_timeout_ms,
+    )
+  {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid type_hierarchy_prepare params: " <> reason,
       )
-    Ok(#(uri, line, character)) ->
-      case type_hierarchy.prepare(pool, uri, line, character) {
+    Ok(#(uri, line, character, timeout_ms)) ->
+      case type_hierarchy.prepare(pool, uri, line, character, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(type_hierarchy.SessionFailed(reason)) ->
@@ -1305,18 +1393,25 @@ fn handle_type_hierarchy_calls(
   pool: Pool,
   id: Id,
   arguments: Option(Dynamic),
-  call: fn(Pool, Dynamic) -> Result(String, type_hierarchy.TypeHierarchyError),
+  call: fn(Pool, Dynamic, Int) ->
+    Result(String, type_hierarchy.TypeHierarchyError),
   tool_name: String,
 ) -> String {
-  case decode_call_hierarchy_item_arguments(arguments) {
+  case
+    decode_item_with_timeout(
+      arguments,
+      tool_name,
+      type_hierarchy.default_timeout_ms,
+    )
+  {
     Error(reason) ->
       error_response(
         Some(id),
         -32_602,
         "Invalid " <> tool_name <> " params: " <> reason,
       )
-    Ok(item) ->
-      case call(pool, item) {
+    Ok(#(item, timeout_ms)) ->
+      case call(pool, item, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(type_hierarchy.SessionFailed(reason)) ->
@@ -1415,8 +1510,8 @@ fn handle_lsp_request_raw(
         -32_602,
         "Invalid lsp_request_raw params: " <> reason,
       )
-    Ok(#(uri, method, params)) ->
-      case lsp_request_raw.handle(pool, uri, method, params) {
+    Ok(#(uri, method, params, timeout_ms)) ->
+      case lsp_request_raw.handle(pool, uri, method, params, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(lsp_request_raw.SessionFailed(reason)) ->
@@ -1521,6 +1616,7 @@ fn goto_implementation_tool_definition() -> Json {
                 ),
               ]),
             ),
+            timeout_ms_property(),
           ]),
         ),
         #(
@@ -1623,6 +1719,7 @@ fn call_hierarchy_calls_tool_definition(
                 ),
               ]),
             ),
+            timeout_ms_property(),
           ]),
         ),
         #("required", json.preprocessed_array([json.string("item")])),
@@ -1695,6 +1792,7 @@ fn rename_preview_tool_definition() -> Json {
                 ),
               ]),
             ),
+            timeout_ms_property(),
           ]),
         ),
         #(
@@ -1839,6 +1937,7 @@ fn type_hierarchy_calls_tool_definition(
                 ),
               ]),
             ),
+            timeout_ms_property(),
           ]),
         ),
         #("required", json.preprocessed_array([json.string("item")])),
@@ -2196,6 +2295,7 @@ fn lsp_request_raw_tool_definition() -> Json {
                 ),
               ]),
             ),
+            timeout_ms_property(),
           ]),
         ),
         #(
@@ -2259,6 +2359,7 @@ fn code_actions_tool_definition() -> Json {
               "end_character",
               json.object([#("type", json.string("integer"))]),
             ),
+            timeout_ms_property(),
           ]),
         ),
         #(
@@ -2278,19 +2379,32 @@ fn code_actions_tool_definition() -> Json {
 
 // -- Argument decoders --------------------------------------------------
 
-fn decode_position_arguments(
+/// Position-shape decoder with `timeout_ms` fall-through. Used by
+/// hover, goto_*, signature_help, call_hierarchy_prepare, and
+/// type_hierarchy_prepare. Resolves the default through the
+/// per-tool config layer (Phase 12) so `[tool_config.<name>]`
+/// applies even when the LLM doesn't pass `timeout_ms`.
+fn decode_position_with_timeout(
   args: Option(Dynamic),
-) -> Result(#(String, Int, Int), String) {
+  tool_name: String,
+  default: Int,
+) -> Result(#(String, Int, Int, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
     use line <- decode.field("line", decode.int)
     use character <- decode.field("character", decode.int)
-    decode.success(#(uri, line, character))
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      resolve_tool_timeout(tool_name, default),
+      decode.int,
+    )
+    decode.success(#(uri, line, character, timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
-    "expected `uri: string`, `line: int`, `character: int`"
+    "expected `uri: string`, `line: int`, `character: int`, "
+    <> "optional `timeout_ms: int`"
   })
 }
 
@@ -2322,39 +2436,55 @@ fn decode_find_references_arguments(
   })
 }
 
-fn decode_uri_only_arguments(
+/// `uri`-only decoder with `timeout_ms` fall-through. Used by
+/// document_symbols.
+fn decode_uri_only_with_timeout(
   args: Option(Dynamic),
-) -> Result(String, String) {
+  tool_name: String,
+  default: Int,
+) -> Result(#(String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
-    decode.success(uri)
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      resolve_tool_timeout(tool_name, default),
+      decode.int,
+    )
+    decode.success(#(uri, timeout_ms))
   }
   decode.run(raw, decoder)
-  |> result.map_error(fn(_) { "expected `uri: string`" })
+  |> result.map_error(fn(_) {
+    "expected `uri: string`, optional `timeout_ms: int`"
+  })
 }
 
 fn decode_rename_arguments(
   args: Option(Dynamic),
-) -> Result(#(String, Int, Int, String), String) {
+) -> Result(#(String, Int, Int, String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
     use line <- decode.field("line", decode.int)
     use character <- decode.field("character", decode.int)
     use new_name <- decode.field("new_name", decode.string)
-    decode.success(#(uri, line, character, new_name))
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      resolve_tool_timeout("rename_preview", rename_preview.default_timeout_ms),
+      decode.int,
+    )
+    decode.success(#(uri, line, character, new_name, timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
     "expected `uri: string`, `line: int`, `character: int`, "
-    <> "`new_name: string`"
+    <> "`new_name: string`, optional `timeout_ms: int`"
   })
 }
 
 fn decode_code_actions_arguments(
   args: Option(Dynamic),
-) -> Result(#(String, Int, Int, Int, Int), String) {
+) -> Result(#(String, Int, Int, Int, Int, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
@@ -2362,18 +2492,23 @@ fn decode_code_actions_arguments(
     use sc <- decode.field("start_character", decode.int)
     use el <- decode.field("end_line", decode.int)
     use ec <- decode.field("end_character", decode.int)
-    decode.success(#(uri, sl, sc, el, ec))
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      resolve_tool_timeout("code_actions", code_actions.default_timeout_ms),
+      decode.int,
+    )
+    decode.success(#(uri, sl, sc, el, ec, timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
     "expected `uri: string`, `start_line/start_character: int`, "
-    <> "`end_line/end_character: int`"
+    <> "`end_line/end_character: int`, optional `timeout_ms: int`"
   })
 }
 
 fn decode_goto_implementation_arguments(
   args: Option(Dynamic),
-) -> Result(#(String, Int, Int, Int), String) {
+) -> Result(#(String, Int, Int, Int, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
@@ -2384,12 +2519,20 @@ fn decode_goto_implementation_arguments(
       goto_implementation.default_limit,
       decode.int,
     )
-    decode.success(#(uri, line, character, limit))
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      resolve_tool_timeout(
+        "goto_implementation",
+        goto_implementation.default_timeout_ms,
+      ),
+      decode.int,
+    )
+    decode.success(#(uri, line, character, limit, timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
     "expected `uri: string`, `line: int`, `character: int`, "
-    <> "optional `limit: int`"
+    <> "optional `limit: int`, optional `timeout_ms: int`"
   })
 }
 
@@ -2412,18 +2555,31 @@ fn decode_format_document_arguments(
   })
 }
 
-fn decode_call_hierarchy_item_arguments(
+/// Decoder for the chained call/type hierarchy follow-up tools.
+/// Shared by both families because the LSP `item` shape is
+/// structurally identical. Carries the per-tool `timeout_ms` fall-
+/// through so each dispatcher can use its own
+/// `[tool_config.<name>]` default.
+fn decode_item_with_timeout(
   args: Option(Dynamic),
-) -> Result(Dynamic, String) {
+  tool_name: String,
+  default: Int,
+) -> Result(#(Dynamic, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use item <- decode.field("item", decode.dynamic)
-    decode.success(unstringify_if_needed(item))
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      resolve_tool_timeout(tool_name, default),
+      decode.int,
+    )
+    decode.success(#(unstringify_if_needed(item), timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
-    "expected `item: <CallHierarchyItem>` "
-    <> "(round-trip an object returned by call_hierarchy_prepare)"
+    "expected `item: <CallHierarchyItem | TypeHierarchyItem>` "
+    <> "(round-trip an object returned by *_prepare), "
+    <> "optional `timeout_ms: int`"
   })
 }
 
@@ -2493,17 +2649,26 @@ fn decode_apply_workspace_edit_arguments(
 
 fn decode_lsp_request_raw_arguments(
   args: Option(Dynamic),
-) -> Result(#(String, String, Dynamic), String) {
+) -> Result(#(String, String, Dynamic, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
     use method <- decode.field("method", decode.string)
     use params <- decode.field("params", decode.dynamic)
-    decode.success(#(uri, method, unstringify_if_needed(params)))
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      resolve_tool_timeout(
+        "lsp_request_raw",
+        lsp_request_raw.default_timeout_ms,
+      ),
+      decode.int,
+    )
+    decode.success(#(uri, method, unstringify_if_needed(params), timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
-    "expected `uri: string`, `method: string`, `params: any`"
+    "expected `uri: string`, `method: string`, `params: any`, "
+    <> "optional `timeout_ms: int`"
   })
 }
 
@@ -2530,7 +2695,7 @@ fn unstringify_if_needed(value: Dynamic) -> Dynamic {
 
 fn decode_workspace_symbols_arguments(
   args: Option(Dynamic),
-) -> Result(#(String, String, Int, Option(String)), String) {
+) -> Result(#(String, String, Int, Option(String), Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use hint <- decode.field("workspace_uri_hint", decode.string)
@@ -2545,12 +2710,21 @@ fn decode_workspace_symbols_arguments(
       None,
       decode.map(decode.string, Some),
     )
-    decode.success(#(hint, query, limit, language))
+    use timeout_ms <- decode.optional_field(
+      "timeout_ms",
+      resolve_tool_timeout(
+        "workspace_symbols",
+        workspace_symbols.default_timeout_ms,
+      ),
+      decode.int,
+    )
+    decode.success(#(hint, query, limit, language, timeout_ms))
   }
   decode.run(raw, decoder)
   |> result.map_error(fn(_) {
     "expected `workspace_uri_hint: string`, `query: string`, "
-    <> "optional `limit: int`, optional `language: string`"
+    <> "optional `limit: int`, optional `language: string`, "
+    <> "optional `timeout_ms: int`"
   })
 }
 

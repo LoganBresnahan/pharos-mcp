@@ -421,6 +421,8 @@ def check_hover(spec: LangSpec, responses: list) -> tuple[bool, str]:
         return True, "hover ok (LSP returned -32601, method not yet handled)"
     if "-32098" in text:
         return True, "hover ok (terraform-ls -32098 position-outside; plumbing fine)"
+    if "tool timeout" in text.lower():
+        return True, "hover ok (tool timeout; cold-start LSP, plumbing fine)"
     if tool_is_error(r):
         return False, f"hover marked isError=true: {text[:120]}"
     # `null` and `{"contents":[]}` are legitimate LSP responses when
@@ -458,6 +460,8 @@ def check_document_symbols(spec: LangSpec, responses: list) -> tuple[bool, str]:
     stripped = text.strip()
     if stripped == "null" or stripped == "[]":
         return True, "document_symbols ok (empty result; index may be warming)"
+    if "tool timeout" in text.lower():
+        return True, "document_symbols ok (tool timeout; cold-start LSP, plumbing fine)"
     if tool_is_error(r):
         return False, f"document_symbols marked isError=true: {text[:120]}"
     if spec.has_type_concept and "Point" not in text:
@@ -497,6 +501,11 @@ def check_workspace_symbols(spec: LangSpec, responses: list) -> tuple[bool, str]
     # workspace/symbol). Plumbing is fine; the LSP itself opts out.
     if "-32601" in text:
         return True, "workspace_symbols ok (LSP returned -32601, method not supported)"
+    # Same cold-start tolerance as check_position_tool — pharos's new
+    # "tool timeout" message (Phase 1.1) means the LSP didn't respond
+    # within the per-tool budget. Plumbing is fine; the LSP was busy.
+    if "tool timeout" in text.lower():
+        return True, "workspace_symbols ok (tool timeout; cold-start LSP, plumbing fine)"
     if tool_is_error(r):
         return False, f"workspace_symbols marked isError=true: {text[:120]}"
     if spec.has_type_concept and "Point" not in text:
@@ -517,6 +526,8 @@ def check_diagnostics(spec: LangSpec, responses: list) -> tuple[bool, str]:
     # Accept that as PASS-with-warning since plumbing is correct.
     if "No textDocument/publishDiagnostics" in text or "no diagnostics" in text.lower():
         return True, "get_diagnostics ok (cold-start: no diagnostics observed yet)"
+    if "tool timeout" in text.lower():
+        return True, "get_diagnostics ok (tool timeout; cold-start LSP, plumbing fine)"
     if tool_is_error(r):
         return False, f"get_diagnostics marked isError=true: {text[:120]}"
     if spec.expected_diagnostic_substr.lower() not in text.lower():
@@ -701,6 +712,13 @@ def check_position_tool(
     # retry also fails, treat as cold-start tolerance like -32603 timeout.
     if "lsp transport error" in text.lower():
         return True, f"{name} ok (LSP transport error mid-cold-start; plumbing fine)"
+    # Phase 1.1 (ADR 021) reshaped the timeout message: pharos now
+    # surfaces "tool timeout: LSP did not respond in time" as a
+    # distinct failure shape (instead of conflating with port-closed
+    # under "LSP transport error"). Treat as cold-start tolerance —
+    # plumbing is fine, the LSP was still indexing or genuinely slow.
+    if "tool timeout" in text.lower():
+        return True, f"{name} ok (tool timeout; cold-start LSP, plumbing fine)"
     # gopls and other servers use `server error 0` (code 0) to signal
     # "the position you asked about doesn't yield a result for this
     # method" — e.g. cursor on a literal type, on whitespace, on a

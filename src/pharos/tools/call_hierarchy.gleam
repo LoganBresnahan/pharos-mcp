@@ -23,7 +23,7 @@ import pharos/tools/tool_helpers
 // Bumped from 5s to 30s for parity with hover/document_symbols.
 // The proc actor serializes concurrent requests; tighter timeouts
 // expire under heavy multi-tool dispatch (M13 testing surfaced).
-const default_timeout_ms: Int = 30_000
+pub const default_timeout_ms: Int = 30_000
 
 pub type CallHierarchyError {
   SessionFailed(reason: String)
@@ -39,6 +39,7 @@ pub fn prepare(
   file_uri: String,
   line: Int,
   character: Int,
+  timeout_ms: Int,
 ) -> Result(String, CallHierarchyError) {
   let params =
     json.object([
@@ -59,7 +60,7 @@ pub fn prepare(
           lsp,
           "textDocument/prepareCallHierarchy",
           params,
-          default_timeout_ms,
+          timeout_ms,
         )
       })
     })
@@ -75,21 +76,24 @@ pub fn prepare(
 pub fn incoming_calls(
   pool: Pool,
   item: Dynamic,
+  timeout_ms: Int,
 ) -> Result(String, CallHierarchyError) {
-  call_with_item(pool, "callHierarchy/incomingCalls", item)
+  call_with_item(pool, "callHierarchy/incomingCalls", item, timeout_ms)
 }
 
 pub fn outgoing_calls(
   pool: Pool,
   item: Dynamic,
+  timeout_ms: Int,
 ) -> Result(String, CallHierarchyError) {
-  call_with_item(pool, "callHierarchy/outgoingCalls", item)
+  call_with_item(pool, "callHierarchy/outgoingCalls", item, timeout_ms)
 }
 
 fn call_with_item(
   pool: Pool,
   method: String,
   item: Dynamic,
+  timeout_ms: Int,
 ) -> Result(String, CallHierarchyError) {
   case decode.run(item, item_uri_decoder()) {
     Error(_) ->
@@ -105,7 +109,7 @@ fn call_with_item(
 
       case
         session.with_session_and_retry(pool, file_uri, fn(lsp) {
-          proc.request_raw(lsp, method, params_text, default_timeout_ms)
+          proc.request_raw(lsp, method, params_text, timeout_ms)
         })
       {
         Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
