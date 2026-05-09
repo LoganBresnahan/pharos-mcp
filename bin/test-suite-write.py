@@ -39,6 +39,7 @@ import importlib.util  # noqa: E402
 _spec_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-suite.py")
 _spec = importlib.util.spec_from_file_location("_test_suite", _spec_path)
 _test_suite = importlib.util.module_from_spec(_spec)
+sys.modules["_test_suite"] = _test_suite  # dataclass needs cls.__module__ resolvable
 _spec.loader.exec_module(_test_suite)
 SPECS = _test_suite.SPECS
 
