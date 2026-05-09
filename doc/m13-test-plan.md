@@ -463,6 +463,10 @@ the SUFFICIENT-ON-USEFULNESS gate. Both required.
 | 13 — Phase 1+2 timeout rework (ADR 021) | DONE | Fix A error rendering, ws_symbols 30s, Phase 12b wires `timeout_ms` through every LSP-bound tool, `[tool_config.<name>.<lang>]` per-tool×per-lang, `runtime_set_tool_timeout` MCP tool. 6/6 cells in test-tool-config + 16/16 debug |
 | 14 — Phase 3 logging (ADR 022) | DONE | file rotation (`file_max_bytes` / `file_keep_rotated`), ring `tail_by_target_prefix`, `fields_at` structured-fields canonical for new code |
 | 15 — Phase 4 introspection (ADR 022) | DONE | `runtime_effective_tool_config` MCP tool surfaces session_overrides + toml_overrides + computed effective_summary with source attribution. 6/6 in test-tool-config |
+| 16 — log rotation test + writer init bug fix | DONE | Latent `RawFileIoDelayed.NotOnControllingProcess` bug surfaced by adding the rotation test. Refactored `writer.start*` to use `actor.new_with_initialiser` so file_sink_open runs on the actor process. 91/91 gleeunit |
+| 17 — perl find_references serial-cap bump | DONE | `LangSpec.serial_per_request_timeout` (default 120s); perl set to 240s. PLS indexes whole project on first cross-file query — no longer hits the cap |
+| 18 — bulk migration of string-jammed log sites to fields_at | DONE | ADR 022 follow-up. 10 source files, ~25 sites. Asserted-anchor tokens preserved in message body so existing test greps still match |
+| Final regression after Phases 1-4 + bonuses | DONE | Dev stdio 312/312, Dev HTTP 311/312 (ELP cold-start flake), Burrito stdio 312/312, Burrito HTTP 312/312. 1247/1248 = 99.92% |
 
 Known transients (LSP-side, not pharos):
 - `gleam.workspace_symbols` — gleam-lsp returns transport error on
