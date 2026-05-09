@@ -158,11 +158,18 @@ pub type LanguageOverride {
   )
 }
 
-/// Per-tool config knobs — `[tools.<name>]` blocks in pharos.toml.
-/// Currently carries only `default_timeout_ms`; designed to accept
-/// future tool-level fields without churning every callsite.
+/// Per-tool config knobs — `[tool_config.<name>]` blocks in
+/// pharos.toml. Carries `default_timeout_ms` plus an optional
+/// `languages` sub-map for per-tool × per-language overrides
+/// (`[tool_config.<name>.<lang>]`). The recursion lets a future
+/// per-lang block carry its own `default_timeout_ms` independent
+/// of the global per-tool default. Resolution: per-lang wins over
+/// per-tool global.
 pub type ToolConfig {
-  ToolConfig(default_timeout_ms: Option(Int))
+  ToolConfig(
+    default_timeout_ms: Option(Int),
+    languages: Dict(String, ToolConfig),
+  )
 }
 
 pub type Config {
@@ -175,22 +182,42 @@ pub type Config {
     runtime: RuntimeConfig,
     bridge: BridgeConfig,
     languages: Dict(String, LanguageOverride),
-    /// `[tools.<name>] default_timeout_ms = N` block. Looks up by
-    /// MCP tool name (e.g. `"hover"`, `"format_document"`). Empty by
-    /// default; users opt-in to tune per-tool defaults without
-    /// passing `timeout_ms` on every call.
+    /// `[tool_config.<name>] default_timeout_ms = N` block plus
+    /// per-tool × per-language overrides via
+    /// `[tool_config.<name>.<lang>] default_timeout_ms = N`. Looks
+    /// up by MCP tool name (e.g. `"hover"`, `"format_document"`);
+    /// the optional language id walks the same registry as
+    /// `[languages.<id>]`. Empty by default.
     tool_config: Dict(String, ToolConfig),
   )
 }
 
-/// Effective default timeout for a tool name. Looks up the user
-/// override; returns `None` so the caller falls back to the
-/// compiled-in const (each tool's `default_timeout_ms`).
-pub fn tool_default_timeout_ms(name: String) -> Option(Int) {
+/// Effective default timeout for a tool name, optionally narrowed
+/// to a language id. Resolution order: per-tool × per-language
+/// override → per-tool global → `None` (caller falls back to the
+/// compiled-in const). Language id matches the language registry
+/// key (e.g. `"rust"`, `"python"`, `"java"`).
+pub fn tool_default_timeout_ms(
+  name: String,
+  lang: Option(String),
+) -> Option(Int) {
   let cfg = cached()
   case dict.get(cfg.tool_config, name) {
     Error(_) -> None
-    Ok(tc) -> tc.default_timeout_ms
+    Ok(tc) -> {
+      let per_lang = case lang {
+        None -> None
+        Some(l) ->
+          case dict.get(tc.languages, l) {
+            Error(_) -> None
+            Ok(lang_tc) -> lang_tc.default_timeout_ms
+          }
+      }
+      case per_lang {
+        Some(_) -> per_lang
+        None -> tc.default_timeout_ms
+      }
+    }
   }
 }
 
@@ -438,8 +465,45 @@ fn apply_section_tool_config(config: Config, parsed: Dynamic) -> Config {
   }
 }
 
+/// Parse a `[tool_config.<name>]` block. Reads
+/// `default_timeout_ms` if present; treats every other sub-table
+/// as a per-language override (`[tool_config.<name>.<lang>]`)
+/// recursively decoded into `languages`. Per-lang sub-blocks may
+/// themselves carry `default_timeout_ms`; further nesting is
+/// permitted by the type but not exercised today.
 fn decode_tool_config(value: Dynamic) -> ToolConfig {
-  ToolConfig(default_timeout_ms: decode_optional_int(value, "default_timeout_ms"))
+  let default_timeout_ms = decode_optional_int(value, "default_timeout_ms")
+  let languages = case
+    decode.run(value, decode.dict(decode.string, decode.dynamic))
+  {
+    Error(_) -> dict.new()
+    Ok(raw) ->
+      raw
+      |> dict.to_list
+      |> list.filter_map(fn(pair) {
+        let #(key, sub_value) = pair
+        case key {
+          // `default_timeout_ms` is a scalar already consumed above.
+          "default_timeout_ms" -> Error(Nil)
+          _ -> {
+            // Anything else is treated as a per-lang sub-table —
+            // skip values that aren't dict-shaped (stray scalars
+            // shouldn't error the boot, just get ignored).
+            case
+              decode.run(
+                sub_value,
+                decode.dict(decode.string, decode.dynamic),
+              )
+            {
+              Error(_) -> Error(Nil)
+              Ok(_) -> Ok(#(key, decode_tool_config(sub_value)))
+            }
+          }
+        }
+      })
+      |> dict.from_list
+  }
+  ToolConfig(default_timeout_ms: default_timeout_ms, languages: languages)
 }
 
 fn apply_top_transport(config: Config, parsed: Dynamic) -> Config {

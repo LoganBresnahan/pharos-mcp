@@ -468,14 +468,24 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # diagnostics_mode = \"push\"
 
 # [tool_config.<name>] — per-tool default_timeout_ms override.
-# Wired today for the five tools whose schemas accept `timeout_ms`:
-# get_diagnostics, find_references, format_document, semantic_tokens,
-# inlay_hints. Resolution: compile-time default → this knob → per-call
-# `timeout_ms` argument (later wins).
+# Every LSP-bound tool accepts `timeout_ms` per call; this is the
+# fallback when the LLM does not pass one. Resolution order (later
+# wins): compile-time default → this knob → per-tool x per-lang
+# below → per-call `timeout_ms` argument.
 #
 # [tool_config.format_document]
 # default_timeout_ms = 90000
 #
 # [tool_config.find_references]
 # default_timeout_ms = 120000
+#
+# [tool_config.<name>.<lang>] — per-tool x per-language override.
+# Same shape, narrower scope. Useful for heavy single-LSP cases
+# without bumping defaults for everyone.
+#
+# [tool_config.find_references.java]
+# default_timeout_ms = 120000
+#
+# [tool_config.workspace_symbols.go]
+# default_timeout_ms = 90000
 "

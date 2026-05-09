@@ -19,8 +19,10 @@ import gleam/result
 import pharos/config
 import pharos/log
 import pharos/lsp/inflight
+import pharos/lsp/languages
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
+import pharos/lsp/registry
 import pharos/mcp/content_block
 import pharos/mcp/request_workers
 import pharos/tools/diagnostics
@@ -941,31 +943,89 @@ fn decode_get_diagnostics_arguments(
   args: Option(Dynamic),
 ) -> Result(#(String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
-  let fallback = resolve_tool_timeout("get_diagnostics", 20_000)
   let decoder = {
     use uri <- decode.field("uri", decode.string)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      fallback,
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, timeout_ms))
+    decode.success(#(uri, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) { "expected `uri: string` (and optional `timeout_ms: int`)" })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, timeout_arg)) ->
+      Ok(#(
+        uri,
+        finalize_timeout("get_diagnostics", 20_000, uri, timeout_arg),
+      ))
+    Error(_) ->
+      Error(
+        "expected `uri: string` (and optional `timeout_ms: int`)",
+      )
+  }
 }
 
-/// Resolve effective `default_timeout_ms` for a tool. Order:
-///   1. user-passed `timeout_ms` arg (handled by `optional_field`)
-///   2. `[tool_config.<name>] default_timeout_ms = N` in pharos.toml
-///   3. compiled-in const (each tool's `default_timeout_ms`)
+/// Resolve effective `default_timeout_ms` for a tool, optionally
+/// narrowed to a language. Order:
+///   1. user-passed `timeout_ms` arg (handled by the decoder's
+///      `optional_field`; this resolver only runs when the user
+///      didn't supply a value)
+///   2. `[tool_config.<name>.<lang>] default_timeout_ms = N`
+///   3. `[tool_config.<name>] default_timeout_ms = N`
+///   4. compiled-in const (each tool's `default_timeout_ms`)
 ///
-/// Called inside each decoder's fallback slot so the user-passed
-/// value still wins via `optional_field`. Phase 12 of M13 testing.
-fn resolve_tool_timeout(name: String, compiled: Int) -> Int {
-  case config.tool_default_timeout_ms(name) {
+/// Decoders that have a URI in scope pass `Some(lang_id)` after
+/// classifying the URI via `lang_from_uri`. Decoders without a URI
+/// (chained item-shape tools, debug tools) pass `None` and skip the
+/// per-lang layer.
+fn resolve_tool_timeout(
+  name: String,
+  lang: Option(String),
+  compiled: Int,
+) -> Int {
+  case config.tool_default_timeout_ms(name, lang) {
     Some(n) -> n
     None -> compiled
+  }
+}
+
+/// Classify a URI to its registered language id by file extension.
+/// Returns `None` when the URI doesn't start with `file://` or no
+/// bundled language claims the extension. Used by every decoder
+/// that wants per-tool × per-lang resolution.
+fn lang_from_uri(uri: String) -> Option(String) {
+  case languages.for_uri(registry.cached(), uri) {
+    Ok(config) -> Some(config.id)
+    Error(_) -> None
+  }
+}
+
+/// Finalize the per-call `timeout_ms` for a URI-bearing tool. If the
+/// LLM passed an explicit `timeout_ms`, that wins. Otherwise resolve
+/// through the per-tool × per-lang stack using the URI's classified
+/// language.
+fn finalize_timeout(
+  tool_name: String,
+  default: Int,
+  uri: String,
+  user_arg: Option(Int),
+) -> Int {
+  case user_arg {
+    Some(n) -> n
+    None -> resolve_tool_timeout(tool_name, lang_from_uri(uri), default)
+  }
+}
+
+/// Same as `finalize_timeout` but without a URI in scope (chained
+/// item-shape tools, debug tools). Skips the per-lang layer.
+fn finalize_timeout_no_lang(
+  tool_name: String,
+  default: Int,
+  user_arg: Option(Int),
+) -> Int {
+  case user_arg {
+    Some(n) -> n
+    None -> resolve_tool_timeout(tool_name, None, default)
   }
 }
 
@@ -2381,9 +2441,9 @@ fn code_actions_tool_definition() -> Json {
 
 /// Position-shape decoder with `timeout_ms` fall-through. Used by
 /// hover, goto_*, signature_help, call_hierarchy_prepare, and
-/// type_hierarchy_prepare. Resolves the default through the
-/// per-tool config layer (Phase 12) so `[tool_config.<name>]`
-/// applies even when the LLM doesn't pass `timeout_ms`.
+/// type_hierarchy_prepare. Resolves the default through the per-
+/// tool × per-lang config stack (ADR 021) using the file URI to
+/// classify the language; per-call `timeout_ms` always wins.
 fn decode_position_with_timeout(
   args: Option(Dynamic),
   tool_name: String,
@@ -2394,18 +2454,27 @@ fn decode_position_with_timeout(
     use uri <- decode.field("uri", decode.string)
     use line <- decode.field("line", decode.int)
     use character <- decode.field("character", decode.int)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout(tool_name, default),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, line, character, timeout_ms))
+    decode.success(#(uri, line, character, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, `line: int`, `character: int`, "
-    <> "optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, line, char, timeout_arg)) ->
+      Ok(#(uri, line, char, finalize_timeout(
+        tool_name,
+        default,
+        uri,
+        timeout_arg,
+      )))
+    Error(_) ->
+      Error(
+        "expected `uri: string`, `line: int`, `character: int`, "
+        <> "optional `timeout_ms: int`",
+      )
+  }
 }
 
 fn decode_find_references_arguments(
@@ -2421,19 +2490,34 @@ fn decode_find_references_arguments(
       True,
       decode.bool,
     )
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout("find_references", find_references.default_timeout_ms),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, line, character, include_decl, timeout_ms))
+    decode.success(#(uri, line, character, include_decl, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, `line: int`, `character: int`, "
-    <> "optional `include_declaration: bool`, "
-    <> "optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, line, char, incl, timeout_arg)) ->
+      Ok(#(
+        uri,
+        line,
+        char,
+        incl,
+        finalize_timeout(
+          "find_references",
+          find_references.default_timeout_ms,
+          uri,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error(
+        "expected `uri: string`, `line: int`, `character: int`, "
+        <> "optional `include_declaration: bool`, "
+        <> "optional `timeout_ms: int`",
+      )
+  }
 }
 
 /// `uri`-only decoder with `timeout_ms` fall-through. Used by
@@ -2446,17 +2530,19 @@ fn decode_uri_only_with_timeout(
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout(tool_name, default),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, timeout_ms))
+    decode.success(#(uri, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, timeout_arg)) ->
+      Ok(#(uri, finalize_timeout(tool_name, default, uri, timeout_arg)))
+    Error(_) ->
+      Error("expected `uri: string`, optional `timeout_ms: int`")
+  }
 }
 
 fn decode_rename_arguments(
@@ -2468,18 +2554,33 @@ fn decode_rename_arguments(
     use line <- decode.field("line", decode.int)
     use character <- decode.field("character", decode.int)
     use new_name <- decode.field("new_name", decode.string)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout("rename_preview", rename_preview.default_timeout_ms),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, line, character, new_name, timeout_ms))
+    decode.success(#(uri, line, character, new_name, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, `line: int`, `character: int`, "
-    <> "`new_name: string`, optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, line, char, new_name, timeout_arg)) ->
+      Ok(#(
+        uri,
+        line,
+        char,
+        new_name,
+        finalize_timeout(
+          "rename_preview",
+          rename_preview.default_timeout_ms,
+          uri,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error(
+        "expected `uri: string`, `line: int`, `character: int`, "
+        <> "`new_name: string`, optional `timeout_ms: int`",
+      )
+  }
 }
 
 fn decode_code_actions_arguments(
@@ -2492,18 +2593,34 @@ fn decode_code_actions_arguments(
     use sc <- decode.field("start_character", decode.int)
     use el <- decode.field("end_line", decode.int)
     use ec <- decode.field("end_character", decode.int)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout("code_actions", code_actions.default_timeout_ms),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, sl, sc, el, ec, timeout_ms))
+    decode.success(#(uri, sl, sc, el, ec, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, `start_line/start_character: int`, "
-    <> "`end_line/end_character: int`, optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, sl, sc, el, ec, timeout_arg)) ->
+      Ok(#(
+        uri,
+        sl,
+        sc,
+        el,
+        ec,
+        finalize_timeout(
+          "code_actions",
+          code_actions.default_timeout_ms,
+          uri,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error(
+        "expected `uri: string`, `start_line/start_character: int`, "
+        <> "`end_line/end_character: int`, optional `timeout_ms: int`",
+      )
+  }
 }
 
 fn decode_goto_implementation_arguments(
@@ -2519,21 +2636,33 @@ fn decode_goto_implementation_arguments(
       goto_implementation.default_limit,
       decode.int,
     )
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout(
-        "goto_implementation",
-        goto_implementation.default_timeout_ms,
-      ),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, line, character, limit, timeout_ms))
+    decode.success(#(uri, line, character, limit, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, `line: int`, `character: int`, "
-    <> "optional `limit: int`, optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, line, char, limit, timeout_arg)) ->
+      Ok(#(
+        uri,
+        line,
+        char,
+        limit,
+        finalize_timeout(
+          "goto_implementation",
+          goto_implementation.default_timeout_ms,
+          uri,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error(
+        "expected `uri: string`, `line: int`, `character: int`, "
+        <> "optional `limit: int`, optional `timeout_ms: int`",
+      )
+  }
 }
 
 fn decode_format_document_arguments(
@@ -2542,17 +2671,27 @@ fn decode_format_document_arguments(
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use uri <- decode.field("uri", decode.string)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout("format_document", format_document.default_timeout_ms),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, timeout_ms))
+    decode.success(#(uri, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, timeout_arg)) ->
+      Ok(#(
+        uri,
+        finalize_timeout(
+          "format_document",
+          format_document.default_timeout_ms,
+          uri,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error("expected `uri: string`, optional `timeout_ms: int`")
+  }
 }
 
 /// Decoder for the chained call/type hierarchy follow-up tools.
@@ -2568,19 +2707,23 @@ fn decode_item_with_timeout(
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
     use item <- decode.field("item", decode.dynamic)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout(tool_name, default),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(unstringify_if_needed(item), timeout_ms))
+    decode.success(#(unstringify_if_needed(item), timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `item: <CallHierarchyItem | TypeHierarchyItem>` "
-    <> "(round-trip an object returned by *_prepare), "
-    <> "optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(item, timeout_arg)) ->
+      Ok(#(item, finalize_timeout_no_lang(tool_name, default, timeout_arg)))
+    Error(_) ->
+      Error(
+        "expected `item: <CallHierarchyItem | TypeHierarchyItem>` "
+        <> "(round-trip an object returned by *_prepare), "
+        <> "optional `timeout_ms: int`",
+      )
+  }
 }
 
 fn decode_semantic_tokens_arguments(
@@ -2593,19 +2736,35 @@ fn decode_semantic_tokens_arguments(
     use sc <- decode.optional_field("start_character", 0, decode.int)
     use el <- decode.optional_field("end_line", 0, decode.int)
     use ec <- decode.optional_field("end_character", 0, decode.int)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout("semantic_tokens", semantic_tokens.default_timeout_ms),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, sl, sc, el, ec, timeout_ms))
+    decode.success(#(uri, sl, sc, el, ec, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, optional `start_line/start_character/"
-    <> "end_line/end_character: int` (omit all four for /full), "
-    <> "optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, sl, sc, el, ec, timeout_arg)) ->
+      Ok(#(
+        uri,
+        sl,
+        sc,
+        el,
+        ec,
+        finalize_timeout(
+          "semantic_tokens",
+          semantic_tokens.default_timeout_ms,
+          uri,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error(
+        "expected `uri: string`, optional `start_line/start_character/"
+        <> "end_line/end_character: int` (omit all four for /full), "
+        <> "optional `timeout_ms: int`",
+      )
+  }
 }
 
 fn decode_inlay_hints_arguments(
@@ -2618,18 +2777,34 @@ fn decode_inlay_hints_arguments(
     use sc <- decode.field("start_character", decode.int)
     use el <- decode.field("end_line", decode.int)
     use ec <- decode.field("end_character", decode.int)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout("inlay_hints", inlay_hints.default_timeout_ms),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, sl, sc, el, ec, timeout_ms))
+    decode.success(#(uri, sl, sc, el, ec, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, `start_line/start_character: int`, "
-    <> "`end_line/end_character: int`, optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, sl, sc, el, ec, timeout_arg)) ->
+      Ok(#(
+        uri,
+        sl,
+        sc,
+        el,
+        ec,
+        finalize_timeout(
+          "inlay_hints",
+          inlay_hints.default_timeout_ms,
+          uri,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error(
+        "expected `uri: string`, `start_line/start_character: int`, "
+        <> "`end_line/end_character: int`, optional `timeout_ms: int`",
+      )
+  }
 }
 
 fn decode_apply_workspace_edit_arguments(
@@ -2655,21 +2830,32 @@ fn decode_lsp_request_raw_arguments(
     use uri <- decode.field("uri", decode.string)
     use method <- decode.field("method", decode.string)
     use params <- decode.field("params", decode.dynamic)
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout(
-        "lsp_request_raw",
-        lsp_request_raw.default_timeout_ms,
-      ),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(uri, method, unstringify_if_needed(params), timeout_ms))
+    decode.success(#(uri, method, unstringify_if_needed(params), timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `uri: string`, `method: string`, `params: any`, "
-    <> "optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(uri, method, params, timeout_arg)) ->
+      Ok(#(
+        uri,
+        method,
+        params,
+        finalize_timeout(
+          "lsp_request_raw",
+          lsp_request_raw.default_timeout_ms,
+          uri,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error(
+        "expected `uri: string`, `method: string`, `params: any`, "
+        <> "optional `timeout_ms: int`",
+      )
+  }
 }
 
 /// Some MCP hosts (Claude Code at the time of writing) JSON-stringify
@@ -2710,22 +2896,40 @@ fn decode_workspace_symbols_arguments(
       None,
       decode.map(decode.string, Some),
     )
-    use timeout_ms <- decode.optional_field(
+    use timeout_arg <- decode.optional_field(
       "timeout_ms",
-      resolve_tool_timeout(
-        "workspace_symbols",
-        workspace_symbols.default_timeout_ms,
-      ),
-      decode.int,
+      None,
+      decode.map(decode.int, Some),
     )
-    decode.success(#(hint, query, limit, language, timeout_ms))
+    decode.success(#(hint, query, limit, language, timeout_arg))
   }
-  decode.run(raw, decoder)
-  |> result.map_error(fn(_) {
-    "expected `workspace_uri_hint: string`, `query: string`, "
-    <> "optional `limit: int`, optional `language: string`, "
-    <> "optional `timeout_ms: int`"
-  })
+  case decode.run(raw, decoder) {
+    Ok(#(hint, query, limit, language, timeout_arg)) -> {
+      // workspace_symbols's `language` arg, if explicit, wins over
+      // URI-derived classification — directory hints have no
+      // extension to read.
+      let lang = case language {
+        Some(_) -> language
+        None -> lang_from_uri(hint)
+      }
+      let timeout = case timeout_arg {
+        Some(n) -> n
+        None ->
+          resolve_tool_timeout(
+            "workspace_symbols",
+            lang,
+            workspace_symbols.default_timeout_ms,
+          )
+      }
+      Ok(#(hint, query, limit, language, timeout))
+    }
+    Error(_) ->
+      Error(
+        "expected `workspace_uri_hint: string`, `query: string`, "
+        <> "optional `limit: int`, optional `language: string`, "
+        <> "optional `timeout_ms: int`",
+      )
+  }
 }
 
 fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {

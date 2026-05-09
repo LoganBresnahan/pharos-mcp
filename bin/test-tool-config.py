@@ -44,6 +44,19 @@ default_timeout_ms = {timeout_ms}
 """
 
 
+def _toml_per_lang(global_ms: int, rust_ms: int) -> str:
+    """Pin a low global default for find_references but override
+    specifically for `rust` to confirm `[tool_config.<name>.<lang>]`
+    layer beats `[tool_config.<name>]`.
+    """
+    return f"""[tool_config.find_references]
+default_timeout_ms = {global_ms}
+
+[tool_config.find_references.rust]
+default_timeout_ms = {rust_ms}
+"""
+
+
 def _run(toml_body: str | None, request_args: dict, rid: int = 1):
     cfg_path = None
     env = {}
@@ -164,6 +177,46 @@ def main() -> int:
             cells.append((False, "per-call-wins", f"per-call did not override: {text[:200]}"))
         else:
             cells.append((True, "per-call-wins", "PASS (per-call timeout_ms beat config 1ms)"))
+
+    # Cell 4 (Phase 1.4) — per-tool x per-lang override beats per-tool
+    # global. Pin 1ms global, 60s for `rust` specifically. Call with
+    # the rust file URI; expect success (per-lang wins). The
+    # corresponding negative case — different lang, hits 1ms global —
+    # is untestable here without a second LSP fixture; cell 5 below
+    # uses stderr proof instead.
+    print("--- cell 4: per-tool x per-lang override (rust) ---")
+    responses, stderr = _run(
+        _toml_per_lang(1, 60_000),
+        {
+            "uri": RUST_FILE,
+            "line": 7,
+            "character": 12,
+            "include_declaration": True,
+        },
+        rid=4,
+    )
+    r = find_response(responses, 4)
+    loaded_marker = "loaded PHAROS_CONFIG_FILE"
+    if loaded_marker not in stderr:
+        cells.append(
+            (False, "per-lang-override", f"stderr missing '{loaded_marker}'")
+        )
+    elif r is None:
+        cells.append((False, "per-lang-override", "no response"))
+    else:
+        text = tool_text(r)
+        if tool_is_error(r):
+            cells.append(
+                (False, "per-lang-override", f"unexpected error: {text[:200]}")
+            )
+        else:
+            cells.append(
+                (
+                    True,
+                    "per-lang-override",
+                    f"PASS ({len(text)}b returned; per-lang 60s beat global 1ms)",
+                )
+            )
 
     passed = sum(1 for ok, *_ in cells if ok)
     total = len(cells)

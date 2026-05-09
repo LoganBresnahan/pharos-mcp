@@ -408,10 +408,10 @@ Default: all categories on.
 
 ### Per-tool timeout overrides (`[tool_config.<name>]`)
 
-Every LSP-bound tool that accepts a `timeout_ms` argument also has a
-compile-time default (`30s` for most, `60s` for `find_references`).
-Override that default per-tool in TOML so heavy workspaces don't need
-the LLM to pass `timeout_ms` on every call:
+Every LSP-bound tool accepts an optional `timeout_ms` argument and
+has a compile-time default (`30s` for most, `60s` for
+`find_references`). Override the default per-tool in TOML so heavy
+workspaces don't need the LLM to pass `timeout_ms` on every call:
 
 ```toml
 [tool_config.format_document]
@@ -421,16 +421,46 @@ default_timeout_ms = 90000
 default_timeout_ms = 120000
 ```
 
+For finer control, narrow an override to one language (handy when a
+single heavy LSP is the slow one):
+
+```toml
+[tool_config.find_references.java]
+default_timeout_ms = 120000   # jdtls workspace-wide refs
+
+[tool_config.workspace_symbols.go]
+default_timeout_ms = 90000    # gopls fuzzy-match across stdlib
+```
+
 Resolution order (later wins):
 1. Compile-time tool default
-2. `[tool_config.<name>] default_timeout_ms`
-3. Per-call `timeout_ms` argument
+2. `[tool_config.<name>] default_timeout_ms` (global per-tool)
+3. `[tool_config.<name>.<lang>] default_timeout_ms` (per-tool × per-lang)
+4. Per-call `timeout_ms` argument
 
-Wired today for the five tools whose schemas accept `timeout_ms`:
-`get_diagnostics`, `find_references`, `format_document`,
-`semantic_tokens`, `inlay_hints`. Other tools take their timeout from
-the per-server `[[languages.<id>.servers]] readiness_timeout_ms` or
-`initialize_timeout_ms` knobs.
+The `<lang>` key matches the language registry (`rust`, `python`,
+`java`, etc.). Pharos classifies the call's URI by file extension to
+pick which per-lang override to consult; if no override applies, the
+global per-tool default takes over.
+
+Recommended starting bumps for heavy LSPs that the M13 test matrix
+regularly times out on (raise only if your workspace actually needs
+the headroom):
+
+| LSP | Tools that benefit | Suggested |
+|---|---|---|
+| `jdtls` (java) | `type_hierarchy_*`, `find_references`, `format_document` | 90-120s |
+| `metals` (scala) | `workspace_symbols`, `inlay_hints`, `semantic_tokens`, `rename_preview` | 60-90s |
+| `ruby-lsp` | `goto_*`, `call_hierarchy_prepare` | 60s |
+| `perl/PLS` | `find_references`, `rename_preview` | 120-240s |
+| `gopls` (big-mod) | `workspace_symbols` | 90s |
+| `rust-analyzer` (monorepo) | `format_document` | 60s |
+
+When a tool times out today the LLM sees a clear `tool timeout: LSP
+did not respond in time...` message that names the
+`runtime_set_tool_timeout` and per-call `timeout_ms` escape hatches —
+so most tuning ends up happening in-conversation rather than in
+TOML. Use TOML for durable bumps you want every session to see.
 
 ## CLI flags
 

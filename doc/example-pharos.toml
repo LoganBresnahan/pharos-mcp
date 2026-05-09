@@ -217,15 +217,49 @@
 # Both fields work in flat (`[languages.<id>]` patches the primary
 # server) and per-server (`[[languages.<id>.servers]]`) shapes.
 
-# 5) Per-tool default_timeout_ms (M13 polish).
+# 5) Per-tool default_timeout_ms (M13 polish, ADR 021).
 #
-# Wired today for the five tools whose schemas accept `timeout_ms`:
-# get_diagnostics, find_references, format_document, semantic_tokens,
-# inlay_hints. Resolution: compile-time default → this knob → per-call
-# `timeout_ms` argument (later wins).
+# Every LSP-bound MCP tool accepts an optional `timeout_ms` arg, and
+# the per-tool default that applies when the LLM doesn't pass one is
+# tunable here. Resolution order (later wins):
+#   1. Compile-time default (each tool ships with one — see source)
+#   2. [tool_config.<name>] default_timeout_ms
+#   3. [tool_config.<name>.<lang>] default_timeout_ms (per-lang)
+#   4. Per-call `timeout_ms` argument
+#   5. Session override via `runtime_set_tool_timeout` MCP tool
+#      (Phase 2; takes precedence over layers 1-3, beaten only by
+#      per-call layer 4)
+#
+# Global per-tool example:
 #
 # [tool_config.format_document]
 # default_timeout_ms = 90000
 #
 # [tool_config.find_references]
 # default_timeout_ms = 120000
+#
+# Per-tool x per-language example. Useful when one heavy LSP needs
+# headroom but global bumps would waste time on faster LSPs:
+#
+# [tool_config.find_references.java]
+# default_timeout_ms = 120000   # jdtls workspace-wide refs are slow
+#
+# [tool_config.workspace_symbols.go]
+# default_timeout_ms = 90000    # gopls fuzzy-match across stdlib
+#
+# [tool_config.format_document.rust]
+# default_timeout_ms = 60000    # rustfmt cold cache on a monorepo
+#
+# Recommended starting points for the heavy LSPs the M13 matrix
+# regularly times out on (raise these only if your workspace
+# actually needs the headroom — most users keep defaults):
+#
+#   jdtls     (java)  | type_hierarchy_*: 90s, find_references: 120s
+#                     | format_document: 60s
+#   metals    (scala) | workspace_symbols: 60s, inlay_hints: 60s
+#                     | semantic_tokens: 60s, rename_preview: 90s
+#   ruby-lsp  (ruby)  | goto_*: 60s, call_hierarchy_prepare: 60s
+#   perl/PLS  (perl)  | find_references: 240s, rename_preview: 120s
+#   gopls     (go)    | workspace_symbols: 90s on big-mod workspaces
+#   rust-an.  (rust)  | format_document: 60s on monorepos with
+#                     | non-trivial rustfmt configs
