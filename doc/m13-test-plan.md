@@ -241,17 +241,144 @@ catches stdio-class bugs before tag.
 
 Cost: ~1h running, ~undetermined fixing whatever surfaces.
 
+### Phase 9 — Chained read tools (`bin/test-chained.py`)
+
+Four tools deferred from Phase 3 because their `item` arg comes from
+the response of their `*_prepare` sibling:
+
+- `call_hierarchy_incoming_calls`
+- `call_hierarchy_outgoing_calls`
+- `type_hierarchy_supertypes`
+- `type_hierarchy_subtypes`
+
+Harness shape:
+
+1. Fire `call_hierarchy_prepare` (or `type_hierarchy_prepare`) at a
+   known symbol position.
+2. Parse response — extract first item from the returned array.
+3. Fire follow-up tool with `{ item: <that item> }`.
+4. Assert response shape (incoming/outgoing arrays, supertype/subtype
+   list).
+
+Drive needs a small enhancement: `drive_chained()` that sends a
+batch, waits for a specific id, returns its response synchronously,
+then continues with follow-up requests. Reuses the streaming
+infrastructure from the current `drive()`.
+
+Cost: ~1-2h. Cell count: 4 tools × ~13 langs that support hierarchy
+methods (rust, go, ts, java, c++, scala, kotlin once added) = ~50
+cells. Plus HTTP twin = ~100 cells.
+
+Tolerance rules: `-32601 method not supported` is the dominant
+response — most LSPs do not implement type hierarchy, several skip
+call hierarchy too. Same tolerance helpers as Phase 3.
+
+### Phase 10 — Serial-mode harness path (heavy-LSP support)
+
+Add a `serial_mode: bool = False` field to `LangSpec`. When True,
+`drive()` sends one request, waits for its response, sends the next.
+Per-language config decides whether the LSP needs serial mode:
+
+- perl / PLS — single-threaded Perl process
+- ruby / ruby-lsp — single-threaded gem indexer
+- java / jdtls — Eclipse JDT cold-start blocks dispatch
+- scala / metals — confirmed PASS-single, FAIL-concurrent
+
+Implementation:
+
+- `_pharos_drive.drive_serial()` — same signature as `drive()`,
+  different inner loop. Sends one request, reads stdout until that
+  id's response lands or per-request timeout fires, repeats.
+- `LangSpec.serial_mode = True` flag flows through `_run` and
+  routes to `drive_serial`.
+- HTTP twin already serializes per-request (one POST at a time);
+  no separate HTTP serial path needed.
+
+Cost: ~2-3h. Closes the gap for the four heavy LSPs that fail under
+the all-at-once batch.
+
+After Phase 10: `python3 bin/test-suite.py` against perl/ruby/java/
+scala flips from "13 concurrent → many timeouts" to "13 sequential
+→ all PASS." Wall-clock per language goes from 10s (light) to ~60s
+(heavy) but coverage becomes uniform across the matrix.
+
+### Phase 11 — Burrito HTTP transport bug
+
+Real bug found in Phase 8: HTTP transport returns
+`HTTP 500 Internal Server Error` on `initialize` when running
+under the burrito-built binary, despite working fine under
+`bin/pharos-dev`. Stderr (even at `PHAROS_LOG=debug`) shows the
+HTTP listener bind succeeding but no log line for the actual
+request handler — mist swallows the exception silently.
+
+Hypotheses to investigate (in priority order):
+
+1. **`mist` or a transitive dep is pruned by the prod release.**
+   `mix release` strips unused beams; if `pharos/mcp/http`'s
+   request-decode path references something only loaded in :dev,
+   the prod binary's `:code.load_file` returns `:not_purged` /
+   `:not_loaded` at first call, which mist's catch-all turns into a
+   500.
+2. **`gleam_json` / `tomerl` codec init.** Some codecs lazy-init on
+   first use; if dev-runtime warms one up via stdio dispatch (M5
+   already exercises stdio from boot), HTTP-first dispatch hits an
+   unwarmed codec.
+3. **`mist`-side handler crash.** Mist wraps user handlers in a
+   try/catch and returns 500 on any throw. The actual exception
+   needs to be unwrapped via mist's logger.
+
+Diagnosis recipe:
+
+```sh
+# Boot burrito directly with full Erlang error reporting + a long
+# enough timeout to get a meaningful stack trace.
+ERL_FLAGS="+S 1 -kernel logger_level debug" \
+  burrito_out/pharos_linux_x64 \
+  --print-default-config &
+# Then drive an HTTP request with curl and capture stderr.
+```
+
+Once the trace surfaces, the fix is likely a one-line `application`
+addition to `mix.exs`'s `applications: [...]`, OR a `:code.ensure_loaded`
+preload at boot, OR a build-time `extra_applications` for `mist`.
+
+Cost: half-day to full-day. Hard-blocks HTTP-on-burrito coverage and
+therefore release.
+
 ## Acceptance criterion for v0.0.2-m12 → v0.1.0
 
 `python3 bin/test-suite-tier1.py && python3 bin/test-suite-write.py
 && python3 bin/test-raw.py && python3 bin/test-debug.py &&
-python3 bin/test-edges.py && (HTTP twins) &&
-python3 bin/test-both-transports.py` returns 0 across all 22 working
-languages, against BOTH `bin/pharos-dev` AND the burrito-built binary.
+python3 bin/test-edges.py && python3 bin/test-chained.py &&
+(HTTP twins) && python3 bin/test-both-transports.py` returns 0
+across all 22 working languages, against BOTH `bin/pharos-dev` AND
+the burrito-built binary. Heavy LSPs (perl, ruby, java, scala) run
+in serial mode (Phase 10); other langs run concurrent.
 
-Scala and gleam stay marked as known-flaky/upstream-broken in the
-SPECS; harness skips them in the default invocation but each has a
-single-tool dogfood path documented.
+Gleam stays marked as upstream-broken at gleam 1.16; harness skips
+it in the default invocation. Re-enable when gleam ships a fixed
+LSP release.
+
+### Two-gate ship policy
+
+Pharos cannot tag v0.1.0 unless BOTH gates pass:
+
+**Gate 1 — automated correctness (this matrix).** All ~1003 cells
+PASS across stdio + HTTP × dev-runtime + burrito-runtime. Owns:
+wire-protocol correctness, override-merge correctness, transport
+isolation, edge-case retry behavior. Catches: regressions, schema
+drift, transport-class bugs.
+
+**Gate 2 — live dogfood through Claude Code.** Walk
+`doc/dogfood.md` Phase 0-14 by hand inside Claude Code with the
+release binary installed. Owns: LLM-readability of pharos's tool
+output, real workflow chaining (multi-tool sessions), MCP-host
+quirks, real-workspace scale. Catches: usability issues that
+automated assertions cannot judge ("does the LLM actually
+understand this output?").
+
+The matrix is the SUFFICIENT-ON-CORRECTNESS gate; live dogfood is
+the SUFFICIENT-ON-USEFULNESS gate. Both required.
 
 ## Out of scope for M13 testing
 
