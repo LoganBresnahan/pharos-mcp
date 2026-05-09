@@ -31,7 +31,14 @@ defmodule Pharos.MixProject do
       # `runtime_supervision_tree` walks to render pharos's tree
       # (limitation 2a from the M9.5 dogfood).
       mod: {:pharos_app_ffi, [auto_boot: Mix.env() != :test]},
-      extra_applications: [:logger]
+      # `:crypto` — `pharos_session_ffi:generate_session_id/0` uses
+      # `crypto:strong_rand_bytes/1` for HTTP `Mcp-Session-Id`s. Under
+      # `mix release` (Burrito), apps not listed here are stripped, so
+      # the runtime sees `Undef` on the first crypto call when pharos
+      # boots in `PHAROS_TRANSPORT=http` mode. Surfaced as HTTP 500
+      # on the first POST /mcp under release runtime; works under dev
+      # runtime where crypto is loaded by default.
+      extra_applications: [:logger, :crypto]
     ]
   end
 
