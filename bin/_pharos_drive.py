@@ -125,6 +125,124 @@ def drive(env_overrides, requests, timeout=20, expected_ids=None):
     return responses, "".join(err_chunks)
 
 
+def drive_serial(env_overrides, requests, per_request_timeout=60):
+    """Serial-mode driver — fires one request, waits for its response,
+    then fires the next. Used for heavy LSPs whose proc actor mailbox
+    chokes under the all-at-once batch shape (perl/PLS, ruby-lsp,
+    jdtls, scala/metals).
+
+    Same return shape as `drive()`.
+
+    Caller-side wall-clock cap = per_request_timeout * len(requests).
+    """
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = os.environ.copy()
+    env.update(env_overrides)
+    bin_path = os.environ.get(
+        "PHAROS_TEST_BIN", os.path.join(project_root, "bin", "pharos-dev")
+    )
+    proc = subprocess.Popen(
+        [bin_path],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+        cwd=project_root,
+    )
+
+    responses = []
+    err_chunks: list[str] = []
+    out_buf = ""
+
+    def _read_until_id(target_id, deadline):
+        nonlocal out_buf
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            rlist, _, _ = select.select(
+                [proc.stdout, proc.stderr], [], [], min(0.5, remaining)
+            )
+            if proc.stderr in rlist:
+                chunk = os.read(proc.stderr.fileno(), 65536).decode(
+                    "utf-8", errors="replace"
+                )
+                if chunk:
+                    err_chunks.append(chunk)
+            if proc.stdout in rlist:
+                chunk = os.read(proc.stdout.fileno(), 65536).decode(
+                    "utf-8", errors="replace"
+                )
+                if not chunk:
+                    return False
+                out_buf += chunk
+                while "\n" in out_buf:
+                    line, out_buf = out_buf.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    responses.append(obj)
+                    if obj.get("id") == target_id:
+                        return True
+        return False
+
+    try:
+        for req in requests:
+            proc.stdin.write(json.dumps(req) + "\n")
+            proc.stdin.flush()
+            target_id = req.get("id")
+            if target_id is None:
+                continue
+            deadline = time.monotonic() + per_request_timeout
+            ok = _read_until_id(target_id, deadline)
+            if not ok:
+                # Append a synthetic timeout response so the harness
+                # can attribute the gap to this specific request.
+                responses.append(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": target_id,
+                        "error": {
+                            "code": -32099,
+                            "message": "serial-drive: per-request timeout",
+                        },
+                    }
+                )
+        try:
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        try:
+            tail_out, tail_err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            tail_out, tail_err = proc.communicate()
+        out_buf += tail_out or ""
+        err_chunks.append(tail_err or "")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    for line in out_buf.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        responses.append(obj)
+
+    return responses, "".join(err_chunks)
+
+
 def initialize_request(rid=1):
     return {
         "jsonrpc": "2.0",

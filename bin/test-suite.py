@@ -33,6 +33,7 @@ from typing import Callable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _pharos_drive import (  # noqa: E402
     drive as _stdio_drive,
+    drive_serial as _stdio_drive_serial,
     find_response,
     initialize_request,
     tool_call_request,
@@ -45,6 +46,9 @@ from _pharos_drive import (  # noqa: E402
 # `main()` so every cell runs over HTTP without touching the
 # request-building or assertion code below.
 _drive = _stdio_drive
+# Serial-mode driver. HTTP transport already serializes per-POST so
+# its drive() is fine; only stdio needs a separate function.
+_drive_serial = _stdio_drive_serial
 
 
 @dataclass
@@ -61,6 +65,11 @@ class LangSpec:
     # e.g. javascript files route to the typescript registry entry,
     # so workspace_symbols needs `language=typescript` not `javascript`.
     lsp_language_override: str | None = None
+    # Heavy LSPs (perl/PLS, ruby-lsp, jdtls, scala/metals) choke on
+    # the harness's all-at-once 13-concurrent batch — proc actor
+    # mailbox backs up past per-request timeouts. Real users dispatch
+    # sequentially; serial mode mirrors that.
+    serial_mode: bool = False
 
 
 SPECS = {
@@ -170,6 +179,9 @@ SPECS = {
         # syntax. Cold-start tolerance covers the empty-result case.
         expected_diagnostic_substr="unused",
         expect_diagnostics=False,
+        # ruby-lsp's gem indexer is single-threaded and chokes under
+        # concurrent batch dispatch.
+        serial_mode=True,
     ),
     "zig": LangSpec(
         id="zig",
@@ -206,6 +218,10 @@ SPECS = {
         # in the harness window. Tolerate empty result.
         expected_diagnostic_substr="cannot",
         expect_diagnostics=False,
+        # jdtls's Eclipse JDT engine is JVM-heavy and serializes
+        # workspace-scan work; serial-mode harness avoids the queue
+        # back-pressure that drops requests under concurrent dispatch.
+        serial_mode=True,
     ),
     # M12 wave 3 — JVM polyglot + LISP + functional + universals.
     # NOTE: metals confirmed to work for single-request cold-start
@@ -224,6 +240,9 @@ SPECS = {
         constructor_name="newPoint",
         expected_diagnostic_substr="unused",
         expect_diagnostics=False,
+        # metals's BSP/Bloop bootstrap state machine doesn't tolerate
+        # 4 concurrent didOpens; serial mode unblocks.
+        serial_mode=True,
     ),
     "clojure": LangSpec(
         id="clojure",
@@ -251,6 +270,9 @@ SPECS = {
         constructor_name="new_point",
         expected_diagnostic_substr="unused",
         expect_diagnostics=False,
+        # PLS is itself a single-threaded Perl process; queues block
+        # on the first long request when fired all-at-once.
+        serial_mode=True,
     ),
     "html": LangSpec(
         id="html",
@@ -355,8 +377,17 @@ Check = Callable[[LangSpec, list], tuple[bool, str]]
 
 
 def _run(spec: LangSpec, requests: list, timeout: int = 60) -> tuple[list, str]:
-    # Calls through `_drive` so HTTP twin can override the transport.
-    return _drive({}, [initialize_request(0)] + requests, timeout=timeout)
+    # Heavy LSPs route through serial-mode driver; light langs use
+    # the concurrent-batch driver. HTTP transport always serializes
+    # per-POST so the test-suite-http path uses concurrent regardless
+    # of serial_mode.
+    full = [initialize_request(0)] + requests
+    if spec.serial_mode and _drive is _stdio_drive:
+        # Per-request timeout = total budget / N, with a floor of 60s
+        # per request to handle individual cold-start work.
+        per_req = max(60, timeout // max(1, len(full)))
+        return _drive_serial({}, full, per_request_timeout=per_req)
+    return _drive({}, full, timeout=timeout)
 
 
 def _check_response(rid: int, responses: list, label: str) -> tuple[bool, str, dict | None]:
