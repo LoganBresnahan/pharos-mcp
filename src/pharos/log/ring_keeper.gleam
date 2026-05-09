@@ -73,7 +73,7 @@ fn with_init_side_effect(
   }
 }
 
-fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
+fn handle(_state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     Stop -> actor.stop()
   }
