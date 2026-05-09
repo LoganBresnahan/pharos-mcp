@@ -450,11 +450,11 @@ the SUFFICIENT-ON-USEFULNESS gate. Both required.
 | 1 — debug + lang-agnostic | DONE | 15/15 |
 | 2 — `lsp_request_raw` | DONE | covered in test-suite |
 | 3 — tier1 read tools (stdio dev) | DONE | 247/247 (19 light langs) |
-| 4 — write tools (stdio dev) | DONE | 76/76 |
+| 4 — write tools (stdio dev) | DONE | 76/76 (light langs); 93/96 burrito-stdio incl heavy (3 serial-cap timeouts: scala rename+code_actions, perl rename) |
 | 5 — edges (stdio dev) | DONE | 2/2 + sub-server override + JSON-string overrides |
-| 6 — HTTP twin (dev) | DONE | 246/247 tier1, 76/76 write |
+| 6 — HTTP twin (dev) | DONE | 246/247 tier1, 76/76 write; burrito write HTTP 96/96 |
 | 7 — both-transports isolation | DONE | dev + burrito PASS |
-| 8 — burrito dogfood (final binary) | DONE v3 | stdio 309/312, HTTP 310/312, edges 3/3, chained 96/96 (prod build via `MIX_ENV=prod mix release --overwrite`) |
+| 8 — burrito dogfood (final binary) | DONE v3 | tier1 stdio 309/312, HTTP 310/312; write stdio 93/96, write HTTP 96/96; debug 15/15 stdio + 15/15 HTTP; edges 3/3; chained 96/96; raw + missing-binary + config-override smokes PASS (prod build via `MIX_ENV=prod mix release --overwrite`) |
 | 9 — chained tools | DONE | 96/96 dev + 96/96 burrito |
 | 10 — serial-mode (heavy LSPs) | DONE v2 | 38/39 (perl find_references caps at 120s) |
 | 11 — burrito HTTP `:crypto` fix | DONE | 1-line fix in mix.exs |
