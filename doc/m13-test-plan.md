@@ -302,6 +302,21 @@ scala flips from "13 concurrent → many timeouts" to "13 sequential
 → all PASS." Wall-clock per language goes from 10s (light) to ~60s
 (heavy) but coverage becomes uniform across the matrix.
 
+### Phase 11a — Verify edge-case retries under burrito
+
+`bin/test-edges.py` against burrito:
+- `handshake_delay` confirmed PASS in Phase 8.
+- `content_modified_retry` output got truncated in the Phase 8
+  capture; status uncertain. Re-run, capture full output, confirm
+  pharos's `request_with_content_modified_retry` lands the second
+  attempt under release runtime exactly as it does under
+  bin/pharos-dev.
+
+If `content_modified_retry` fails on burrito but works on dev, treat
+as a second release-runtime bug and add to Phase 11 follow-up.
+
+Cost: ~10 min run + diagnose only if the gap turns out to be real.
+
 ### Phase 11 — Burrito HTTP transport bug
 
 Real bug found in Phase 8: HTTP transport returns
@@ -344,6 +359,43 @@ preload at boot, OR a build-time `extra_applications` for `mist`.
 
 Cost: half-day to full-day. Hard-blocks HTTP-on-burrito coverage and
 therefore release.
+
+### Phase 12 — `[tools.<name>] default_timeout_ms` config override
+
+Today, three timeout layers exist:
+
+1. Per-call `timeout_ms` — passed as a tool argument.
+2. Per-server `initialize_timeout_ms` / `readiness_timeout_ms` — set
+   via `[[languages.<id>.servers]]`.
+3. Per-tool `default_timeout_ms` — hardcoded constant inside each
+   tool's .gleam file (M11 + M13 polish set most to 30s).
+
+Layer 3 is not user-overridable. Users who run a tool against a slow
+workspace (rust-analyzer formatting a monorepo, jdtls type-hierarchy
+on a 50-module project) need to either pass `timeout_ms` on every
+call or fork pharos. Add a fourth layer:
+
+```toml
+[tools.format_document]
+default_timeout_ms = 90000
+
+[tools.find_references]
+default_timeout_ms = 120000
+```
+
+Implementation:
+
+- Add `tools: Dict(String, ToolConfig)` field on `pharos/config.Config`
+- `ToolConfig` carries a single field today: `default_timeout_ms:
+  Option(Int)` — extensible if tool-level knobs accrue.
+- `config.cached().tools["format_document"]` lookup at the tool's
+  request site replaces the hardcoded const.
+- TOML decoder in config.gleam.
+- Document in example-pharos.toml.
+
+Cost: ~30 LOC + a verification test. M13 deliverable; no release
+should ship without this knob if heavy-workspace users are an
+audience.
 
 ## Acceptance criterion for v0.0.2-m12 → v0.1.0
 
