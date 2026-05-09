@@ -355,12 +355,13 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 #     rename_preview, format_document, code_actions,
 #     apply_workspace_edit
 #
-#   \"debug\" — pharos runtime introspection (14 tools incl. echo):
+#   \"debug\" — pharos runtime introspection (15 tools incl. echo):
 #     echo, runtime_processes, runtime_supervision_tree,
 #     runtime_ets_tables, runtime_memory, runtime_applications,
 #     runtime_scheduler_util, runtime_pid_info,
 #     runtime_log_tail, runtime_log_clear, runtime_log_level,
-#     runtime_trace_lsp, runtime_trace_calls, runtime_kill_lsp
+#     runtime_trace_lsp, runtime_trace_calls, runtime_kill_lsp,
+#     runtime_language_config
 #
 #   \"raw\"   — power-user escape hatch (1 tool):
 #     lsp_request_raw
@@ -444,7 +445,7 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # methods = [\"textDocument/diagnostic\"]
 #
 # Adding a brand-new language requires command + file_extensions
-# at minimum:
+# at minimum. Either shape works:
 #
 # [languages.haskell]
 # command = \"haskell-language-server-wrapper\"
@@ -452,4 +453,29 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # file_extensions = [\".hs\"]
 # root_markers = [\"cabal.project\", \"stack.yaml\"]
 # diagnostics_mode = \"push\"
+#
+# Or, equivalently, via the per-server array (useful when adding a
+# brand-new language that ships multiple servers from day one):
+#
+# [languages.haskell]
+# file_extensions = [\".hs\"]
+# root_markers = [\"cabal.project\", \"stack.yaml\"]
+#
+# [[languages.haskell.servers]]
+# id = \"hls\"
+# command = \"haskell-language-server-wrapper\"
+# args = [\"--lsp\"]
+# diagnostics_mode = \"push\"
+
+# [tool_config.<name>] — per-tool default_timeout_ms override.
+# Wired today for the five tools whose schemas accept `timeout_ms`:
+# get_diagnostics, find_references, format_document, semantic_tokens,
+# inlay_hints. Resolution: compile-time default → this knob → per-call
+# `timeout_ms` argument (later wins).
+#
+# [tool_config.format_document]
+# default_timeout_ms = 90000
+#
+# [tool_config.find_references]
+# default_timeout_ms = 120000
 "
