@@ -49,8 +49,11 @@ def drive(env_overrides, requests_list, timeout=60, expected_ids=None):
     if expected_ids is None:
         expected_ids = [r["id"] for r in requests_list if "id" in r]
 
+    bin_path = os.environ.get(
+        "PHAROS_TEST_BIN", os.path.join(project_root, "bin", "pharos-dev")
+    )
     proc = subprocess.Popen(
-        [os.path.join(project_root, "bin", "pharos-dev")],
+        [bin_path],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,  # HTTP transport doesn't use stdout
         stderr=subprocess.PIPE,
