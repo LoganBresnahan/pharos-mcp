@@ -454,12 +454,15 @@ the SUFFICIENT-ON-USEFULNESS gate. Both required.
 | 5 — edges (stdio dev) | DONE | 2/2 + sub-server override + JSON-string overrides |
 | 6 — HTTP twin (dev) | DONE | 246/247 tier1, 76/76 write; burrito write HTTP 96/96 |
 | 7 — both-transports isolation | DONE | dev + burrito PASS |
-| 8 — burrito dogfood (final binary) | DONE v3 | tier1 stdio 309/312, HTTP 310/312; write stdio 93/96, write HTTP 96/96; debug 15/15 stdio + 15/15 HTTP; edges 3/3; chained 96/96; raw + missing-binary + config-override smokes PASS (prod build via `MIX_ENV=prod mix release --overwrite`) |
+| 8 — burrito dogfood (final binary) | DONE v4 | tier1 stdio 311/312, HTTP 311/312 post Phase 1-4 timeout-rework; write stdio 93/96, write HTTP 96/96; debug 16/16 stdio + 16/16 HTTP (incl runtime_set_tool_timeout + runtime_effective_tool_config); edges 3/3 + 3/3 HTTP; chained 96/96; raw + missing-binary + config-override smokes PASS (prod build via `MIX_ENV=prod mix release --overwrite`; cold-cache extract dir purge required after rebuild) |
 | 9 — chained tools | DONE | 96/96 dev + 96/96 burrito |
 | 10 — serial-mode (heavy LSPs) | DONE v2 | 38/39 (perl find_references caps at 120s) |
 | 11 — burrito HTTP `:crypto` fix | DONE | 1-line fix in mix.exs |
 | 11a — burrito edge retries verify | DONE | 2/2 |
 | 12 — `[tool_config.<name>] default_timeout_ms` | DONE | 3/3 verification cells |
+| 13 — Phase 1+2 timeout rework (ADR 021) | DONE | Fix A error rendering, ws_symbols 30s, Phase 12b wires `timeout_ms` through every LSP-bound tool, `[tool_config.<name>.<lang>]` per-tool×per-lang, `runtime_set_tool_timeout` MCP tool. 6/6 cells in test-tool-config + 16/16 debug |
+| 14 — Phase 3 logging (ADR 022) | DONE | file rotation (`file_max_bytes` / `file_keep_rotated`), ring `tail_by_target_prefix`, `fields_at` structured-fields canonical for new code |
+| 15 — Phase 4 introspection (ADR 022) | DONE | `runtime_effective_tool_config` MCP tool surfaces session_overrides + toml_overrides + computed effective_summary with source attribution. 6/6 in test-tool-config |
 
 Known transients (LSP-side, not pharos):
 - `gleam.workspace_symbols` — gleam-lsp returns transport error on

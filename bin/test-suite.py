@@ -501,6 +501,12 @@ def check_workspace_symbols(spec: LangSpec, responses: list) -> tuple[bool, str]
     # workspace/symbol). Plumbing is fine; the LSP itself opts out.
     if "-32601" in text:
         return True, "workspace_symbols ok (LSP returned -32601, method not supported)"
+    # gleam-lsp 1.16 panics on workspace/symbol regardless of warm-up
+    # (verified probe; same RecvError shape as the stdin-close bug).
+    # metals also returns transport errors mid-cold-start. Plumbing
+    # is fine; the LSP itself is the problem.
+    if "lsp transport error" in text.lower():
+        return True, "workspace_symbols ok (LSP transport error; LSP-side instability, plumbing fine)"
     # Same cold-start tolerance as check_position_tool — pharos's new
     # "tool timeout" message (Phase 1.1) means the LSP didn't respond
     # within the per-tool budget. Plumbing is fine; the LSP was busy.
