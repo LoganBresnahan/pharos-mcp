@@ -114,30 +114,55 @@ fn merge_overrides(
   })
 }
 
-/// Promote a bare `LanguageOverride` to a `LanguageConfig` with one
-/// server. Fires only for brand-new languages NOT in
-/// `default_registry`. `command` and `file_extensions` are required
-/// for new languages; everything else gets sensible blanks.
+/// Promote a bare `LanguageOverride` to a `LanguageConfig`. Fires
+/// only for brand-new languages NOT in `default_registry`.
+///
+/// Two override shapes are honored, matching `merge_one`:
+///   1. `[[languages.<key>.servers]]` — per-server entries become
+///      fresh ServerConfigs (via `apply_server_overrides` against an
+///      empty defaults list, so each entry with an `id` appends).
+///   2. Flat fields (`command`, `args`, etc.) — synthesize a primary
+///      ServerConfig if the per-server array yielded none, then in
+///      either case patch the resulting first server with
+///      `merge_primary` so the flat-shape fields land on the primary.
+///
+/// `command` and `file_extensions` are still required for usefulness;
+/// missing values yield a registry entry that fails to spawn (visible
+/// via `pharos --doctor`).
 fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
-  let server =
-    ServerConfig(
-      id: key,
-      command: option.unwrap(override.command, ""),
-      args: option.unwrap(override.args, []),
-      initialization_options: json.object([]),
-      workspace_configuration: None,
-      methods: All,
-      diagnostics_mode: parse_mode(override.diagnostics_mode),
-      readiness_token: override.readiness_token,
-      readiness_timeout_ms: override.readiness_timeout_ms,
-      initialize_timeout_ms: override.initialize_timeout_ms,
-    )
+  let from_array = case override.servers {
+    None -> []
+    Some(server_overrides) -> apply_server_overrides([], server_overrides)
+  }
+  let with_primary = case from_array {
+    [] -> [synth_primary(key, override)]
+    _ -> from_array
+  }
+  let final_servers = case with_primary {
+    [] -> []
+    [primary, ..rest] -> [merge_primary(primary, override), ..rest]
+  }
   LanguageConfig(
     id: option.unwrap(override.id, key),
     file_extensions: option.unwrap(override.file_extensions, []),
     root_markers: option.unwrap(override.root_markers, []),
     root_promotion: NoPromotion,
-    servers: [server],
+    servers: final_servers,
+  )
+}
+
+fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
+  ServerConfig(
+    id: key,
+    command: option.unwrap(override.command, ""),
+    args: option.unwrap(override.args, []),
+    initialization_options: json.object([]),
+    workspace_configuration: None,
+    methods: All,
+    diagnostics_mode: parse_mode(override.diagnostics_mode),
+    readiness_token: override.readiness_token,
+    readiness_timeout_ms: override.readiness_timeout_ms,
+    initialize_timeout_ms: override.initialize_timeout_ms,
   )
 }
 
