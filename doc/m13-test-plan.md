@@ -454,8 +454,8 @@ the SUFFICIENT-ON-USEFULNESS gate. Both required.
 | 5 — edges (stdio dev) | DONE | 2/2 + sub-server override + JSON-string overrides |
 | 6 — HTTP twin (dev) | DONE | 246/247 tier1, 76/76 write |
 | 7 — both-transports isolation | DONE | dev + burrito PASS |
-| 8 — burrito dogfood (final binary) | DONE | stdio 309/312, HTTP 310/312 |
-| 9 — chained tools | DONE | 28/28 stdio + 28/28 HTTP |
+| 8 — burrito dogfood (final binary) | DONE v3 | stdio 309/312, HTTP 310/312, edges 3/3, chained 96/96 (prod build via `MIX_ENV=prod mix release --overwrite`) |
+| 9 — chained tools | DONE | 96/96 dev + 96/96 burrito |
 | 10 — serial-mode (heavy LSPs) | DONE v2 | 38/39 (perl find_references caps at 120s) |
 | 11 — burrito HTTP `:crypto` fix | DONE | 1-line fix in mix.exs |
 | 11a — burrito edge retries verify | DONE | 2/2 |
