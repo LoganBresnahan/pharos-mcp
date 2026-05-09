@@ -113,6 +113,8 @@ fn do_boot() -> Result(Pid, String) {
       log_ring_enabled: cfg.log.ring_enabled,
       log_stderr_enabled: cfg.log.stderr_enabled,
       log_file_path: cfg.log.file,
+      log_file_max_bytes: cfg.log.file_max_bytes,
+      log_file_keep_rotated: cfg.log.file_keep_rotated,
       http_port: cfg.http.port,
       http_bind: cfg.http.bind,
     )

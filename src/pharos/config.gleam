@@ -58,6 +58,16 @@ pub type LogConfig {
     file: Option(String),
     ring_enabled: Bool,
     stderr_enabled: Bool,
+    /// Cap on the active file-sink size before rotation triggers.
+    /// `None` disables rotation (file appends forever, prior
+    /// behaviour). `Some(N)` rotates `pharos.log` -> `pharos.log.1`
+    /// when bytes-written exceeds N. Default: 10 MB when file sink
+    /// is enabled.
+    file_max_bytes: Option(Int),
+    /// Number of rotated files to keep alongside the active file
+    /// (`pharos.log.1` ... `pharos.log.N`). Older rotations drop.
+    /// Default: 3.
+    file_keep_rotated: Int,
   )
 }
 
@@ -242,6 +252,8 @@ pub fn defaults() -> Config {
       file: None,
       ring_enabled: True,
       stderr_enabled: True,
+      file_max_bytes: None,
+      file_keep_rotated: 3,
     ),
     lsp: LspConfig(trace: False),
     runtime: RuntimeConfig(trace_calls_enabled: False),
@@ -601,6 +613,18 @@ fn apply_section_log(config: Config, parsed: Dynamic) -> Config {
         Ok(b) -> b
         Error(_) -> config.log.stderr_enabled
       }
+      let file_max_bytes = case
+        decode_field(log_table, "file_max_bytes", decode.int)
+      {
+        Ok(n) if n > 0 -> Some(n)
+        _ -> config.log.file_max_bytes
+      }
+      let file_keep_rotated = case
+        decode_field(log_table, "file_keep_rotated", decode.int)
+      {
+        Ok(n) if n >= 0 -> n
+        _ -> config.log.file_keep_rotated
+      }
       Config(
         ..config,
         log: LogConfig(
@@ -608,6 +632,8 @@ fn apply_section_log(config: Config, parsed: Dynamic) -> Config {
           file: file,
           ring_enabled: ring_enabled,
           stderr_enabled: stderr_enabled,
+          file_max_bytes: file_max_bytes,
+          file_keep_rotated: file_keep_rotated,
         ),
       )
     }
@@ -895,6 +921,8 @@ fn env_log(config: Config) -> Config {
       file: file,
       ring_enabled: ring_enabled,
       stderr_enabled: stderr_enabled,
+      file_max_bytes: config.log.file_max_bytes,
+      file_keep_rotated: config.log.file_keep_rotated,
     ),
   )
 }

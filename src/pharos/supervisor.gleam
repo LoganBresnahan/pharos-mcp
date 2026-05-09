@@ -55,6 +55,8 @@ pub type Config {
     log_ring_enabled: Bool,
     log_stderr_enabled: Bool,
     log_file_path: Option(String),
+    log_file_max_bytes: Option(Int),
+    log_file_keep_rotated: Int,
     http_port: Int,
     http_bind: String,
   )
@@ -76,6 +78,8 @@ pub fn start(
         config.log_ring_enabled,
         config.log_stderr_enabled,
         config.log_file_path,
+        config.log_file_max_bytes,
+        config.log_file_keep_rotated,
       )
     }))
 

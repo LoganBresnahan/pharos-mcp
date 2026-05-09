@@ -1186,11 +1186,17 @@ fn handle_set_tool_timeout(args: Option(Dynamic)) -> ToolResult {
         Some(l) -> l
         None -> "*"
       }
-      log.info_at(
+      // Structured shape per ADR 022 — fields stay parseable for
+      // the upcoming runtime_effective_tool_config digest.
+      log.fields_at(
         "pharos/tool_config/autotune",
-        "session override applied: tool=" <> tool
-          <> " language=" <> lang_text
-          <> " timeout_ms=" <> int.to_string(timeout_ms),
+        entry.Info,
+        "session override applied",
+        [
+          #("tool", tool),
+          #("language", lang_text),
+          #("timeout_ms", int.to_string(timeout_ms)),
+        ],
       )
       Ok(
         "{\"tool\":\""

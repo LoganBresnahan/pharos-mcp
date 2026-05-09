@@ -26,7 +26,7 @@ pub fn ring_captures_burst_above_mailbox_cap_test() {
     Filter(default: entry.Info, overrides: [
       Override("pharos/lsp/trace", Some(entry.Debug)),
     ])
-  let assert Ok(w) = writer.start(trace_filter, True, False, None)
+  let assert Ok(w) = writer.start(trace_filter, True, False, None, None, 3)
 
   // Ensure the producer cache mirrors "trace on" — set_target_global
   // also handles the persistent_term flip so emit's prefilter passes.

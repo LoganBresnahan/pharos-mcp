@@ -37,6 +37,8 @@
     render_trace_body/1,
     file_sink_open/1,
     file_sink_write/2,
+    file_sink_rotate/3,
+    file_size_or_zero/1,
     file_sink_close/1,
     sentinel_set/0,
     sentinel_clear/0,
@@ -247,6 +249,71 @@ file_sink_write(IoDev, Line) when is_binary(Line) ->
 file_sink_close(IoDev) ->
     catch file:close(IoDev),
     nil.
+
+%% Rotate the active file. Closes the current handle, renames
+%%   path        -> path.1
+%%   path.1      -> path.2
+%%   ...
+%%   path.(N-1)  -> path.N
+%% and drops anything beyond `keep_rotated`. Then reopens `path`
+%% fresh and returns the new handle. On any error during the rename
+%% ladder or the reopen, returns {error, ReasonBin} so the caller can
+%% fall back to the existing handle (the writer ignores the failure
+%% rather than crashing).
+file_sink_rotate(OldHandle, Path, KeepRotated)
+  when is_binary(Path), is_integer(KeepRotated), KeepRotated >= 0 ->
+    catch file:close(OldHandle),
+    case shift_rotations(Path, KeepRotated) of
+        ok ->
+            case file:open(Path, [append, raw, binary,
+                                  {delayed_write, 65536, 1000}]) of
+                {ok, IoDev} -> {ok, IoDev};
+                {error, R} ->
+                    {error, list_to_binary(io_lib:format(
+                        "reopen after rotation failed: ~p", [R]))}
+            end;
+        {error, R} ->
+            {error, list_to_binary(io_lib:format(
+                "rotation rename ladder failed: ~p", [R]))}
+    end.
+
+%% Walk the rename ladder from highest to lowest. We also drop the
+%% rotation that would land at index `keep_rotated + 1` so the
+%% retained set is exactly `path.1` .. `path.keep_rotated`.
+shift_rotations(Path, KeepRotated) ->
+    %% Drop the file beyond the keep horizon (if it exists).
+    Beyond = numbered_path(Path, KeepRotated + 1),
+    _ = file:delete(Beyond),
+    shift_loop(Path, KeepRotated).
+
+shift_loop(_Path, 0) -> ok;
+shift_loop(Path, N) ->
+    From = case N of
+               1 -> Path;
+               _ -> numbered_path(Path, N - 1)
+           end,
+    To = numbered_path(Path, N),
+    case filelib:is_regular(From) of
+        false -> shift_loop(Path, N - 1);
+        true ->
+            case file:rename(From, To) of
+                ok -> shift_loop(Path, N - 1);
+                {error, _} = E -> E
+            end
+    end.
+
+numbered_path(Path, N) when is_binary(Path), is_integer(N) ->
+    <<Path/binary, ".", (integer_to_binary(N))/binary>>.
+
+%% Current size of the file at `Path`, in bytes. Returns 0 when the
+%% file does not exist or is unreadable. Used by the writer at boot
+%% to seed the rotation counter so a long-lived log file rotates at
+%% the right point even after pharos restarts.
+file_size_or_zero(Path) when is_binary(Path) ->
+    case filelib:file_size(Path) of
+        N when is_integer(N), N >= 0 -> N;
+        _ -> 0
+    end.
 
 %% Sentinel — a flag row in pharos_log_ring_meta that the writer
 %% sets on graceful start and clears on graceful stop. If the row

@@ -68,6 +68,14 @@ pub fn error_at(target: String, message: String) -> Nil {
 }
 
 // -- Field-bearing API
+//
+// ADR 022 picked structured fields as the canonical shape for new
+// logging. `at_with_fields` (or its short alias `fields_at`) is the
+// recommended call for any site where a programmatic consumer might
+// want to extract values — autotune events, request timings, drop
+// counters, anything keyed. String-jammed `info_at` etc. stay
+// supported for prose-only messages and existing call sites; new
+// code prefers structured.
 
 pub fn with_fields(
   level: Level,
@@ -78,6 +86,18 @@ pub fn with_fields(
 }
 
 pub fn at_with_fields(
+  target: String,
+  level: Level,
+  message: String,
+  fields: List(#(String, String)),
+) -> Nil {
+  emit(level, target, message, fields)
+}
+
+/// Short alias for `at_with_fields`. Same arity, same semantics —
+/// just less to type at call sites that already use the
+/// `target, level, message, fields` ordering.
+pub fn fields_at(
   target: String,
   level: Level,
   message: String,
@@ -127,6 +147,17 @@ pub fn ring_tail(
   substring_filter: String,
 ) -> List(#(Level, String)) {
   ring.tail(n, substring_filter)
+}
+
+/// Read the last N entries whose target starts with `prefix`. Same
+/// shape as `ring_tail/2` but anchored against the rendered line's
+/// target token (matched as ` <prefix>` substring). See
+/// `pharos/log/ring.tail_by_target_prefix` for caveats.
+pub fn ring_tail_by_target(
+  n: Int,
+  target_prefix: String,
+) -> List(#(Level, String)) {
+  ring.tail_by_target_prefix(n, target_prefix)
 }
 
 /// Reset the ring buffer.

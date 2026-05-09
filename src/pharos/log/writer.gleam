@@ -66,6 +66,18 @@ type State {
     ring_enabled: Bool,
     stderr_enabled: Bool,
     file_handle: Option(FileHandle),
+    /// Path the active file sink writes to. Held alongside the
+    /// handle so rotation can rename the file in-place when the
+    /// active file's byte count exceeds `file_max_bytes`.
+    file_path: Option(String),
+    /// Cap on active-file size; `None` disables rotation.
+    file_max_bytes: Option(Int),
+    /// Number of rotated files to keep (`pharos.log.1` ... `.N`).
+    file_keep_rotated: Int,
+    /// Running byte count of the active file. Initialised to the
+    /// file's current size on open (so a long-lived file's first
+    /// session-after-restart still rotates at the right point).
+    file_bytes_written: Int,
     dropped: Int,
   )
 }
@@ -87,6 +99,8 @@ pub fn start(
   ring_enabled: Bool,
   stderr_enabled: Bool,
   file_path: Option(String),
+  file_max_bytes: Option(Int),
+  file_keep_rotated: Int,
 ) -> Result(Writer, StartError) {
   case ring_enabled {
     True -> ring.init(ring.default_capacity)
@@ -98,6 +112,8 @@ pub fn start(
     ring_enabled,
     stderr_enabled,
     file_path,
+    file_max_bytes,
+    file_keep_rotated,
   )
 
   seed_trace_cache_from_filter(filter)
@@ -141,6 +157,8 @@ pub fn start_supervised(
   ring_enabled: Bool,
   stderr_enabled: Bool,
   file_path: Option(String),
+  file_max_bytes: Option(Int),
+  file_keep_rotated: Int,
 ) -> Result(actor.Started(Subject(Msg)), actor.StartError) {
   case ring_enabled {
     True -> {
@@ -155,6 +173,8 @@ pub fn start_supervised(
     ring_enabled,
     stderr_enabled,
     file_path,
+    file_max_bytes,
+    file_keep_rotated,
   )
 
   actor.new(initial_state)
@@ -173,6 +193,8 @@ fn build_initial_state(
   ring_enabled: Bool,
   stderr_enabled: Bool,
   file_path: Option(String),
+  file_max_bytes: Option(Int),
+  file_keep_rotated: Int,
 ) -> State {
   let file_handle = case file_path {
     None -> None
@@ -191,11 +213,21 @@ fn build_initial_state(
         }
       }
   }
+  // Init the byte counter to the file's current size so a long-
+  // lived log file rotates at the right point even after a restart.
+  let initial_bytes = case file_path {
+    None -> 0
+    Some(path) -> file_size_or_zero(path)
+  }
   State(
     filter: filter,
     ring_enabled: ring_enabled,
     stderr_enabled: stderr_enabled,
     file_handle: file_handle,
+    file_path: file_path,
+    file_max_bytes: file_max_bytes,
+    file_keep_rotated: file_keep_rotated,
+    file_bytes_written: initial_bytes,
     dropped: 0,
   )
 }
@@ -307,9 +339,10 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         False -> actor.continue(state)
         True -> {
           let line = entry.render(log_entry)
-          fan_out(state, line, log_entry.level, log_entry.target)
-          case state.dropped {
-            0 -> actor.continue(state)
+          let after_fan =
+            fan_out(state, line, log_entry.level, log_entry.target)
+          case after_fan.dropped {
+            0 -> actor.continue(after_fan)
             n -> {
               let drop_line =
                 entry.render(LogEntry(
@@ -320,8 +353,9 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
                   message: "log entries dropped due to backpressure",
                   fields: [#("dropped", int_to_string(n))],
                 ))
-              fan_out(state, drop_line, Warn, "pharos/log/writer")
-              actor.continue(State(..state, dropped: 0))
+              let after_drop =
+                fan_out(after_fan, drop_line, Warn, "pharos/log/writer")
+              actor.continue(State(..after_drop, dropped: 0))
             }
           }
         }
@@ -373,7 +407,7 @@ fn fan_out(
   line: String,
   level: Level,
   target: String,
-) -> Nil {
+) -> State {
   case state.stderr_enabled {
     True -> direct_stderr(line)
     False -> Nil
@@ -389,8 +423,49 @@ fn fan_out(
     False -> Nil
   }
   case state.file_handle {
-    None -> Nil
-    Some(handle) -> file_sink_write(handle, line)
+    None -> state
+    Some(handle) -> {
+      file_sink_write(handle, line)
+      // Account for the line + newline in the rotation counter.
+      // file_sink_write appends `\n`; mirror that math here.
+      let advance = byte_size(line) + 1
+      let new_bytes = state.file_bytes_written + advance
+      maybe_rotate(
+        State(..state, file_bytes_written: new_bytes),
+        handle,
+      )
+    }
+  }
+}
+
+/// If the active file's running byte count has exceeded the
+/// configured cap, rename the file (shifting `path.N` rotations)
+/// and reopen fresh. Failures log a single warning to stderr and
+/// keep the existing handle so the writer never falls silent on a
+/// rotation error.
+fn maybe_rotate(state: State, handle: FileHandle) -> State {
+  case state.file_max_bytes, state.file_path {
+    Some(cap), Some(path) if state.file_bytes_written >= cap ->
+      case file_sink_rotate(handle, path, state.file_keep_rotated) {
+        Ok(new_handle) ->
+          State(
+            ..state,
+            file_handle: Some(new_handle),
+            file_bytes_written: 0,
+          )
+        Error(reason) -> {
+          direct_stderr(
+            "[pharos/log] file sink rotation failed for "
+            <> path
+            <> ": "
+            <> reason
+            <> " (continuing on the unrotated file)",
+          )
+          // Reset the counter so we don't spin retrying every line.
+          State(..state, file_bytes_written: 0)
+        }
+      }
+    _, _ -> state
   }
 }
 
@@ -433,6 +508,27 @@ fn file_sink_open(path: String) -> Result(FileHandle, String)
 
 @external(erlang, "pharos_log_ffi", "file_sink_write")
 fn file_sink_write(handle: FileHandle, line: String) -> Nil
+
+/// Close the active handle, rename `path` -> `path.1` (shifting
+/// existing rotations up to `keep_rotated`, dropping anything
+/// beyond), and reopen `path` fresh. On failure (rename collision,
+/// permission denied, etc.) leaves the existing handle alone and
+/// returns Error so the writer can keep appending unrotated.
+@external(erlang, "pharos_log_ffi", "file_sink_rotate")
+fn file_sink_rotate(
+  handle: FileHandle,
+  path: String,
+  keep_rotated: Int,
+) -> Result(FileHandle, String)
+
+/// Current byte size of `path` if it exists; 0 otherwise. Used to
+/// init the rotation counter so a long-lived log file picks up
+/// where the previous session left off.
+@external(erlang, "pharos_log_ffi", "file_size_or_zero")
+fn file_size_or_zero(path: String) -> Int
+
+@external(erlang, "erlang", "byte_size")
+fn byte_size(s: String) -> Int
 
 @external(erlang, "pharos_log_ffi", "sentinel_set")
 fn sentinel_set() -> Nil
