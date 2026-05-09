@@ -18,6 +18,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import pharos/config
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/inflight
 import pharos/lsp/languages
 import pharos/lsp/pool.{type Pool}
@@ -106,7 +107,12 @@ fn dispatch(pool: Pool, message: Message) -> DispatchResult {
   case message {
     RequestMessage(id, method, params) -> {
       log.set_correlation_id(id_to_text(id))
-      log.debug_at("pharos/mcp/server", "dispatch " <> method)
+      log.fields_at(
+        "pharos/mcp/server",
+        log_entry.Debug,
+        "dispatch",
+        [#("method", method)],
+      )
       let result = case method {
         "initialize" -> Reply(initialize_response(id))
         "tools/list" -> Reply(tools_list_response(id))
@@ -179,18 +185,18 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
       // (1) LSP-side cancel.
       case inflight.lookup(cid) {
         Error(_) ->
-          log.info_at(
+          log.fields_at(
             "pharos/mcp/server",
-            "notifications/cancelled id="
-              <> cid
-              <> " (no in-flight LSP request; already completed or untracked)",
+            log_entry.Info,
+            "notifications/cancelled (no in-flight LSP request; already completed or untracked)",
+            [#("id", cid)],
           )
         Ok(#(proc_subject_dynamic, lsp_id)) -> {
-          log.info_at(
+          log.fields_at(
             "pharos/mcp/server",
-            "notifications/cancelled id=" <> cid
-              <> " → forwarding $/cancelRequest for lsp_id="
-              <> int.to_string(lsp_id),
+            log_entry.Info,
+            "notifications/cancelled → forwarding $/cancelRequest",
+            [#("id", cid), #("lsp_id", int.to_string(lsp_id))],
           )
           proc.cancel_by_dynamic_subject(proc_subject_dynamic, lsp_id)
         }
@@ -201,10 +207,11 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
       case request_workers.lookup(cid) {
         Error(_) -> Nil
         Ok(worker_pid) -> {
-          log.info_at(
+          log.fields_at(
             "pharos/mcp/server",
-            "notifications/cancelled id=" <> cid
-              <> " → killing dispatcher worker",
+            log_entry.Info,
+            "notifications/cancelled → killing dispatcher worker",
+            [#("id", cid)],
           )
           process.send_exit(worker_pid)
           // Worker died mid-execution — its `request_workers.delete`
@@ -2985,7 +2992,13 @@ fn tool_text_result(message: String, is_error: Bool) -> Json {
   // what went wrong without waiting for the LLM to surface the
   // content block. Stdout stays reserved for JSON-RPC frames.
   case is_error {
-    True -> log.warn_at("pharos/mcp/server", "tool error returned to client: " <> message)
+    True ->
+      log.fields_at(
+        "pharos/mcp/server",
+        log_entry.Warn,
+        "tool error returned to client",
+        [#("message", message)],
+      )
     False -> Nil
   }
 

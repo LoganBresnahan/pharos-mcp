@@ -32,6 +32,7 @@ import gleam/result
 import gleam/string
 import pharos/env
 import pharos/log
+import pharos/log/entry as log_entry
 
 // -- Types ----------------------------------------------------------------
 
@@ -399,14 +400,21 @@ fn dirname(path: String) -> String
 fn overlay_path(config: Config, path: String, label: String) -> Config {
   case read_toml(path) {
     Error(reason) -> {
-      log.warn_at(
+      log.fields_at(
         "pharos/config",
-        "ignoring " <> label <> " at " <> path <> ": " <> reason,
+        log_entry.Warn,
+        "ignoring " <> label,
+        [#("path", path), #("reason", reason)],
       )
       config
     }
     Ok(parsed) -> {
-      log.info_at("pharos/config", "loaded " <> label <> " from " <> path)
+      log.fields_at(
+        "pharos/config",
+        log_entry.Info,
+        "loaded " <> label,
+        [#("path", path)],
+      )
       apply_toml(config, parsed)
     }
   }
@@ -830,11 +838,11 @@ fn env_transport(config: Config) -> Config {
       case parse_transport(raw) {
         Some(t) -> Config(..config, transport: t)
         None -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/config",
-            "unrecognized PHAROS_TRANSPORT=\""
-              <> raw
-              <> "\"; keeping prior value",
+            log_entry.Warn,
+            "unrecognized PHAROS_TRANSPORT; keeping prior value",
+            [#("value", raw)],
           )
           config
         }
@@ -860,12 +868,14 @@ fn env_http(config: Config) -> Config {
       case int.parse(string.trim(raw)) {
         Ok(p) -> p
         Error(_) -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/config",
-            "PHAROS_HTTP_PORT=\""
-              <> raw
-              <> "\" is not a valid integer; keeping "
-              <> int.to_string(config.http.port),
+            log_entry.Warn,
+            "PHAROS_HTTP_PORT not a valid integer; keeping prior value",
+            [
+              #("value", raw),
+              #("kept", int.to_string(config.http.port)),
+            ],
           )
           config.http.port
         }

@@ -22,6 +22,7 @@ import gleam/list
 import gleam/option
 import gleam/result
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
   type LanguageConfig, CargoWorkspacePromotion, NoPromotion,
 }
@@ -128,9 +129,11 @@ pub fn with_session_and_retry_for_method(
       case body(lsp) {
         Ok(value) -> Ok(value)
         Error(lifecycle.ClientFailure(reason)) -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/tools/session",
-            "transport error (method=" <> method <> "); evicting and retrying once",
+            log_entry.Warn,
+            "transport error; evicting and retrying once",
+            [#("method", method)],
           )
           let _ = reason
           retry_for_method_after_evict(pool, file_uri, method, body)
@@ -251,9 +254,14 @@ pub fn with_workspace_session_and_retry_by_language(
       case body(lsp) {
         Ok(value) -> Ok(value)
         Error(lifecycle.ClientFailure(_)) -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/tools/session",
+            log_entry.Warn,
             "workspace transport error (by-language); evicting and retrying once",
+            [
+              #("language", language),
+              #("workspace_uri_hint", workspace_uri_hint),
+            ],
           )
           retry_workspace_for_language_after_evict(
             pool,
@@ -493,14 +501,15 @@ pub fn prepare_all_covering_method(
           Ok(#(server, proc))
         }
         Error(err) -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/tools/session",
-            "skipping server `"
-              <> server.id
-              <> "` for method `"
-              <> method
-              <> "`: "
-              <> describe_session_error(err),
+            log_entry.Warn,
+            "skipping server for method",
+            [
+              #("server", server.id),
+              #("method", method),
+              #("reason", describe_session_error(err)),
+            ],
           )
           Error(Nil)
         }
@@ -538,14 +547,15 @@ fn prepare_all_with_selector(
           Ok(#(server.id, proc))
         }
         Error(err) -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/tools/session",
-            "skipping server `"
-              <> server.id
-              <> "` for method `"
-              <> method
-              <> "`: "
-              <> describe_session_error(err),
+            log_entry.Warn,
+            "skipping server for method",
+            [
+              #("server", server.id),
+              #("method", method),
+              #("reason", describe_session_error(err)),
+            ],
           )
           Error(Nil)
         }

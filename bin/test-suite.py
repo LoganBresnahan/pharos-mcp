@@ -70,6 +70,15 @@ class LangSpec:
     # mailbox backs up past per-request timeouts. Real users dispatch
     # sequentially; serial mode mirrors that.
     serial_mode: bool = False
+    # Per-request timeout for serial mode. Default 120s suits jdtls /
+    # ruby-lsp / metals cold paths. PLS (perl) is single-threaded and
+    # indexes the whole project on its first cross-file query
+    # (find_references), often >120s on a fresh boot — bump that
+    # specific lang. End users hit this differently: ADR 021 layer 4
+    # (`runtime_set_tool_timeout`) lets the LLM bump per-call without
+    # editing TOML. The harness has no LLM-loop, so it sets a static
+    # higher cap here.
+    serial_per_request_timeout: int = 120
 
 
 SPECS = {
@@ -280,6 +289,12 @@ SPECS = {
         # PLS is itself a single-threaded Perl process; queues block
         # on the first long request when fired all-at-once.
         serial_mode=True,
+        # PLS indexes the whole project on its first cross-file
+        # query. find_references on a cold workspace consistently
+        # exceeds the 120s default. Bump perl specifically to 240s
+        # so the matrix stops single-cell-failing on this LSP-side
+        # perf characteristic.
+        serial_per_request_timeout=240,
     ),
     "html": LangSpec(
         id="html",
@@ -395,7 +410,11 @@ def _run(spec: LangSpec, requests: list, timeout: int = 60) -> tuple[list, str]:
         # 120s per request × 14 requests (init + 13 tools) = ~28 min
         # worst-case wall, but most requests resolve fast after the
         # first warms up.
-        return _drive_serial({}, full, per_request_timeout=120)
+        return _drive_serial(
+            {},
+            full,
+            per_request_timeout=spec.serial_per_request_timeout,
+        )
     return _drive({}, full, timeout=timeout)
 
 

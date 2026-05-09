@@ -31,6 +31,7 @@ import gleam/json
 import gleam/list
 import gleam/option
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/client
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/languages.{type LanguageConfig, type ServerConfig, Pull, Push}
@@ -250,13 +251,11 @@ fn fetch_items_one(
   case result {
     Ok(items) -> items
     Error(reason) -> {
-      log.warn_at(
+      log.fields_at(
         "pharos/tools/diagnostics",
-        "server `"
-          <> server.id
-          <> "` diagnostics fetch failed: "
-          <> reason
-          <> " — contributing empty array",
+        log_entry.Warn,
+        "server diagnostics fetch failed; contributing empty array",
+        [#("server", server.id), #("reason", reason)],
       )
       "[]"
     }

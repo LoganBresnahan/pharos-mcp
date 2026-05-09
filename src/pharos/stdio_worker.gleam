@@ -27,6 +27,7 @@ import gleam/dynamic/decode
 import gleam/otp/actor
 
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/pool.{type Pool}
 import pharos/mcp/request_workers.{type WriterMsg, WorkerDone, WriteResponse}
 import pharos/mcp/server
@@ -229,10 +230,11 @@ fn handle_eof(state: State) -> actor.Next(State, Msg) {
       actor.stop()
     }
     n -> {
-      log.info(
-        "stdin closed; stdio_worker draining "
-          <> int_to_text(n)
-          <> " in-flight worker(s)",
+      log.fields_at(
+        "pharos",
+        log_entry.Info,
+        "stdin closed; stdio_worker draining in-flight worker(s)",
+        [#("count", int_to_text(n))],
       )
       actor.continue(State(..state, draining: True))
     }

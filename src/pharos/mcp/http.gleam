@@ -35,6 +35,7 @@ import gleam/string
 import gleam/string_tree
 import pharos/config
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/pool.{type Pool}
 import pharos/mcp/server
 import pharos/mcp/sessions.{type Sessions}
@@ -99,15 +100,18 @@ fn build(
   |> mist.after_start(fn(bound_port, _scheme, _interface) {
     case port == bound_port {
       True ->
-        log.info_at(
+        log.fields_at(
           "pharos/mcp/http",
-          "HTTP listener bound to " <> bind <> ":" <> int.to_string(bound_port),
+          log_entry.Info,
+          "HTTP listener bound",
+          [#("bind", bind), #("port", int.to_string(bound_port))],
         )
       False ->
-        log.info_at(
+        log.fields_at(
           "pharos/mcp/http",
-          "HTTP listener auto-assigned port " <> int.to_string(bound_port)
-            <> " on " <> bind <> " (port=0)",
+          log_entry.Info,
+          "HTTP listener auto-assigned port (requested port=0)",
+          [#("bind", bind), #("port", int.to_string(bound_port))],
         )
     }
     write_port_file_if_configured(bound_port)
@@ -164,7 +168,12 @@ fn handle_session(
   case is_initialize(body_text) {
     True -> {
       let id = sessions.issue(sessions)
-      log.info_at("pharos/mcp/http", "issued session " <> id)
+      log.fields_at(
+        "pharos/mcp/http",
+        log_entry.Info,
+        "issued session",
+        [#("session_id", id)],
+      )
       with_session_id(dispatch(pool, body_text), id)
     }
 
@@ -174,7 +183,12 @@ fn handle_session(
         Ok(id) ->
           case sessions.validate(sessions, id) {
             False -> {
-              log.warn_at("pharos/mcp/http", "rejecting unknown Mcp-Session-Id " <> id)
+              log.fields_at(
+                "pharos/mcp/http",
+                log_entry.Warn,
+                "rejecting unknown Mcp-Session-Id",
+                [#("session_id", id)],
+              )
               bad_request("unknown Mcp-Session-Id")
             }
             True -> dispatch(pool, body_text)
@@ -204,14 +218,18 @@ fn write_port_file_if_configured(bound_port: Int) -> Nil {
     Some(path) ->
       case atomic_write_text(path, int.to_string(bound_port)) {
         Ok(_) ->
-          log.info_at(
+          log.fields_at(
             "pharos/mcp/http",
-            "wrote bound port " <> int.to_string(bound_port) <> " to " <> path,
+            log_entry.Info,
+            "wrote bound port",
+            [#("port", int.to_string(bound_port)), #("path", path)],
           )
         Error(reason) ->
-          log.warn_at(
+          log.fields_at(
             "pharos/mcp/http",
-            "failed to write port_file " <> path <> ": " <> reason,
+            log_entry.Warn,
+            "failed to write port_file",
+            [#("path", path), #("reason", reason)],
           )
       }
   }
@@ -239,7 +257,12 @@ fn handle_sse(
         Ok(id) ->
           case sessions.validate(sessions, id) {
             False -> {
-              log.warn_at("pharos/mcp/http", "rejecting SSE for unknown Mcp-Session-Id " <> id)
+              log.fields_at(
+                "pharos/mcp/http",
+                log_entry.Warn,
+                "rejecting SSE for unknown Mcp-Session-Id",
+                [#("session_id", id)],
+              )
               bad_request("unknown Mcp-Session-Id")
             }
             True -> open_sse_stream(req, sessions, id)
@@ -281,7 +304,12 @@ fn sse_init(
   session_id: String,
 ) -> SseState {
   let _ = sessions.attach_sse(sessions, session_id, self)
-  log.info_at("pharos/mcp/http", "SSE attached for session " <> session_id)
+  log.fields_at(
+    "pharos/mcp/http",
+    log_entry.Info,
+    "SSE attached for session",
+    [#("session_id", session_id)],
+  )
   schedule_heartbeat(self)
   SseState(sessions: sessions, session_id: session_id, self: self)
 }
@@ -304,7 +332,12 @@ fn sse_loop(
           actor.continue(state)
         }
         Error(_) -> {
-          log.warn_at("pharos/mcp/http", "SSE send failed; closing stream for " <> state.session_id)
+          log.fields_at(
+            "pharos/mcp/http",
+            log_entry.Warn,
+            "SSE send failed; closing stream",
+            [#("session_id", state.session_id)],
+          )
           sessions.detach_sse(state.sessions, state.session_id)
           actor.stop()
         }

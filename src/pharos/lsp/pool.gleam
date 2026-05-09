@@ -29,6 +29,7 @@ import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/server_request_handlers
 
@@ -372,14 +373,11 @@ fn handle_kill_lsp(
           let #(l, w, s) = key
           proc.close(spawned)
           proc.forget_subject(l, w, s)
-          log.warn_at(
+          log.fields_at(
             "pharos/lsp/pool",
-            "operator-requested kill of lsp_proc for "
-              <> l
-              <> " / "
-              <> w
-              <> " / "
-              <> s,
+            log_entry.Warn,
+            "operator-requested kill of lsp_proc",
+            [#("language", l), #("workspace", w), #("server", s)],
           )
           acc + 1
         })
@@ -531,15 +529,15 @@ fn handle_proc_down(
 
     Ok(key) -> {
       let #(language, workspace, server_id) = key
-      log.warn_at(
+      log.fields_at(
         "pharos/lsp/pool",
-        "lsp_proc for "
-          <> language
-          <> " / "
-          <> workspace
-          <> " / "
-          <> server_id
-          <> " exited; evicting pool cache entry",
+        log_entry.Warn,
+        "lsp_proc exited; evicting pool cache entry",
+        [
+          #("language", language),
+          #("workspace", workspace),
+          #("server", server_id),
+        ],
       )
       let cache = dict.delete(state.cache, key)
       let monitors = dict.delete(state.monitors, monitor_ref)

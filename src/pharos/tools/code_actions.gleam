@@ -19,6 +19,7 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/list
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/lifecycle
 import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
@@ -108,22 +109,24 @@ fn merge_responses(
           case decode.run(value, decode.list(decode.dynamic)) {
             Ok(items) -> list.append(acc, items)
             Error(_) -> {
-              log.warn_at(
+              log.fields_at(
                 "pharos/tools/code_actions",
-                "server `"
-                  <> server_id
-                  <> "` returned non-array codeAction response; skipping",
+                log_entry.Warn,
+                "server returned non-array codeAction response; skipping",
+                [#("server", server_id)],
               )
               acc
             }
           }
         Error(err) -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/tools/code_actions",
-            "server `"
-              <> server_id
-              <> "` codeAction request failed: "
-              <> tool_helpers.describe_request_error(err),
+            log_entry.Warn,
+            "server codeAction request failed",
+            [
+              #("server", server_id),
+              #("reason", tool_helpers.describe_request_error(err)),
+            ],
           )
           acc
         }

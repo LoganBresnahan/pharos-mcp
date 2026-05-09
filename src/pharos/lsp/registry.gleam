@@ -40,6 +40,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import pharos/config.{type LanguageOverride, type ServerOverride}
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
   type DiagnosticsMode, type LanguageConfig, type LookupError, type MethodScope,
   type ServerConfig, All, LanguageConfig, NoPromotion, Only, Pull, Push,
@@ -53,11 +54,11 @@ pub fn init() -> Nil {
   let registry = case dict.size(cfg.languages) {
     0 -> languages.default_registry()
     _ -> {
-      log.info_at(
+      log.fields_at(
         "pharos/lsp/registry",
-        "applied "
-          <> int_str(dict.size(cfg.languages))
-          <> " language override(s) from pharos config",
+        log_entry.Info,
+        "applied language override(s) from pharos config",
+        [#("count", int_str(dict.size(cfg.languages)))],
       )
       merge_overrides(languages.default_registry(), cfg.languages)
     }
@@ -391,13 +392,14 @@ fn parse_init_options_or(
       case json.parse(text, decode.dynamic) {
         Ok(_) -> json_passthrough(text)
         Error(err) -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/lsp/registry",
-            "initialization_options_json for `"
-              <> server_id
-              <> "` did not parse as JSON ("
-              <> describe_json_decode_error(err)
-              <> "); using bundled default",
+            log_entry.Warn,
+            "initialization_options_json did not parse; using bundled default",
+            [
+              #("server", server_id),
+              #("reason", describe_json_decode_error(err)),
+            ],
           )
           fallback
         }
@@ -429,13 +431,11 @@ fn parse_workspace_config_or(
             |> dict.from_list,
           )
         Error(reason) -> {
-          log.warn_at(
+          log.fields_at(
             "pharos/lsp/registry",
-            "workspace_configuration_json for `"
-              <> server_id
-              <> "` invalid ("
-              <> reason
-              <> "); using bundled default",
+            log_entry.Warn,
+            "workspace_configuration_json invalid; using bundled default",
+            [#("server", server_id), #("reason", reason)],
           )
           fallback
         }

@@ -28,6 +28,7 @@ import gleam/string
 import pharos/lsp/client
 import pharos/lsp/lifecycle
 import pharos/log
+import pharos/log/entry as log_entry
 
 const rust_analyzer_path: String = "/home/oof/.cargo/bin/rust-analyzer"
 
@@ -36,11 +37,21 @@ const initialize_timeout_ms: Int = 30_000
 const drain_window_ms: Int = 5000
 
 pub fn run(workspace_path: String) -> Nil {
-  log.info("smoke: spawning rust-analyzer for workspace " <> workspace_path)
+  log.fields_at(
+    "pharos",
+    log_entry.Info,
+    "smoke: spawning rust-analyzer",
+    [#("workspace", workspace_path)],
+  )
 
   case client.start(rust_analyzer_path, [], workspace_path, "rust-analyzer") {
     Error(err) -> {
-      log.error("smoke: spawn failed: " <> describe_error(err))
+      log.fields_at(
+        "pharos",
+        log_entry.Critical,
+        "smoke: spawn failed",
+        [#("reason", describe_error(err))],
+      )
       Nil
     }
 
@@ -50,33 +61,45 @@ pub fn run(workspace_path: String) -> Nil {
 
       case lifecycle.initialize(client, 0, params, initialize_timeout_ms) {
         Error(lifecycle.ClientFailure(err)) -> {
-          log.error(
-            "smoke: initialize handshake transport error: "
-            <> describe_error(err),
+          log.fields_at(
+            "pharos",
+            log_entry.Critical,
+            "smoke: initialize handshake transport error",
+            [#("reason", describe_error(err))],
           )
           client.close(client)
         }
 
         Error(lifecycle.ResponseDecodeError(reason)) -> {
-          log.error("smoke: initialize response decode error: " <> reason)
+          log.fields_at(
+            "pharos",
+            log_entry.Critical,
+            "smoke: initialize response decode error",
+            [#("reason", reason)],
+          )
           client.close(client)
         }
 
         Error(lifecycle.ServerError(code, message)) -> {
-          log.error(
-            "smoke: server returned error during initialize: code="
-            <> int.to_string(code)
-            <> " message="
-            <> message,
+          log.fields_at(
+            "pharos",
+            log_entry.Critical,
+            "smoke: server returned error during initialize",
+            [
+              #("code", int.to_string(code)),
+              #("message", message),
+            ],
           )
           client.close(client)
         }
 
         Ok(#(client, capabilities)) -> {
           log.info("smoke: initialize OK")
-          log.info(
-            "smoke: server capabilities = "
-            <> dynamic_to_string(capabilities),
+          log.fields_at(
+            "pharos",
+            log_entry.Info,
+            "smoke: server capabilities",
+            [#("capabilities", dynamic_to_string(capabilities))],
           )
           drain_notifications(client, drain_window_ms)
           client.close(client)
@@ -115,7 +138,12 @@ fn drain_notifications(client: client.Client, ms: Int) -> Nil {
     False ->
       case client.next_message(client, 500) {
         Ok(#(body, client)) -> {
-          log.info("smoke: notification: " <> body_preview(body))
+          log.fields_at(
+            "pharos",
+            log_entry.Info,
+            "smoke: notification",
+            [#("preview", body_preview(body))],
+          )
           drain_notifications(client, ms - 500)
         }
 
@@ -124,7 +152,12 @@ fn drain_notifications(client: client.Client, ms: Int) -> Nil {
           drain_notifications(client, ms - 500)
 
         Error(other) -> {
-          log.warn("smoke: drain stopped: " <> describe_error(other))
+          log.fields_at(
+            "pharos",
+            log_entry.Warn,
+            "smoke: drain stopped",
+            [#("reason", describe_error(other))],
+          )
           Nil
         }
       }
