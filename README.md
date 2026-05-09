@@ -4,13 +4,15 @@ MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) 
 
 Distributed as a single self-contained binary via [Burrito](https://github.com/burrito-elixir/burrito), shipped through GitHub Releases and npm. Optionally augmented by a thin VSCode extension (separate repo) that exposes unsaved-buffer state.
 
-> **Status:** Pre-alpha, Milestone 10 (pre-distribution polish).
-> Tier 1 + Tier 2 tools complete (hover, goto, references, document/workspace
-> symbols, signature help, call hierarchy, rename preview, format, code
-> actions, diagnostics, raw passthrough), runtime introspection tier
-> shipped, four languages (rust / go / typescript / python) bundled.
-> Distribution wiring (npm publish + GH release matrix) lands in M13.
-> See [doc/init.md](doc/init.md) for the milestone plan.
+> **Status:** Pre-alpha, Milestone 13 (release-prep).
+> Full read + write + debug + raw tool surface shipped. The M13 test
+> matrix exercises every MCP tool against 22 languages on stdio + HTTP,
+> dev-runtime + burrito-runtime — currently 309/312 stdio cells PASS
+> (3 known LSP-side transients: gleam/scala workspace_symbols, perl
+> find_references). Distribution wiring (npm publish + GH release
+> matrix) is the last release blocker. See
+> [doc/m13-test-plan.md](doc/m13-test-plan.md) for the matrix and
+> [doc/init.md](doc/init.md) for the broader milestone plan.
 
 ## What pharos exposes
 
@@ -22,7 +24,7 @@ LLM. Bundled languages and the tools they back:
 |----------|-------|---------------------|
 | **read** (17) | `hover`, `goto_definition`, `goto_type_definition`, `goto_implementation`, `find_references`, `document_symbols`, `workspace_symbols`, `signature_help`, `call_hierarchy_prepare`, `call_hierarchy_incoming_calls`, `call_hierarchy_outgoing_calls`, `get_diagnostics`, `inlay_hints`, `semantic_tokens`, `type_hierarchy_prepare`, `type_hierarchy_supertypes`, `type_hierarchy_subtypes` | `textDocument/*` queries |
 | **write** (4) | `rename_preview`, `format_document`, `code_actions`, `apply_workspace_edit` | First three wrap `textDocument/rename` / `formatting` / `codeAction` and return `WorkspaceEdit` data only. `apply_workspace_edit` writes a `WorkspaceEdit` to disk on demand (`dry_run=true` by default; per-file atomic writes) |
-| **debug** (14) | `echo` + every `runtime_*` tool: `runtime_processes`, `runtime_supervision_tree`, `runtime_ets_tables`, `runtime_memory`, `runtime_applications`, `runtime_scheduler_util`, `runtime_pid_info`, `runtime_log_tail`, `runtime_log_clear`, `runtime_log_level`, `runtime_trace_lsp`, `runtime_trace_calls`, `runtime_kill_lsp` | pharos's own BEAM introspection |
+| **debug** (15) | `echo` + every `runtime_*` tool: `runtime_processes`, `runtime_supervision_tree`, `runtime_ets_tables`, `runtime_memory`, `runtime_applications`, `runtime_scheduler_util`, `runtime_pid_info`, `runtime_log_tail`, `runtime_log_clear`, `runtime_log_level`, `runtime_trace_lsp`, `runtime_trace_calls`, `runtime_kill_lsp`, `runtime_language_config` | pharos's own BEAM introspection |
 | **raw** (1) | `lsp_request_raw` | any LSP method as escape hatch |
 
 Filter the surface via `tools = [...]` in `pharos.toml` —
@@ -390,7 +392,7 @@ Four categories cover every MCP tool pharos exposes:
 |----------|---------|
 | `read` | non-mutating LSP queries (hover, goto, references, symbols, diagnostics, signature help, call/type hierarchy, inlay hints, semantic tokens) — 17 tools |
 | `write` | edit-producing LSP tools (rename_preview, format_document, code_actions return `WorkspaceEdit` data; apply_workspace_edit writes one to disk) — 4 tools |
-| `debug` | pharos runtime introspection (processes, supervision tree, ETS, log tail, kill_lsp, …) — 14 tools incl. `echo` |
+| `debug` | pharos runtime introspection (processes, supervision tree, ETS, log tail, kill_lsp, language_config, …) — 15 tools incl. `echo` |
 | `raw` | power-user escape hatch (`lsp_request_raw`) — 1 tool |
 
 Mix categories with literal tool names freely:
@@ -403,6 +405,32 @@ tools = ["hover", "goto_definition"]   # fully explicit
 ```
 
 Default: all categories on.
+
+### Per-tool timeout overrides (`[tool_config.<name>]`)
+
+Every LSP-bound tool that accepts a `timeout_ms` argument also has a
+compile-time default (`30s` for most, `60s` for `find_references`).
+Override that default per-tool in TOML so heavy workspaces don't need
+the LLM to pass `timeout_ms` on every call:
+
+```toml
+[tool_config.format_document]
+default_timeout_ms = 90000
+
+[tool_config.find_references]
+default_timeout_ms = 120000
+```
+
+Resolution order (later wins):
+1. Compile-time tool default
+2. `[tool_config.<name>] default_timeout_ms`
+3. Per-call `timeout_ms` argument
+
+Wired today for the five tools whose schemas accept `timeout_ms`:
+`get_diagnostics`, `find_references`, `format_document`,
+`semantic_tokens`, `inlay_hints`. Other tools take their timeout from
+the per-server `[[languages.<id>.servers]] readiness_timeout_ms` or
+`initialize_timeout_ms` knobs.
 
 ## CLI flags
 
@@ -452,13 +480,14 @@ rm -rf ~/.cache/pharos            # log files
 
 ## Known limitations
 
-- **Gleam LSP (`gleam lsp`) panics on stdin EOF** at gleam 1.16. Pharos's
-  config entry is wired but currently unusable. Reproducer outside pharos:
-  `echo 'Content-Length: 90\n\n{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | gleam lsp`
-  → `Fatal compiler bug! Receiving LSP message: RecvError`. Tracking
-  upstream; nothing pharos can do until gleam fixes its mpsc receive
-  handler. As soon as a fixed gleam release lands, pharos will work
-  unchanged.
+- **Gleam LSP (`gleam lsp`) panics on stdin close** at gleam 1.16
+  when too many requests are in flight on the shared connection. The
+  M13 test harness drives gleam in serial mode and gets 12/13 cells
+  (the only failure is a transient `workspace_symbols` transport
+  error during cold start). Real-world usage through MCP hosts looks
+  fine because hosts dispatch one request at a time. Tracked
+  upstream; pharos requires no change once gleam fixes its mpsc
+  receive handler.
 - **Java cold start is 30-60s.** jdtls boots a full Eclipse JDT engine in
   Java. Pharos bumps `initialize_timeout_ms` to 90s globally to
   accommodate; faster servers (rust-analyzer, gopls, pyright, tsserver,
