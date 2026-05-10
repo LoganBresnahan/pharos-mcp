@@ -119,10 +119,9 @@ fn edit_field_decoder() -> decode.Decoder(Dynamic) {
 fn render_workspace_edit(
   value: Dynamic,
 ) -> Result(String, RenamePreviewError) {
-  case workspace_edit.render(value) {
-    Ok(rendered) -> Ok(rendered)
-    Error(workspace_edit.DecodeError(reason)) -> Error(RenderFailed(reason))
-  }
+  // Lenient: LSPs return `null` / `{}` for "no rename target here".
+  // Render that as the empty-edit summary rather than a shape error.
+  Ok(workspace_edit.render_lenient(value))
 }
 
 fn describe_session_error(err: session.SessionError) -> String {

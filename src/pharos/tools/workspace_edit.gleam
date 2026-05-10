@@ -48,7 +48,19 @@ pub type RenderError {
 /// list of `FileEdits` ready for rendering. Returns an empty list
 /// when the WorkspaceEdit has neither `changes` nor `documentChanges`
 /// (rust-analyzer in particular sometimes returns `{}` for a no-op
-/// rename).
+/// rename), AND when the value is JSON `null` — metals + several
+/// other LSPs signal "no rename here" with a `null` response per
+/// LSP spec ("the request is sent from the client to the server to
+/// rename a symbol [...] response: WorkspaceEdit | null"). Surfaced
+/// by the M13 23-lang dogfood: `rename_preview` against bash, scala,
+/// lua, gleam targets where the position has no rename target.
+///
+/// Strict mode is used by `apply_workspace_edit` which receives a
+/// user-supplied edit body; silently dropping a malformed request
+/// would write nothing while telling the LLM we wrote nothing,
+/// which is misleading. Read-side renderers (`render/1` below) use
+/// the lenient form because their caller is the LSP server, not
+/// untrusted input.
 pub fn decode(value: Dynamic) -> Result(List(FileEdits), RenderError) {
   case decode.run(value, workspace_edit_decoder()) {
     Ok(edits) -> Ok(edits)
@@ -59,11 +71,33 @@ pub fn decode(value: Dynamic) -> Result(List(FileEdits), RenderError) {
   }
 }
 
+/// Lenient variant of `decode/1` used by read-side renderers that
+/// consume LSP-server replies. Treats JSON `null` and any
+/// non-conforming shape as "no edits proposed" and returns `Ok([])`.
+/// Use this when the caller is `rename_preview` / `format_document`
+/// (server-as-source); `apply_workspace_edit` keeps the strict
+/// `decode/1` because its input is user-supplied JSON.
+pub fn decode_lenient(value: Dynamic) -> Result(List(FileEdits), RenderError) {
+  case decode.run(value, workspace_edit_decoder()) {
+    Ok(edits) -> Ok(edits)
+    Error(_) -> Ok([])
+  }
+}
+
 /// Render a `WorkspaceEdit` Dynamic as a human-readable summary
 /// string. Convenience wrapper around `decode/1` + `render_edits/1`.
 pub fn render(value: Dynamic) -> Result(String, RenderError) {
   use edits <- result.try(decode(value))
   Ok(render_edits(edits))
+}
+
+/// Lenient render — pairs with `decode_lenient/1`. Use when the
+/// `value` is an LSP-server reply where `null` / `{}` should be
+/// rendered as the empty-edit summary rather than surfaced as a
+/// decode error.
+pub fn render_lenient(value: Dynamic) -> String {
+  let assert Ok(edits) = decode_lenient(value)
+  render_edits(edits)
 }
 
 /// Render a list of `FileEdits` (already decoded) as the summary

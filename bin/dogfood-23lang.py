@@ -48,6 +48,12 @@ class Target:
     `ws_sym_lang_override` only matters when the fixture's primary
     file extension routes to a different language id than the fixture
     itself (none currently).
+
+    `timeout_override_ms` raises the per-call `timeout_ms` for known
+    slow LSPs (PLS / metals / jdtls / HLS) above the harness default.
+    Cold-index walks on real-world repos can run multi-minutes;
+    raising the budget per-language matches what an LLM client would
+    do via `runtime_set_tool_timeout` in practice.
     """
     id: str
     file_rel: str
@@ -56,6 +62,7 @@ class Target:
     query: str
     rename_to: str = "Renamed"  # for rename_preview
     ws_sym_lang_override: str | None = None
+    timeout_override_ms: int | None = None
 
     @property
     def workspace(self) -> str:
@@ -71,16 +78,29 @@ class Target:
 # pinned SHAs that lock these line numbers in place.
 TARGETS = [
     Target("rust",       "src/cargo/lib.rs",                                       163,  7,  "exit_with_error"),
-    Target("go",         "cmd/prometheus/main.go",                                 148,  5,  "init"),
+    # `func init()` (line 149 1-based) was the previous target — it's
+    # the Go builtin lifecycle hook, has no type / impl / hierarchy,
+    # so gopls correctly errored on goto_type/goto_impl/type_hierarchy.
+    # Switched to `flagConfig` struct (line 184 1-based) which has
+    # both methods and field types — exercises the position-bound
+    # tools meaningfully.
+    Target("go",         "cmd/prometheus/main.go",                                 182,  5,  "flagConfig"),
     Target("typescript", "src/index.js",                                            42,  9,  "withPlugins"),
-    Target("elixir",     "lib/phoenix.ex",                                           0, 11,  "Phoenix"),
+    Target("elixir",     "lib/phoenix.ex",                                           0, 11,  "Phoenix",
+                                                                                    timeout_override_ms=60_000),
     Target("ruby",       "lib/sinatra/base.rb",                                   2152, 11,  "Base"),
     Target("zig",        "src/main.zig",                                             3,  6,  "std"),
     Target("cpp",        "src/google/protobuf/message.h",                          132,  6,  "Message"),
-    Target("scala",      "library/src/scala/Tuple.scala",                          113,  7,  "Tuple"),
+    Target("scala",      "library/src/scala/Tuple.scala",                          113,  7,  "Tuple",
+                                                                                    timeout_override_ms=60_000),
     Target("clojure",    "src/clj/clojure/core.clj",                                12,  5,  "unquote"),
-    Target("haskell",    "Cabal/src/Distribution/Simple.hs",                       143,  0,  "defaultMain"),
-    Target("perl",       "lib/Mojolicious.pm",                                     151,  4,  "new"),
+    Target("haskell",    "Cabal/src/Distribution/Simple.hs",                       143,  0,  "defaultMain",
+                                                                                    timeout_override_ms=60_000),
+    # PLS single-threads workspace indexing on first cross-file query;
+    # 240s matches `bin/test-suite.py`'s `serial_per_request_timeout`
+    # for perl. Without this, every position-bound tool times out.
+    Target("perl",       "lib/Mojolicious.pm",                                     151,  4,  "new",
+                                                                                    timeout_override_ms=240_000),
     Target("html",       "scripts/filecheck/fixtures/html/index.html",               0,  0,  "html"),
     Target("css",        "dist/css/bootstrap.css",                                   6,  0,  "root"),
     Target("json",       "package.json",                                             0,  0,  "name"),
@@ -88,8 +108,12 @@ TARGETS = [
     Target("markdown",   "README.md",                                                0,  0,  "MDN"),
     Target("terraform",  "main.tf",                                                  0,  0,  "vpc"),
     Target("erlang",     "apps/rebar/src/rebar3.erl",                               58,  0,  "main"),
+    # jdtls + Gradle cold-build of kafka takes minutes per call;
+    # bump generously. Smaller java fixtures are an option too but
+    # kafka exercises a real polyglot codebase well.
     Target("java",       "clients/src/main/java/org/apache/kafka/clients/KafkaClient.java",
-                                                                                    28, 17,  "KafkaClient"),
+                                                                                    28, 17,  "KafkaClient",
+                                                                                    timeout_override_ms=180_000),
     Target("gleam",      "src/gleam/list.gleam",                                    52,  7,  "length"),
     Target("lua",        "kong/init.lua",                                          635, 13,  "init"),
     Target("bash",       "oh-my-zsh.sh",                                             0,  0,  "main"),
@@ -193,7 +217,7 @@ def build_args(tool: str, t: Target | None, prepared_item=None) -> dict:
 
     pos = {"line": t.line, "character": t.character}
     uri_pos = {"uri": t.file_uri, **pos}
-    tmo = {"timeout_ms": PER_LANG_TIMEOUT_MS}
+    tmo = {"timeout_ms": t.timeout_override_ms or PER_LANG_TIMEOUT_MS}
 
     if tool == "hover":
         return {**uri_pos, **tmo}
@@ -465,7 +489,15 @@ def run_pass(filter_langs: list[str] | None, skip: set[str] = frozenset()) -> li
             else:
                 args = build_args(tool, t)
 
-            ok, summary, result = call_one(proc, rid, tool, args, timeout_s=60)
+            # Harness wall-clock cap = pharos's per-call cap + 10s
+            # slack so pharos returns its own typed timeout response
+            # before this loop bails. Without the slack we'd surface
+            # `no response within Ns` instead of pharos's structured
+            # `tool timeout` error.
+            tmo_ms = t.timeout_override_ms or PER_LANG_TIMEOUT_MS
+            ok, summary, result = call_one(
+                proc, rid, tool, args, timeout_s=(tmo_ms / 1000) + 10
+            )
             rows.append((t.id, tool, ok, summary))
             print(f"  {'PASS' if ok else 'FAIL'} {tool}: {summary}", flush=True)
 

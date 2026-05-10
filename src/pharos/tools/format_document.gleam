@@ -104,12 +104,10 @@ fn render_workspace_edit(
 
   case json_parse_dynamic(synthetic) {
     Error(reason) -> Error(RenderFailed(reason))
-    Ok(parsed) ->
-      case workspace_edit.render(parsed) {
-        Ok(rendered) -> Ok(rendered)
-        Error(workspace_edit.DecodeError(reason)) ->
-          Error(RenderFailed(reason))
-      }
+    // Lenient: a server returning `null` / no edits is "already
+    // formatted, nothing to do". Render the empty-edit summary
+    // rather than surfacing a shape error to the LLM.
+    Ok(parsed) -> Ok(workspace_edit.render_lenient(parsed))
   }
 }
 
