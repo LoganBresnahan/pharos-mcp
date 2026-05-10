@@ -28,7 +28,7 @@ M11 dogfood (Run 4) made the dev iteration loop expensive enough to call out. Ev
 1. `MIX_ENV=prod mix release --overwrite` (~10s for an incremental release; longer cold)
 2. `pkill -9 -f 'pharos_erts.*beam.smp'` to kill the running BEAM
 3. `rm -rf ~/.local/share/.burrito/pharos_erts-*` because Burrito's cache key is `<app>_erts-<ver>_<app_version>` and the cache survives binary updates within the same version
-4. `node /home/oof/pharos/npm/scripts/postinstall.js` to re-extract the new payload
+4. `node /home/oof/pharos-mcp/npm/scripts/postinstall.js` to re-extract the new payload
 5. `/mcp reconnect pharos` in Claude Code so the host re-establishes its stdio handshake against the fresh binary
 
 Steps 1, 5 are unavoidable for *any* dev model. Steps 2-4 are pure friction caused by Burrito's extract-on-launch model — by the time pharos has finished extracting on the first launch after a rebuild, the MCP host's 30s connect timeout has fired (M11 fixed this for cold-start production users via the npm postinstall warmup, but the loop above is the dev-time consequence of that same architecture). And step 5 is itself a UX cost — Claude Code's slash-command surface is interactive; there is no CLI reconnect, nor an in-tool path I can drive from a Bash shell.

@@ -35,7 +35,7 @@ For each milestone that adds tools or changes the protocol surface:
        "pharos": {
          "command": "mix",
          "args": ["start"],
-         "cwd": "/home/oof/pharos"
+         "cwd": "/home/oof/pharos-mcp"
        }
      }
    }

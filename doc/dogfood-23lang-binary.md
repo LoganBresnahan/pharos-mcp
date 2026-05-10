@@ -1,7 +1,7 @@
 # Dogfood pass — 23 languages × 39 tools
 
 **Label:** binary (Run 1, skip perl/ruby/terraform/java)
-**Binary:** `/home/oof/pharos/burrito_out/pharos_linux_x64`
+**Binary:** `/home/oof/pharos-mcp/burrito_out/pharos_linux_x64`
 **Result:** **355/523 cells PASS** (67%)
 
 Per-language LSP-bound tools (22): hover, document_symbols, workspace_symbols, get_diagnostics, goto_definition, goto_type_definition, goto_implementation, find_references, signature_help, format_document, code_actions, rename_preview, inlay_hints, semantic_tokens, call_hierarchy_prepare, call_hierarchy_incoming_calls, call_hierarchy_outgoing_calls, type_hierarchy_prepare, type_hierarchy_supertypes, type_hierarchy_subtypes, lsp_request_raw, apply_workspace_edit.

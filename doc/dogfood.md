@@ -20,7 +20,7 @@ MIX_ENV=prod mix release --overwrite
 # `burrito_out/`, the cache extracts STALE beams — silently dropping
 # any module added since the last vendor refresh. Always copy first.
 cp burrito_out/pharos_linux_x64 npm/vendor/pharos_linux_x64
-node /home/oof/pharos/npm/scripts/postinstall.js   # warmup re-extract
+node /home/oof/pharos-mcp/npm/scripts/postinstall.js   # warmup re-extract
 # Then /mcp reconnect pharos in Claude Code
 ```
 

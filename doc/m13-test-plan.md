@@ -227,7 +227,7 @@ ENTIRE matrix against the burrito-built binary:
 ```sh
 rm -rf ~/.local/share/.burrito/pharos_erts-*
 mix release --overwrite
-node /home/oof/pharos/npm/scripts/postinstall.js
+node /home/oof/pharos-mcp/npm/scripts/postinstall.js
 # update ~/.claude.json to point at burrito_out/pharos_linux_x64
 # /mcp reconnect pharos in Claude Code
 # OR: drive every harness against burrito directly via MCP_SPAWN env

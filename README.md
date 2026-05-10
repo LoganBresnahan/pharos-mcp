@@ -73,7 +73,7 @@ npx pharos --doctor
 ### 2. Direct download from GitHub Releases
 
 For users who prefer not to depend on Node. Pick the binary for your
-platform from the [latest release](https://github.com/LoganBresnahan/pharos/releases/latest)
+platform from the [latest release](https://github.com/LoganBresnahan/pharos-mcp/releases/latest)
 and place it on PATH.
 
 | OS / arch | Recommended install path | On default PATH? |
@@ -88,7 +88,7 @@ and place it on PATH.
 Linux / macOS:
 ```bash
 mkdir -p ~/.local/bin
-curl -L https://github.com/LoganBresnahan/pharos/releases/latest/download/pharos-linux-x64 \
+curl -L https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/pharos-linux-x64 \
   -o ~/.local/bin/pharos
 chmod +x ~/.local/bin/pharos
 
@@ -105,7 +105,7 @@ your `Path` user environment variable:
 $dir = "$env:LOCALAPPDATA\Programs\pharos"
 New-Item -ItemType Directory -Force $dir | Out-Null
 Invoke-WebRequest `
-  -Uri https://github.com/LoganBresnahan/pharos/releases/latest/download/pharos-win-x64.exe `
+  -Uri https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/pharos-win-x64.exe `
   -OutFile "$dir\pharos.exe"
 [Environment]::SetEnvironmentVariable(
   "Path", "$env:Path;$dir", "User"
@@ -143,7 +143,7 @@ Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, rebar3 3.27+ (pinned
 versions in [.tool-versions](.tool-versions); `asdf install` reads them):
 
 ```bash
-git clone https://github.com/LoganBresnahan/pharos.git
+git clone https://github.com/LoganBresnahan/pharos-mcp.git
 cd pharos
 mix archive.install --force github LoganBresnahan/mix_gleam
 mix deps.get
@@ -485,7 +485,7 @@ There is no `--update` flag. Use the channel-appropriate recipe:
 npm update -g pharos
 
 # Direct download (replace the platform suffix)
-curl -L https://github.com/LoganBresnahan/pharos/releases/latest/download/pharos-linux-x64 \
+curl -L https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/pharos-linux-x64 \
   -o ~/.local/bin/pharos
 chmod +x ~/.local/bin/pharos
 
