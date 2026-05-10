@@ -242,7 +242,14 @@ const default_http_bind: String = "127.0.0.1"
 pub fn defaults() -> Config {
   Config(
     transport: Stdio,
-    tools: ToolFilter(entries: ["read", "write", "debug", "raw"]),
+    // The `"default"` meta-alias expands to read + write + the
+    // CatDefault essentials (`runtime_set_tool_timeout`,
+    // `runtime_effective_tool_config`, `runtime_language_config`) —
+    // the curated production surface. Users who want diagnostics
+    // (`runtime_processes`, log_*, trace_*, kill_lsp, etc.) opt in
+    // explicitly via `tools = ["default", "debug"]` or by listing
+    // individual tool names; same for the `"raw"` escape hatch.
+    tools: ToolFilter(entries: ["default"]),
     http: HttpConfig(
       port: default_http_port,
       bind: default_http_bind,
@@ -302,18 +309,40 @@ pub type ToolCategory {
   CatWrite
   CatDebug
   CatRaw
+  /// Tools that are NOT pure read/write but ship as part of the
+  /// default production profile because the read/write surface
+  /// relies on them. Today: `runtime_set_tool_timeout`,
+  /// `runtime_effective_tool_config`, `runtime_language_config` —
+  /// the three knobs the LLM needs to follow the timeout-recovery
+  /// recipe printed in every `tool timeout` error message
+  /// (ADR-021's 5-layer stack). Without them in the default profile
+  /// the LLM cannot self-service the very escape hatch we tell it
+  /// about.
+  CatDefault
 }
 
 /// True iff `name` (with its known category) is exposed under the
-/// supplied filter. Resolution: a name is exposed iff its category
-/// alias is in `entries`, OR the literal name is in `entries`.
+/// supplied filter. Resolution: a name is exposed iff
+///   1. the literal tool name is in `entries`, or
+///   2. its category alias ("read"/"write"/"debug"/"raw") is in
+///      `entries`, or
+///   3. the meta-alias `"default"` is in `entries` AND the tool's
+///      category is part of the default-shipped profile (read,
+///      write, or `CatDefault`).
+///
+/// Rule 3 makes `tools = ["default"]` a one-knob production preset
+/// without losing the categorical filter for stricter setups
+/// (`tools = ["read"]` still excludes everything else).
 pub fn tool_allowed(
   filter: ToolFilter,
   name: String,
   category: ToolCategory,
 ) -> Bool {
   let alias = category_alias(category)
-  list.any(filter.entries, fn(e) { e == alias || e == name })
+  let default_member = is_in_default_profile(category)
+  list.any(filter.entries, fn(e) {
+    e == alias || e == name || { e == "default" && default_member }
+  })
 }
 
 fn category_alias(category: ToolCategory) -> String {
@@ -322,6 +351,18 @@ fn category_alias(category: ToolCategory) -> String {
     CatWrite -> "write"
     CatDebug -> "debug"
     CatRaw -> "raw"
+    CatDefault -> "default"
+  }
+}
+
+/// Categories that the meta-alias `"default"` resolves to. Read +
+/// Write + `CatDefault` together form the production-shipping
+/// profile: they cover the LLM's primary surface AND its escape
+/// hatch for runtime knobs.
+fn is_in_default_profile(category: ToolCategory) -> Bool {
+  case category {
+    CatRead | CatWrite | CatDefault -> True
+    CatDebug | CatRaw -> False
   }
 }
 

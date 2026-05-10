@@ -70,6 +70,7 @@ clone_one() {
 
   if [[ -d "$target/.git" ]]; then
     echo "[$lang] already cloned at $target"
+    post_clone_setup "$lang" "$target"
     return 0
   fi
 
@@ -90,7 +91,51 @@ clone_one() {
     git clone --quiet --depth 1 "https://github.com/$repo.git" "$target"
   fi
 
+  post_clone_setup "$lang" "$target"
+
   echo "[$lang] done: $(du -sh "$target" | cut -f1)"
+}
+
+# Per-language setup needed before pharos's LSP can spawn against the
+# fixture. Idempotent — runs whether the clone is fresh or already
+# present (a re-run after `bundle install` etc. should not re-do work).
+post_clone_setup() {
+  local lang="$1" target="$2"
+
+  case "$lang" in
+    ruby)
+      # ruby-lsp inspects the workspace's Gemfile.lock at handshake
+      # time; if `ruby-lsp` is not declared as a dev dependency the
+      # server dies on init with "client transport failure" (M13
+      # 23-lang dogfood Run 4). Fix: add it to the dev group and
+      # `bundle install` so a `Gemfile.lock` mentioning ruby-lsp is
+      # present. Skip if the fixture already has it.
+      if [[ -f "$target/Gemfile" ]] && ! grep -qE 'ruby-lsp' "$target/Gemfile"; then
+        if command -v bundle >/dev/null 2>&1; then
+          echo "[$lang] adding ruby-lsp to Gemfile dev group..."
+          ( cd "$target" && bundle add --group=development ruby-lsp >/dev/null 2>&1 ) \
+            || echo "[$lang] WARN: bundle add failed; ruby-lsp may not start" >&2
+        else
+          echo "[$lang] WARN: 'bundle' not found; install bundler first" >&2
+        fi
+      fi
+      ;;
+    terraform)
+      # terraform-ls needs `.terraform/` to exist for some queries
+      # (it parses the lock file + provider schemas before answering
+      # workspace_symbols et al.). Run `terraform init` if the binary
+      # is available; skip on warn if not.
+      if [[ -f "$target/main.tf" ]] && [[ ! -d "$target/.terraform" ]]; then
+        if command -v terraform >/dev/null 2>&1; then
+          echo "[$lang] running terraform init..."
+          ( cd "$target" && terraform init -backend=false -input=false >/dev/null 2>&1 ) \
+            || echo "[$lang] WARN: terraform init failed; provider tools may not work" >&2
+        else
+          echo "[$lang] WARN: 'terraform' not found; some tools may flake" >&2
+        fi
+      fi
+      ;;
+  esac
 }
 
 main() {

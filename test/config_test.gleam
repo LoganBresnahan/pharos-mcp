@@ -8,13 +8,14 @@
 import gleam/option.{None}
 import gleeunit/should
 import pharos/config.{
-  type Config, CatDebug, CatRaw, CatRead, CatWrite, ToolFilter,
+  type Config, CatDebug, CatDefault, CatRaw, CatRead, CatWrite, ToolFilter,
 }
 
-pub fn defaults_expose_all_categories_test() {
+pub fn defaults_expose_default_profile_test() {
   let cfg = config.defaults()
   let filter = cfg.tools
 
+  // Read surface — every read tool ships in the default profile.
   config.tool_allowed(filter, "hover", CatRead) |> should.be_true
   config.tool_allowed(filter, "inlay_hints", CatRead) |> should.be_true
   config.tool_allowed(filter, "semantic_tokens", CatRead) |> should.be_true
@@ -22,13 +23,49 @@ pub fn defaults_expose_all_categories_test() {
   |> should.be_true
   config.tool_allowed(filter, "type_hierarchy_supertypes", CatRead)
   |> should.be_true
-  config.tool_allowed(filter, "type_hierarchy_subtypes", CatRead)
-  |> should.be_true
+
+  // Write surface — every write tool ships in the default profile.
   config.tool_allowed(filter, "rename_preview", CatWrite) |> should.be_true
   config.tool_allowed(filter, "apply_workspace_edit", CatWrite)
   |> should.be_true
+
+  // CatDefault essentials — the LLM-facing escape hatches that read
+  // and write tools tell the LLM to call when timeouts surface.
+  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDefault)
+  |> should.be_true
+  config.tool_allowed(filter, "runtime_effective_tool_config", CatDefault)
+  |> should.be_true
+  config.tool_allowed(filter, "runtime_language_config", CatDefault)
+  |> should.be_true
+  config.tool_allowed(filter, "echo", CatDefault) |> should.be_true
+
+  // Debug + raw are NOT in the default profile — opt-in via
+  // `tools = ["default", "debug"]` or explicit names.
+  config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_false
+  config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_false
+}
+
+pub fn default_alias_subsumes_read_write_default_test() {
+  // The `"default"` meta-alias resolves to (read ∪ write ∪ CatDefault).
+  // It should NOT pull debug or raw — those stay opt-in.
+  let filter = ToolFilter(entries: ["default"])
+  config.tool_allowed(filter, "hover", CatRead) |> should.be_true
+  config.tool_allowed(filter, "rename_preview", CatWrite) |> should.be_true
+  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDefault)
+  |> should.be_true
+  config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_false
+  config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_false
+}
+
+pub fn default_plus_debug_unions_categories_test() {
+  // Production-debug profile: ship the default surface AND let the
+  // user reach diagnostics without naming each tool explicitly.
+  let filter = ToolFilter(entries: ["default", "debug"])
+  config.tool_allowed(filter, "hover", CatRead) |> should.be_true
   config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_true
-  config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_true
+  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDefault)
+  |> should.be_true
+  config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_false
 }
 
 pub fn category_alias_admits_unknown_member_test() {

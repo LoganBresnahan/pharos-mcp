@@ -1,13 +1,23 @@
 //// Tool categorization + filter helper.
 ////
-//// Every MCP tool pharos registers belongs to one of four categories
-//// — `read`, `write`, `debug`, `raw` — exposed in `pharos/config` as
-//// the `ToolCategory` enum. The category drives the user-visible
-//// filter in `pharos.toml` / `PHAROS_TOOLS`:
+//// Every MCP tool pharos registers belongs to one of five categories
+//// — `read`, `write`, `default`, `debug`, `raw` — exposed in
+//// `pharos/config` as the `ToolCategory` enum. The category drives
+//// the user-visible filter in `pharos.toml` / `PHAROS_TOOLS`:
 ////
-////   tools = ["read", "write"]                      # categories
+////   tools = ["default"]                            # production preset
+////   tools = ["read", "write"]                      # categories (subset)
+////   tools = ["default", "debug"]                   # opt-in diagnostics
 ////   tools = ["read", "runtime_log_tail"]           # mix
 ////   tools = ["hover", "goto_definition"]           # explicit
+////
+//// `default` is a meta-alias that resolves to (read ∪ write ∪
+//// CatDefault) — see `config.tool_allowed/3`. Tools placed in
+//// `CatDefault` are NOT read or write themselves but ship in the
+//// default production profile because the read/write surface
+//// relies on them (today: the three timeout-recovery knobs from
+//// ADR-021's 5-layer stack — `runtime_set_tool_timeout`,
+//// `runtime_effective_tool_config`, `runtime_language_config`).
 ////
 //// Resolution lives in `config.tool_allowed/3`. This module owns the
 //// canonical (name → category) mapping and one helper —
@@ -19,10 +29,13 @@
 //// Adding a tool: register its name and category in `category_for/1`.
 //// An unrecognised name falls back to `CatRaw` — power-user
 //// behaviour that fails closed when the user opted into a stricter
-//// filter (`["read"]` does not pick up unknown tools).
+//// filter (`["read"]` does not pick up unknown tools). When adding
+//// a runtime tool that the LLM-facing surface depends on (e.g.,
+//// future `runtime_session_digest`), classify it as `CatDefault`
+//// so it ships alongside read/write.
 
 import pharos/config.{
-  type ToolCategory, CatDebug, CatRaw, CatRead, CatWrite,
+  type ToolCategory, CatDebug, CatDefault, CatRaw, CatRead, CatWrite,
 }
 
 /// Canonical category for `name`. Unknown tools default to `CatRaw`
@@ -56,9 +69,21 @@ pub fn category_for(name: String) -> ToolCategory {
     | "code_actions"
     | "apply_workspace_edit" -> CatWrite
 
-    // -- debug (pharos runtime introspection + sanity) --
+    // -- default (essentials the LLM needs to follow tool-error
+    //    recovery recipes; ship in the production default profile
+    //    alongside read/write). Keep this list small — every entry
+    //    here widens the prod attack surface. `echo` is included
+    //    as the smoke-test affordance an MCP host can hit before
+    //    any LSP-bound tool, useful for diagnosing transport
+    //    issues without exposing the rest of the debug surface.
     "echo"
-    | "runtime_processes"
+    | "runtime_set_tool_timeout"
+    | "runtime_effective_tool_config"
+    | "runtime_language_config" -> CatDefault
+
+    // -- debug (pharos runtime introspection + sanity; opt-in
+    //    via `tools = ["default", "debug"]` or explicit names) --
+    "runtime_processes"
     | "runtime_supervision_tree"
     | "runtime_ets_tables"
     | "runtime_memory"
@@ -70,10 +95,7 @@ pub fn category_for(name: String) -> ToolCategory {
     | "runtime_log_level"
     | "runtime_trace_lsp"
     | "runtime_trace_calls"
-    | "runtime_kill_lsp"
-    | "runtime_language_config"
-    | "runtime_set_tool_timeout"
-    | "runtime_effective_tool_config" -> CatDebug
+    | "runtime_kill_lsp" -> CatDebug
 
     // -- raw (power-user escape hatch) --
     "lsp_request_raw" -> CatRaw

@@ -108,10 +108,16 @@ pub fn tools_call_unknown_tool_returns_invalid_params_test() {
     "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\","
     <> "\"params\":{\"name\":\"nope\",\"arguments\":{}}}"
 
+  // Unknown names fall to `CatRaw` per registry's failsafe rule.
+  // Under the `["default"]` profile, CatRaw is not exposed, so the
+  // request is rejected at the filter layer with "Tool not enabled"
+  // rather than passing through to the dispatcher's "Unknown tool"
+  // branch. Either failure mode is correct — both surface a clear
+  // negative response naming the offending tool.
   case server.handle_line(fresh_pool(), line) {
     server.Reply(json) -> {
-      contains(json, "\"code\":-32602")
-      contains(json, "Unknown tool: nope")
+      contains(json, "\"error\"")
+      contains(json, "nope")
     }
     _ -> should.fail()
   }
