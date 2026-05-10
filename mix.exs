@@ -62,7 +62,7 @@ defmodule Pharos.MixProject do
   defp releases do
     [
       pharos: [
-        steps: [:assemble, &Burrito.wrap/1],
+        steps: [:assemble, &Burrito.wrap/1, &refresh_npm_vendor/1],
         burrito: [
           targets: [
             linux_x64: [os: :linux, cpu: :x86_64],
@@ -74,6 +74,35 @@ defmodule Pharos.MixProject do
         ]
       ]
     ]
+  end
+
+  # Copy every built `burrito_out/pharos_*` into `npm/vendor/` so the
+  # postinstall warmup (`npm/scripts/postinstall.js`) extracts THIS
+  # build, not whatever stale binary was committed last. Without this
+  # step the warmup silently runs against `npm/vendor/` whose contents
+  # may be days old — a class of "tests pass against ghost code" bugs
+  # caught the hard way (May 2026 dogfood). See doc/dogfood.md prereq.
+  defp refresh_npm_vendor(release) do
+    project_root = File.cwd!()
+    burrito_out = Path.join(project_root, "burrito_out")
+    npm_vendor = Path.join([project_root, "npm", "vendor"])
+
+    if File.dir?(burrito_out) do
+      File.mkdir_p!(npm_vendor)
+
+      burrito_out
+      |> File.ls!()
+      |> Enum.filter(&String.starts_with?(&1, "pharos_"))
+      |> Enum.each(fn name ->
+        src = Path.join(burrito_out, name)
+        dst = Path.join(npm_vendor, name)
+        File.cp!(src, dst)
+      end)
+
+      Mix.shell().info("[pharos] refreshed npm/vendor from burrito_out")
+    end
+
+    release
   end
 
   defp aliases do

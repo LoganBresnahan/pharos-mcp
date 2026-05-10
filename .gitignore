@@ -45,6 +45,9 @@ __pycache__/
 .envrc
 .env
 
+# Dogfood fixtures (bin/dogfood-fixtures.sh clones public repos here)
+/tmp/
+
 # Notes
 /notes/
 .claude/

@@ -24,13 +24,26 @@ cd "$PROJECT_ROOT"
 echo "=== Phase 8 — burrito dogfood ==="
 echo
 
-echo "[1/5] Clearing burrito cache..."
+echo "[1/6] Clearing burrito cache..."
 rm -rf ~/.local/share/.burrito/pharos_erts-*
 
-echo "[2/5] Building release..."
+echo "[2/6] Building release..."
 MIX_ENV=prod mix release --overwrite 1>&2
 
-echo "[3/5] Warming extract via npm postinstall..."
+# postinstall.js launches `npm/vendor/pharos_<target>` to warm the
+# extract. If that binary is older than `burrito_out/`, the warmup
+# unpacks STALE beams and every subsequent run targets dead code —
+# observed silently dropping all `pharos@tools/*` modules added since
+# the vendor was last refreshed. Copy the freshly-built binary in
+# before warming.
+echo "[3/6] Refreshing npm/vendor from burrito_out..."
+mkdir -p "$PROJECT_ROOT/npm/vendor"
+for bin_file in "$PROJECT_ROOT"/burrito_out/pharos_*; do
+  [ -e "$bin_file" ] || continue
+  cp "$bin_file" "$PROJECT_ROOT/npm/vendor/$(basename "$bin_file")"
+done
+
+echo "[4/6] Warming extract via npm postinstall..."
 node "$PROJECT_ROOT/npm/scripts/postinstall.js" 1>&2 || true
 
 BURRITO_BIN="$PROJECT_ROOT/burrito_out/pharos_linux_x64"
@@ -39,11 +52,11 @@ if [ ! -x "$BURRITO_BIN" ]; then
   exit 1
 fi
 
-echo "[4/5] Setting PHAROS_TEST_BIN=$BURRITO_BIN"
+echo "[5/6] Setting PHAROS_TEST_BIN=$BURRITO_BIN"
 export PHAROS_TEST_BIN="$BURRITO_BIN"
 
 echo
-echo "[5/5] Running harnesses against burrito..."
+echo "[6/6] Running harnesses against burrito..."
 echo
 
 PYTHON="${PYTHON:-python3}"

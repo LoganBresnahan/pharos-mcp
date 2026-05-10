@@ -89,6 +89,13 @@ SPECS = {
         point_decl_line=7,  # `pub struct Point {` at line 8 (1-based) = 7 (0-based)
         constructor_name="new_point",
         expected_diagnostic_substr="unused",
+        # rust-analyzer's first-index window is wide enough that the
+        # all-at-once 13-request batch races indexing completion: random
+        # subsets time out as "no response" because the server is still
+        # crunching its symbol graph when the wave hits. Real users
+        # dispatch sequentially via the MCP host; serial mode mirrors
+        # that and consistently passes 13/13.
+        serial_mode=True,
     ),
     "go": LangSpec(
         id="go",

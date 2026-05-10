@@ -14,7 +14,12 @@ clear the cache before every full-binary dogfood run:
 
 ```sh
 rm -rf ~/.local/share/.burrito/pharos_erts-*
-mix release --overwrite
+MIX_ENV=prod mix release --overwrite
+# `npm/scripts/postinstall.js` warms the extract from `npm/vendor/`,
+# NOT `burrito_out/`. If `npm/vendor/` is older than the just-built
+# `burrito_out/`, the cache extracts STALE beams — silently dropping
+# any module added since the last vendor refresh. Always copy first.
+cp burrito_out/pharos_linux_x64 npm/vendor/pharos_linux_x64
 node /home/oof/pharos/npm/scripts/postinstall.js   # warmup re-extract
 # Then /mcp reconnect pharos in Claude Code
 ```
@@ -222,6 +227,7 @@ Run 2: 2026-05-06 (post-M9.5 regression — first round of fixes shipped).
 Run 3: 2026-05-06 (post-M10 Group A+B regression — wait_for_ready + emit-side prefilter + cold-start hint).
 Run 4: 2026-05-07 (post-M11 — apply_workspace_edit + inlay_hints + semantic_tokens + type_hierarchy + diagnostics-cache rekey + trace-ring fix + stdio held-stdin fix + npm postinstall warmup).
 Run 5: 2026-05-08 (post-M11 regression on burrito after D-M11-3 chained-fix landed — 0 reconnects, all 14 phases clean).
+Run 6: 2026-05-10 (real-fixtures expansion — 23 languages × 39 tools driven by `bin/dogfood-23lang.py` against pinned upstream repos in `tmp/fixtures/`. Results in [doc/dogfood-23lang-dev.md](dogfood-23lang-dev.md) (pharos-dev) and [doc/dogfood-23lang-binary.md](dogfood-23lang-binary.md) (burrito). Surfaced + fixed: stale `npm/vendor/` binary causing burrito tests to run against ghost code; rust-analyzer cold-start race in test-suite.py (now serial_mode); 3 newly-added runtime tools missing from registry CatDebug.).
 
 ### Run 5 — burrito post-fix regression summary
 
