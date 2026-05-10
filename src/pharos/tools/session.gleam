@@ -43,6 +43,15 @@ const content_modified_code: Int = -32_801
 /// "I'm indexing, try again later" rather than rust-analyzer's
 /// stricter "content modified mid-request" — ELP cold-start can
 /// take 5-30s and a single 1s retry is too tight.
+///
+/// Promotion to a TOML knob (`[tool_config.<name>] retry_delays_ms`
+/// + per-lang variant) deferred until a real user case surfaces.
+/// Per-call `timeout_ms` and `[tool_config.<name>.<lang>]
+/// default_timeout_ms` already govern total wait; this constant is
+/// internal cadence within that budget. If a custom LSP emits
+/// -32801 with longer-than-4s clear time and the existing knobs
+/// can't cover it, extend `ToolConfig` (config.gleam) with a
+/// `retry_delays_ms: Option(List(Int))` field and read it here.
 const content_modified_retry_delays_ms: List(Int) = [1000, 3000]
 
 // Per-server `readiness_timeout_ms` lives on `ServerConfig` now. The
