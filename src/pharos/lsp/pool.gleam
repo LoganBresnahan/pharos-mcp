@@ -1557,14 +1557,23 @@ fn handle_ensure_open(
             |> json.to_string
             |> bit_array.from_string
 
-          case proc.send_notification(spawned, body) {
-            Ok(Nil) -> {
+          // proc.send_notification does an actor.call with a 5s
+          // timeout backed by gleam_otp's let_assert. A slow or dead
+          // proc actor — common during LSP indexing thrash — raises,
+          // which crashes the pool actor itself (M14 P5+ regression
+          // captured by [pharos-sasl]). safe_call_0 contains the
+          // panic so the pool stays up; the caller gets SendFailed
+          // and retries via the standard transport-error path.
+          let send_result =
+            safe_call_0(fn() { proc.send_notification(spawned, body) })
+          case send_result {
+            Ok(Ok(Nil)) -> {
               process.send(reply, Ok(Nil))
               actor.continue(
                 State(..state, opened: set.insert(state.opened, doc_key)),
               )
             }
-            Error(_) -> {
+            Ok(Error(_)) | Error(_) -> {
               process.send(reply, Error(SendFailed))
               actor.continue(state)
             }
