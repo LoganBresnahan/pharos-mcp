@@ -426,17 +426,8 @@ fn hover_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Get the type signature, documentation, and other "
-          <> "language-server hover info for the symbol at a position "
-          <> "in a source file. Wraps LSP `textDocument/hover`. "
-          <> "Returns the verbatim LSP `Hover` result as JSON: "
-          <> "`{contents: ..., range?: ...}`. `contents` may be "
-          <> "MarkupContent, plain string, or a list of MarkedString — "
-          <> "the LLM reads whichever shape the server sends. "
-          <> "Cold-start note: a freshly-spawned rust-analyzer may "
-          <> "return `null` for the first 5-15s while it indexes the "
-          <> "workspace; retry once after a 1-2s pause if you "
-          <> "expected a hit at a known symbol position.",
+        "LSP textDocument/hover. Position is zero-based "
+          <> "(line, character UTF-16). Returns Hover or null.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -449,15 +440,8 @@ fn goto_definition_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Find where the symbol at a position is defined. Wraps "
-          <> "LSP `textDocument/definition`. Returns the verbatim LSP "
-          <> "result: a single Location, a list of Location, a list of "
-          <> "LocationLink (3.14+), or null if no definition. Each "
-          <> "Location has `uri` plus `range` (zero-based positions). "
-          <> "Cold-start note: a freshly-spawned rust-analyzer may "
-          <> "return `null` for the first 5-15s while it indexes the "
-          <> "workspace; retry once after a 1-2s pause if you "
-          <> "expected a hit at a known symbol position.",
+        "LSP textDocument/definition. Position is zero-based. "
+          <> "Returns Location, Location[], LocationLink[], or null.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -470,14 +454,9 @@ fn find_references_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Find all usages of the symbol at a position across the "
-          <> "workspace. Wraps LSP `textDocument/references`. Returns "
-          <> "the verbatim list of LSP Locations (zero-based "
-          <> "positions). Set `include_declaration` (default true) to "
-          <> "include or exclude the symbol's definition site from the "
-          <> "result. Default per-call timeout is 60s; raise via "
-          <> "`timeout_ms` when scanning a workspace-wide type whose "
-          <> "rust-analyzer reference walk exceeds the default.",
+        "LSP textDocument/references. Returns Location[]. "
+          <> "`include_declaration` (default true) includes the "
+          <> "definition site.",
       ),
     ),
     #(
@@ -541,13 +520,10 @@ fn document_symbols_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Return the outline of a source file — functions, "
-          <> "types, modules, etc. — with their positions. Wraps LSP "
-          <> "`textDocument/documentSymbol`. Returns the verbatim LSP "
-          <> "result: either a hierarchical `DocumentSymbol[]` (each "
-          <> "with `children`) or a flat deprecated "
-          <> "`SymbolInformation[]`, depending on what rust-analyzer "
-          <> "emits.",
+        "LSP textDocument/documentSymbol. Returns hierarchical "
+          <> "DocumentSymbol[] or flat SymbolInformation[] depending "
+          <> "on server. For LLM-friendly outlines prefer "
+          <> "get_symbols_overview.",
       ),
     ),
     #(
@@ -576,20 +552,12 @@ fn workspace_symbols_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Search across the workspace for symbols whose name "
-          <> "matches a query. Wraps LSP `workspace/symbol`. Returns "
-          <> "up to `limit` `SymbolInformation` / `WorkspaceSymbol` "
-          <> "entries; default 20, raise via `limit` if a query is "
-          <> "expected to return more. Excess results trim with a "
-          <> "trailing truncation annotation. gopls in particular "
-          <> "fuzzy-matches across the Go stdlib and can flood the "
-          <> "result for short queries — the cap protects the MCP "
-          <> "host's per-tool token budget. "
-          <> "`workspace_uri_hint` may be a file URI inside the "
-          <> "workspace OR the workspace root directory itself "
-          <> "(e.g. `file:///proj/`); when a directory is given pass "
-          <> "`language` to pick the LSP since extension routing has "
-          <> "no extension to read.",
+        "LSP workspace/symbol. Returns SymbolInformation[] or "
+          <> "WorkspaceSymbol[] up to `limit` (default 20). "
+          <> "`workspace_uri_hint` is any file inside the workspace "
+          <> "or the workspace root URI; pass `language` when a "
+          <> "directory is given so LSP routing skips extension "
+          <> "lookup.",
       ),
     ),
     #(
@@ -671,16 +639,9 @@ fn get_diagnostics_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Return LSP diagnostics (errors and warnings) for a source file. "
-          <> "Picks the language by file extension and spawns the matching "
-          <> "LSP (rust-analyzer for .rs, gopls for .go, "
-          <> "typescript-language-server for .ts/.tsx/.js/.jsx, pyright for "
-          <> ".py). Returns the verbatim textDocument/publishDiagnostics body "
-          <> "the server emits. Cold start is ~5-15 seconds for the LSP to "
-          <> "index the project. Some servers (notably "
-          <> "typescript-language-server) emit diagnostics via pull-mode only "
-          <> "and may return NoDiagnosticsObserved here; pull-mode support "
-          <> "lands in a later milestone.",
+        "LSP textDocument/publishDiagnostics drain. Returns "
+          <> "diagnostics for the file. Some servers are pull-mode "
+          <> "only and may return NoDiagnosticsObserved.",
       ),
     ),
     #(
@@ -1621,16 +1582,9 @@ fn goto_type_definition_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Find the *type* declaration for the symbol at a position. "
-          <> "Wraps LSP `textDocument/typeDefinition`. For "
-          <> "`let x: Foo = ...`, calling on `x` returns where `Foo` "
-          <> "is declared, not where `x` is bound. Same response shape "
-          <> "as goto_definition (Location | Location[] | "
-          <> "LocationLink[] | null). Cold-start note: a freshly-"
-          <> "spawned rust-analyzer may return `null` for the first "
-          <> "5-15s while it indexes the workspace; retry once after "
-          <> "a 1-2s pause if you expected a hit at a known symbol "
-          <> "position.",
+        "LSP textDocument/typeDefinition. Returns the location "
+          <> "of the *type* of the symbol at position. Same shape as "
+          <> "goto_definition.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1643,15 +1597,9 @@ fn goto_implementation_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Find concrete implementation site(s) for the trait/interface "
-          <> "method or abstract symbol at a position. Wraps LSP "
-          <> "`textDocument/implementation`. Returns up to `limit` "
-          <> "Locations / LocationLinks; default 50, raise via the "
-          <> "`limit` arg if you need more (results past the cap are "
-          <> "trimmed with a trailing `(truncated N more ...)` "
-          <> "annotation). Calling on a stdlib trait method like "
-          <> "`Default::default` can otherwise return thousands of "
-          <> "sites and exceed the MCP host's per-tool token budget.",
+        "LSP textDocument/implementation. Returns up to `limit` "
+          <> "(default 50) implementation sites for the trait or "
+          <> "interface method at position. Trims excess.",
       ),
     ),
     #(
@@ -1729,11 +1677,8 @@ fn signature_help_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Get the signature(s) and active parameter for a function "
-          <> "call at the given position (typically inside the call's "
-          <> "parentheses). Wraps LSP `textDocument/signatureHelp`. "
-          <> "Returns `{signatures: [...], activeSignature?: int, "
-          <> "activeParameter?: int}` or null.",
+        "LSP textDocument/signatureHelp. Position inside the call "
+          <> "parens. Returns SignatureHelp or null.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1746,13 +1691,11 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Prepare a call hierarchy at the given position. Wraps LSP "
-          <> "`textDocument/prepareCallHierarchy`. Returns a list of "
-          <> "`CallHierarchyItem` identifying the callable. The "
-          <> "follow-on `incomingCalls`/`outgoingCalls` requests "
-          <> "round-trip a returned item; until pharos exposes a "
-          <> "passthrough for those, use the `lsp_request_raw` escape "
-          <> "hatch (Stage 1C).",
+        "LSP textDocument/prepareCallHierarchy. Returns "
+          <> "CallHierarchyItem[]. Pass items back to "
+          <> "call_hierarchy_incoming_calls / outgoing_calls. "
+          <> "Returns -32601 if server didn't advertise "
+          <> "callHierarchyProvider.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1762,18 +1705,16 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
 fn call_hierarchy_incoming_calls_tool_definition() -> Json {
   call_hierarchy_calls_tool_definition(
     "call_hierarchy_incoming_calls",
-    "Returns who calls into the supplied `CallHierarchyItem`. Wraps "
-      <> "LSP `callHierarchy/incomingCalls`. Pass an item returned by "
-      <> "`call_hierarchy_prepare` verbatim.",
+    "LSP callHierarchy/incomingCalls. Takes a CallHierarchyItem "
+      <> "from call_hierarchy_prepare. Returns who calls into it.",
   )
 }
 
 fn call_hierarchy_outgoing_calls_tool_definition() -> Json {
   call_hierarchy_calls_tool_definition(
     "call_hierarchy_outgoing_calls",
-    "Returns who the supplied `CallHierarchyItem` calls. Wraps LSP "
-      <> "`callHierarchy/outgoingCalls`. Pass an item returned by "
-      <> "`call_hierarchy_prepare` verbatim.",
+    "LSP callHierarchy/outgoingCalls. Takes a CallHierarchyItem "
+      <> "from call_hierarchy_prepare. Returns who it calls.",
   )
 }
 
@@ -1825,12 +1766,9 @@ fn rename_preview_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Preview a rename refactor across the workspace. Wraps LSP "
-          <> "`textDocument/rename`. Returns a human-readable summary "
-          <> "of the proposed `WorkspaceEdit` listing every file and "
-          <> "every changed range. Pharos NEVER writes the changes — "
-          <> "review the summary, then apply with your own Edit tool "
-          <> "(or, future, `apply_workspace_edit`).",
+        "LSP textDocument/rename, preview-only — never writes. "
+          <> "Returns the proposed WorkspaceEdit summary. Apply via "
+          <> "apply_workspace_edit.",
       ),
     ),
     #(
@@ -1906,17 +1844,9 @@ fn format_document_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Run the LSP formatter against a single file. Wraps LSP "
-          <> "`textDocument/formatting`. Returns a summary of the "
-          <> "formatter's proposed edits. Pharos does not write the "
-          <> "changes — review and apply with your own Edit tool. "
-          <> "Formatting options use LSP defaults (tabSize=4, "
-          <> "insertSpaces=true). Default per-call timeout is 30s; "
-          <> "rust-analyzer shells out to rustfmt and may exceed the "
-          <> "default on cold cache — raise via `timeout_ms`. Pyright "
-          <> "(.py) does not implement formatting; it returns "
-          <> "`-32601 Unhandled method`. Format Python externally "
-          <> "with ruff/black/yapf.",
+        "LSP textDocument/formatting, preview-only. Returns the "
+          <> "formatter's proposed TextEdit[] summary. Options use "
+          <> "LSP defaults (tabSize=4, insertSpaces=true).",
       ),
     ),
     #(
@@ -1964,19 +1894,10 @@ fn type_hierarchy_prepare_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Resolve `TypeHierarchyItem`s for a symbol at a position. "
-          <> "Wraps LSP `textDocument/prepareTypeHierarchy`. Returns "
-          <> "the verbatim LSP result (`TypeHierarchyItem[]`). Each "
-          <> "item carries `name`, `kind`, `uri`, `range`, "
-          <> "`selectionRange` plus optional `detail`/`tags`/`data`. "
-          <> "Pass an item to `type_hierarchy_supertypes` / "
-          <> "`type_hierarchy_subtypes` to walk the type relationship "
-          <> "graph. Server support is sparse at the time of writing: "
-          <> "rust-analyzer, pyright, gopls, and "
-          <> "typescript-language-server all return "
-          <> "`-32601 Method not found` for `prepareTypeHierarchy`. "
-          <> "Tool plumbing ships ahead of LSP support; check your "
-          <> "server's release notes before relying on it.",
+        "LSP textDocument/prepareTypeHierarchy. Returns "
+          <> "TypeHierarchyItem[]. Pass items to "
+          <> "type_hierarchy_supertypes / subtypes. Server support "
+          <> "sparse — many return -32601.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1986,18 +1907,16 @@ fn type_hierarchy_prepare_tool_definition() -> Json {
 fn type_hierarchy_supertypes_tool_definition() -> Json {
   type_hierarchy_calls_tool_definition(
     "type_hierarchy_supertypes",
-    "Get supertypes for a `TypeHierarchyItem`. Wraps LSP "
-      <> "`typeHierarchy/supertypes`. Pass the item returned by "
-      <> "`type_hierarchy_prepare` verbatim.",
+    "LSP typeHierarchy/supertypes. Takes a TypeHierarchyItem "
+      <> "from type_hierarchy_prepare.",
   )
 }
 
 fn type_hierarchy_subtypes_tool_definition() -> Json {
   type_hierarchy_calls_tool_definition(
     "type_hierarchy_subtypes",
-    "Get subtypes for a `TypeHierarchyItem`. Wraps LSP "
-      <> "`typeHierarchy/subtypes`. Pass the item returned by "
-      <> "`type_hierarchy_prepare` verbatim.",
+    "LSP typeHierarchy/subtypes. Takes a TypeHierarchyItem "
+      <> "from type_hierarchy_prepare.",
   )
 }
 
@@ -2043,26 +1962,12 @@ fn semantic_tokens_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Get LSP semantic tokens for a file (whole document or a "
-          <> "range). Wraps `textDocument/semanticTokens/full` when "
-          <> "no range is supplied (or all four range ints are 0); "
-          <> "`textDocument/semanticTokens/range` otherwise. Returns "
-          <> "the verbatim LSP `SemanticTokens` JSON: "
-          <> "`{resultId?: string, data: number[]}`. The `data` array "
-          <> "is the LSP-spec integer encoding — 5 ints per token: "
-          <> "`[deltaLine, deltaStartChar, length, tokenType, "
-          <> "tokenModifiers]`. `tokenType` is an index into the "
-          <> "server's legend (in the server's `initialize` "
-          <> "capabilities under `semanticTokensProvider.legend`); "
-          <> "pharos does not yet stash the legend, so callers wanting "
-          <> "type-name strings should fetch it themselves via "
-          <> "`lsp_request_raw` against `initialize` or rely on the "
-          <> "well-known LSP defaults (`namespace`, `type`, `class`, "
-          <> "`enum`, `interface`, `struct`, `typeParameter`, "
-          <> "`parameter`, `variable`, `property`, `enumMember`, "
-          <> "`event`, `function`, `method`, `macro`, `keyword`, "
-          <> "`modifier`, `comment`, `string`, `number`, `regexp`, "
-          <> "`operator`, `decorator`).",
+        "LSP textDocument/semanticTokens/{full,range}. Whole doc "
+          <> "if all range ints are 0, else range-scoped. Returns "
+          <> "SemanticTokens — `data` is the 5-int-per-token "
+          <> "LSP-spec integer encoding. Legend lives in the "
+          <> "server's initialize capabilities; pharos does not "
+          <> "stash it.",
       ),
     ),
     #(
@@ -2147,20 +2052,9 @@ fn inlay_hints_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Get inline annotations the editor would render in a range "
-          <> "of source — typically inferred type hints after a `let` "
-          <> "binding or parameter names at call sites. Wraps LSP "
-          <> "`textDocument/inlayHint`. Returns the verbatim "
-          <> "`InlayHint[]` JSON: each hint has `position`, `label` "
-          <> "(string or `InlayHintLabelPart[]`), optional `kind` "
-          <> "(1=Type, 2=Parameter), `tooltip`, and `textEdits`. "
-          <> "rust-analyzer / pyright / typescript-language-server "
-          <> "implement this; gopls requires a server-side feature "
-          <> "flag. Returns `null` or `[]` when no hints in the "
-          <> "range. Cold-start note: a freshly-spawned LSP may "
-          <> "return empty for the first 5-15s while it indexes; "
-          <> "retry once after a 1-2s pause if the file has known "
-          <> "hints.",
+        "LSP textDocument/inlayHint. Range-scoped. Returns "
+          <> "InlayHint[] or null. Returns -32601 if server didn't "
+          <> "advertise inlayHintProvider.",
       ),
     ),
     #(
@@ -2261,23 +2155,13 @@ fn apply_workspace_edit_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Apply an LSP `WorkspaceEdit` to disk. Companion to "
-          <> "`rename_preview` / `format_document` / `code_actions` "
-          <> "(which return rendered summaries) — pair this with "
-          <> "`lsp_request_raw` to fetch the raw `WorkspaceEdit` JSON, "
-          <> "then call here to write. Defaults to `dry_run=true`: "
-          <> "validates positions and overlap, reports per-file "
-          <> "byte-count delta, but does not write. Re-call with "
-          <> "`dry_run=false` to apply. Per-file atomic writes "
-          <> "(write `.tmp`, rename) so a partial run never leaves a "
-          <> "half-written file. Overlapping edits in the same file "
-          <> "abort the run. `documentChanges` with "
-          <> "`resourceOperations` (CreateFile / RenameFile / "
-          <> "DeleteFile) are not supported in this version. Position "
-          <> "semantics: LSP characters are UTF-16 code units; pharos "
-          <> "approximates via Unicode code points (exact for the "
-          <> "BMP; off-by-one per surrogate-pair char in the unlucky "
-          <> "line).",
+        "Apply an LSP WorkspaceEdit to disk. `dry_run=true` "
+          <> "(default) validates + reports per-file byte delta but "
+          <> "writes nothing; `dry_run=false` commits via per-file "
+          <> "atomic rename. Overlapping edits abort the run. "
+          <> "Characters are UTF-16 LSP units approximated as "
+          <> "Unicode codepoints (BMP-exact, off-by-one on "
+          <> "surrogate-pair chars).",
       ),
     ),
     #(
@@ -2328,14 +2212,10 @@ fn lsp_request_raw_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Generic escape hatch for LSP methods pharos does not "
-          <> "expose as a typed tool. Sends `(method, params)` to the "
-          <> "LSP for the file at `uri` (routing by extension); "
-          <> "returns the verbatim result as JSON. Use for "
-          <> "`callHierarchy/incomingCalls`, `textDocument/inlayHint`, "
-          <> "server-specific extensions, or any method that arrives "
-          <> "before pharos wraps it. Errors from the LSP surface "
-          <> "with the server's code and message.",
+        "Escape hatch — send any (method, params) to the LSP for "
+          <> "`uri`'s extension. Returns the verbatim JSON result. "
+          <> "Use for server-specific extensions or methods pharos "
+          <> "does not wrap.",
       ),
     ),
     #(
@@ -2408,13 +2288,9 @@ fn code_actions_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "List the LSP code actions (quick fixes, refactors, source "
-          <> "actions) available for a range. Wraps LSP "
-          <> "`textDocument/codeAction`. Returns the verbatim list of "
-          <> "`Command | CodeAction`. Each action's `title` describes "
-          <> "what it would do; CodeAction entries may carry an `edit` "
-          <> "(WorkspaceEdit) and/or a `command`. Pharos does not "
-          <> "execute commands or apply edits automatically.",
+        "LSP textDocument/codeAction. Range-scoped. Returns "
+          <> "(Command | CodeAction)[]. Pharos does not auto-execute "
+          <> "commands or auto-apply edits.",
       ),
     ),
     #(
