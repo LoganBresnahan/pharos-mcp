@@ -46,6 +46,7 @@ import pharos/tools/debug
 import pharos/tools/rename_preview
 import pharos/tools/semantic_tokens
 import pharos/tools/signature_help
+import pharos/tools/symbols
 import pharos/tools/type_hierarchy
 
 const protocol_version: String = "2024-11-05"
@@ -318,6 +319,14 @@ fn allowed_tool_definitions() -> List(Json) {
       type_hierarchy_subtypes_tool_definition,
     ),
     #("lsp_request_raw", lsp_request_raw_tool_definition),
+    // -- ADR-026 symbol layer --
+    #("find_symbol", find_symbol_tool_definition),
+    #("get_symbols_overview", get_symbols_overview_tool_definition),
+    #(
+      "find_referencing_symbols",
+      find_referencing_symbols_tool_definition,
+    ),
+    #("edit_at_symbol", edit_at_symbol_tool_definition),
   ]
   list.append(curated, debug.named_definitions())
   |> list.filter_map(fn(pair) {
@@ -890,6 +899,16 @@ fn dispatch_tool_call(
 
     Ok(#("lsp_request_raw", arguments)) ->
       handle_lsp_request_raw(pool, id, arguments)
+
+    // -- ADR-026 symbol layer --
+    Ok(#("find_symbol", arguments)) ->
+      handle_find_symbol(pool, id, arguments)
+    Ok(#("get_symbols_overview", arguments)) ->
+      handle_get_symbols_overview(pool, id, arguments)
+    Ok(#("find_referencing_symbols", arguments)) ->
+      handle_find_referencing_symbols(pool, id, arguments)
+    Ok(#("edit_at_symbol", arguments)) ->
+      handle_edit_at_symbol(pool, id, arguments)
 
     Ok(#(name, arguments)) ->
       case debug.dispatch(pool, name, arguments) {
@@ -3046,3 +3065,420 @@ fn id_to_json(id: Id) -> Json {
   }
 }
 
+// -- ADR-026 symbol-layer tool definitions + handlers ------------------
+
+fn find_symbol_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("find_symbol")),
+    #(
+      "description",
+      json.string(
+        "Locate symbols by name_path (slash-delimited, e.g. "
+          <> "\"User/authenticate\"). Always returns the full set of "
+          <> "matches with disambiguation metadata; the LLM picks one "
+          <> "and re-calls edit_at_symbol with the chosen handle. "
+          <> "Returns Resolution = Single(match) | Multiple(matches) | "
+          <> "NotFound(near_misses). `policy` overrides the default "
+          <> "AllMatches with one of: first_match, closest_scope, "
+          <> "strict_single.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "name_path",
+              json.object([#("type", json.string("string"))]),
+            ),
+            #(
+              "scope_uri",
+              json.object([#("type", json.string("string"))]),
+            ),
+            #(
+              "policy",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "enum",
+                  json.array(
+                    [
+                      "all_matches", "first_match", "closest_scope",
+                      "strict_single",
+                    ],
+                    of: json.string,
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.array(["name_path", "scope_uri"], of: json.string),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn get_symbols_overview_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("get_symbols_overview")),
+    #(
+      "description",
+      json.string(
+        "LLM-friendly outline of a single source file. Reshapes LSP "
+          <> "documentSymbol output to drop block-scope variable noise "
+          <> "and surface only `(name, kind, line, detail, children)`. "
+          <> "Cheaper than document_symbols for navigation; use this "
+          <> "first, then drill with find_symbol when you know what "
+          <> "you want to operate on.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([#("type", json.string("string"))]),
+            ),
+          ]),
+        ),
+        #("required", json.array(["uri"], of: json.string)),
+      ]),
+    ),
+  ])
+}
+
+fn find_referencing_symbols_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("find_referencing_symbols")),
+    #(
+      "description",
+      json.string(
+        "Find symbols that reference the given handle. Wraps LSP "
+          <> "textDocument/references then projects each call-site "
+          <> "location back through documentSymbol to return the "
+          <> "OWNER symbol (the function/class containing the "
+          <> "reference) rather than a bare location. The handle "
+          <> "comes from a prior find_symbol call.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "symbol_handle",
+              json.object([#("type", json.string("object"))]),
+            ),
+          ]),
+        ),
+        #("required", json.array(["symbol_handle"], of: json.string)),
+      ]),
+    ),
+  ])
+}
+
+fn edit_at_symbol_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("edit_at_symbol")),
+    #(
+      "description",
+      json.string(
+        "Compose a WorkspaceEdit preview that targets the symbol "
+          <> "identified by `symbol_handle` (returned from a prior "
+          <> "find_symbol). Never writes — returns the proposed range "
+          <> "+ new_text + rendered diff. Apply via "
+          <> "apply_workspace_edit if you want to commit. `mode` "
+          <> "selects the edit boundary: replace_body (rewrite the "
+          <> "body keeping the signature), insert_before (prepend "
+          <> "content above the whole symbol), insert_after (append "
+          <> "content below the whole symbol).",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "symbol_handle",
+              json.object([#("type", json.string("object"))]),
+            ),
+            #(
+              "mode",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "enum",
+                  json.array(
+                    ["replace_body", "insert_before", "insert_after"],
+                    of: json.string,
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "content",
+              json.object([#("type", json.string("string"))]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.array(
+            ["symbol_handle", "mode", "content"],
+            of: json.string,
+          ),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn handle_find_symbol(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_find_symbol_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid find_symbol params: " <> reason,
+      )
+    Ok(#(name_path_str, scope_uri, policy)) ->
+      case symbols.parse_name_path(name_path_str) {
+        Error(err) ->
+          success_response(id, fn() {
+            tool_text_result(symbols.describe_symbols_error(err), True)
+          })
+        Ok(name_path) ->
+          case symbols.find_symbol(pool, scope_uri, name_path, policy) {
+            Ok(resolution) ->
+              success_response(id, fn() {
+                tool_text_result(
+                  json.to_string(symbols.resolution_to_json(resolution)),
+                  False,
+                )
+              })
+            Error(err) ->
+              success_response(id, fn() {
+                tool_text_result(symbols.describe_symbols_error(err), True)
+              })
+          }
+      }
+  }
+}
+
+fn handle_get_symbols_overview(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_get_symbols_overview_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid get_symbols_overview params: " <> reason,
+      )
+    Ok(uri) ->
+      case symbols.get_symbols_overview(pool, uri) {
+        Ok(tree) ->
+          success_response(id, fn() {
+            tool_text_result(
+              json.to_string(symbols.symbol_tree_to_json(tree)),
+              False,
+            )
+          })
+        Error(err) ->
+          success_response(id, fn() {
+            tool_text_result(symbols.describe_symbols_error(err), True)
+          })
+      }
+  }
+}
+
+fn handle_find_referencing_symbols(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_handle_only_arguments(arguments, "find_referencing_symbols") {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid find_referencing_symbols params: " <> reason,
+      )
+    Ok(handle) ->
+      case symbols.find_referencing_symbols(pool, handle) {
+        Ok(matches) ->
+          success_response(id, fn() {
+            tool_text_result(
+              json.to_string(
+                json.object([
+                  #("count", json.int(list.length(matches))),
+                  #(
+                    "owners",
+                    json.preprocessed_array(
+                      list.map(matches, symbols.symbol_match_to_json),
+                    ),
+                  ),
+                ]),
+              ),
+              False,
+            )
+          })
+        Error(err) ->
+          success_response(id, fn() {
+            tool_text_result(symbols.describe_symbols_error(err), True)
+          })
+      }
+  }
+}
+
+fn handle_edit_at_symbol(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_edit_at_symbol_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid edit_at_symbol params: " <> reason,
+      )
+    Ok(#(handle, mode, content)) ->
+      case symbols.edit_at_symbol(pool, handle, mode, content) {
+        Ok(preview) ->
+          success_response(id, fn() {
+            tool_text_result(
+              json.to_string(symbols.edit_preview_to_json(preview)),
+              False,
+            )
+          })
+        Error(err) ->
+          success_response(id, fn() {
+            tool_text_result(symbols.describe_symbols_error(err), True)
+          })
+      }
+  }
+}
+
+fn decode_find_symbol_arguments(
+  arguments: Option(Dynamic),
+) -> Result(#(String, String, symbols.Disambiguation), String) {
+  case arguments {
+    None -> Error("missing arguments")
+    Some(args) -> {
+      let decoder = {
+        use name_path <- decode.field("name_path", decode.string)
+        use scope_uri <- decode.field("scope_uri", decode.string)
+        use policy_str <- decode.optional_field(
+          "policy",
+          "all_matches",
+          decode.string,
+        )
+        decode.success(#(name_path, scope_uri, policy_str))
+      }
+      case decode.run(args, decoder) {
+        Error(_) -> Error("name_path + scope_uri required")
+        Ok(#(np, uri, policy_str)) -> {
+          let policy = case policy_str {
+            "first_match" -> symbols.FirstMatch
+            "closest_scope" -> symbols.ClosestScope
+            "strict_single" -> symbols.StrictSingle
+            _ -> symbols.AllMatches
+          }
+          Ok(#(np, uri, policy))
+        }
+      }
+    }
+  }
+}
+
+fn decode_get_symbols_overview_arguments(
+  arguments: Option(Dynamic),
+) -> Result(String, String) {
+  case arguments {
+    None -> Error("missing arguments")
+    Some(args) -> {
+      let decoder = {
+        use uri <- decode.field("uri", decode.string)
+        decode.success(uri)
+      }
+      case decode.run(args, decoder) {
+        Error(_) -> Error("uri required")
+        Ok(uri) -> Ok(uri)
+      }
+    }
+  }
+}
+
+fn decode_handle_only_arguments(
+  arguments: Option(Dynamic),
+  tool_name: String,
+) -> Result(symbols.SymbolHandle, String) {
+  case arguments {
+    None -> Error("missing arguments for " <> tool_name)
+    Some(args) -> {
+      let decoder = {
+        use handle <- decode.field(
+          "symbol_handle",
+          symbols.symbol_handle_decoder(),
+        )
+        decode.success(handle)
+      }
+      case decode.run(args, decoder) {
+        Error(_) -> Error("symbol_handle field missing or malformed")
+        Ok(h) -> Ok(h)
+      }
+    }
+  }
+}
+
+fn decode_edit_at_symbol_arguments(
+  arguments: Option(Dynamic),
+) -> Result(#(symbols.SymbolHandle, symbols.EditMode, String), String) {
+  case arguments {
+    None -> Error("missing arguments")
+    Some(args) -> {
+      let decoder = {
+        use handle <- decode.field(
+          "symbol_handle",
+          symbols.symbol_handle_decoder(),
+        )
+        use mode_str <- decode.field("mode", decode.string)
+        use content <- decode.field("content", decode.string)
+        decode.success(#(handle, mode_str, content))
+      }
+      case decode.run(args, decoder) {
+        Error(_) ->
+          Error("symbol_handle + mode + content required")
+        Ok(#(handle, mode_str, content)) ->
+          case symbols.edit_mode_from_string(mode_str) {
+            Ok(mode) -> Ok(#(handle, mode, content))
+            Error(err) -> Error(symbols.describe_symbols_error(err))
+          }
+      }
+    }
+  }
+}

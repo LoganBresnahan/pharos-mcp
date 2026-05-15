@@ -61,13 +61,19 @@ pub fn category_for(name: String) -> ToolCategory {
     | "semantic_tokens"
     | "type_hierarchy_prepare"
     | "type_hierarchy_supertypes"
-    | "type_hierarchy_subtypes" -> CatRead
+    | "type_hierarchy_subtypes"
+    // -- ADR-026 symbol layer (read paths) --
+    | "find_symbol"
+    | "get_symbols_overview"
+    | "find_referencing_symbols" -> CatRead
 
     // -- write (returns WorkspaceEdit data; or applies it on demand) --
     "rename_preview"
     | "format_document"
     | "code_actions"
-    | "apply_workspace_edit" -> CatWrite
+    | "apply_workspace_edit"
+    // -- ADR-026 symbol layer (preview-only write path) --
+    | "edit_at_symbol" -> CatWrite
 
     // -- default (essentials the LLM needs to follow tool-error
     //    recovery recipes; ship in the production default profile
