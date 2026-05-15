@@ -69,7 +69,7 @@
     trap_exits/0,
     describe_term/1,
     install_sasl_capture_handler/0,
-    pharos_sasl_capture/2
+    format/2
 ]).
 
 %% Set process_flag(trap_exit, true) on the calling process. EXIT
@@ -104,50 +104,49 @@ describe_term(Term) ->
 %% whose meta carries one of the SASL/crash domains. Other events
 %% pass through to the default handler unchanged.
 install_sasl_capture_handler() ->
+    %% Use the built-in logger_std_h backend, configured with
+    %% type=standard_error so writes hit fd 2 directly. The
+    %% formatter callback below selects which events to render —
+    %% the gleam `logging` library's filter on the DEFAULT handler
+    %% does not apply here because we add a NEW handler with
+    %% empty filters and filter_default=log (everything in).
     Config = #{
-        config => #{},
+        config => #{type => standard_error, sync_mode_qlen => 0},
         filter_default => log,
         filters => [],
-        formatter => {?MODULE, pharos_sasl_capture}
+        formatter => {?MODULE, #{}}
     },
-    case logger:add_handler(pharos_sasl_capture, ?MODULE, Config) of
-        ok -> nil;
-        {error, {already_exist, _}} -> nil;
-        {error, _} -> nil
-    end.
+    Result = logger:add_handler(pharos_sasl_capture, logger_std_h, Config),
+    io:format(standard_error,
+        "[pharos-sasl] handler install result: ~p~n", [Result]),
+    %% Emit a synthetic log event right after install so we can confirm
+    %% events flow through this handler at all.
+    logger:error("pharos-sasl handler smoke test (expect to see this line)"),
+    nil.
 
 %% logger formatter callback: write SASL-class reports raw to stderr.
 %% Returning a binary tells logger to emit it; returning <<>> drops.
-pharos_sasl_capture(#{level := Level, msg := Msg, meta := Meta}, _Config) ->
-    Domain = maps:get(domain, Meta, []),
-    IsSasl = lists:member(otp, Domain) orelse
-             lists:member(sasl, Domain) orelse
-             lists:member(supervisor_report, Domain),
-    case {Level, IsSasl} of
-        {error, _} -> format_report(Level, Msg, Meta);
-        {critical, _} -> format_report(Level, Msg, Meta);
-        {alert, _} -> format_report(Level, Msg, Meta);
-        {emergency, _} -> format_report(Level, Msg, Meta);
-        {_, true} -> format_report(Level, Msg, Meta);
-        _ -> <<>>
+%% logger formatter callback. Module ref `{?MODULE, _}` in
+%% logger:add_handler config wires this in — logger calls
+%% Module:format/2 per OTP convention. We render every event the
+%% handler receives as `[pharos-sasl] ts level=L domain=D msg=...`,
+%% bypassing the gleam logging library's SASL/supervisor_report
+%% filters that suppress these events on the default handler.
+format(LogEvent, _Config) ->
+    try
+        Level = maps:get(level, LogEvent, info),
+        Msg = maps:get(msg, LogEvent, undefined),
+        Meta = maps:get(meta, LogEvent, #{}),
+        Domain = maps:get(domain, Meta, []),
+        io_lib:format("[pharos-sasl] level=~p domain=~p msg=~p~n",
+                      [Level, Domain, Msg])
+    catch
+        C:E:_ -> io_lib:format("[pharos-sasl] FORMATTER ERR ~p:~p~n", [C, E])
     end.
 
-format_report(Level, Msg, Meta) ->
-    %% Render directly to stderr — synchronous write, survives handler
-    %% remove-on-error semantics that doomed the default handler.
-    Ts = calendar:system_time_to_rfc3339(erlang:system_time(second)),
-    Body = case Msg of
-        {report, R} -> io_lib:format("~p", [R]);
-        {string, S} -> S;
-        {Fmt, Args} -> io_lib:format(Fmt, Args);
-        Other -> io_lib:format("~p", [Other])
-    end,
-    Line = io_lib:format(
-        "[pharos-sasl] ~s level=~p meta=~p~n  msg=~s~n",
-        [Ts, Level, Meta, Body]
-    ),
-    io:format(standard_error, "~s", [Line]),
-    <<>>.
+%% Legacy helper retained in case other callers grow; replaced by inline
+%% body in pharos_sasl_capture/2 above.
+format_report(_Level, _Msg, _Meta) -> "".
 
 %% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
 %% to the Gleam-side Subject for the lsp_proc actor handling that
