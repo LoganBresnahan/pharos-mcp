@@ -66,16 +66,18 @@ pub fn handle(
 
   let request_result =
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
-      proc.with_handler(
-        lsp,
-        "workspace/applyEdit",
-        capture_handler,
-        fn() {
-          session.request_with_content_modified_retry(fn() {
-            proc.request(lsp, "textDocument/rename", params, timeout_ms)
-          })
-        },
-      )
+      tool_helpers.with_capability_gate(lsp, "textDocument/rename", fn() {
+        proc.with_handler(
+          lsp,
+          "workspace/applyEdit",
+          capture_handler,
+          fn() {
+            session.request_with_content_modified_retry(fn() {
+              proc.request(lsp, "textDocument/rename", params, timeout_ms)
+            })
+          },
+        )
+      })
     })
 
   // Prefer the applyEdit-captured edit over the request result.

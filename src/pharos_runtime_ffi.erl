@@ -69,8 +69,49 @@
     trap_exits/0,
     describe_term/1,
     install_sasl_capture_handler/0,
-    format/2
+    format/2,
+    lsp_capabilities_init/0,
+    lsp_capabilities_store/2,
+    lsp_capabilities_lookup/1
 ]).
+
+%% ETS-backed LSP capabilities store (8A capability detection).
+%% Keyed by lsp_proc pid; value is the InitializeResult.capabilities
+%% Dynamic the server returned during the initialize handshake.
+%% Tools read this before dispatching optional methods (inlay_hints,
+%% type_hierarchy_prepare, etc.) so we can return a typed
+%% "method not advertised" response without burning a network round
+%% trip on servers that don't implement it. Owner: pharos:boot/0.
+-define(LSP_CAPABILITIES_TABLE, pharos_lsp_capabilities).
+
+lsp_capabilities_init() ->
+    case ets:info(?LSP_CAPABILITIES_TABLE) of
+        undefined ->
+            ets:new(?LSP_CAPABILITIES_TABLE, [
+                named_table, public, set, {read_concurrency, true}
+            ]);
+        _ ->
+            ok
+    end,
+    nil.
+
+lsp_capabilities_store(Pid, Capabilities) when is_pid(Pid) ->
+    case ets:info(?LSP_CAPABILITIES_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:insert(?LSP_CAPABILITIES_TABLE, {Pid, Capabilities}),
+            nil
+    end.
+
+lsp_capabilities_lookup(Pid) when is_pid(Pid) ->
+    case ets:info(?LSP_CAPABILITIES_TABLE) of
+        undefined -> {error, nil};
+        _ ->
+            case ets:lookup(?LSP_CAPABILITIES_TABLE, Pid) of
+                [{_, Caps}] -> {ok, Caps};
+                [] -> {error, nil}
+            end
+    end.
 
 %% Set process_flag(trap_exit, true) on the calling process. EXIT
 %% signals from linked processes will then be delivered as

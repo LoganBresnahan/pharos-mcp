@@ -72,8 +72,10 @@ pub fn handle(
       file_uri,
       "textDocument/inlayHint",
       fn(lsp) {
-        session.request_with_content_modified_retry(fn() {
-          proc.request(lsp, "textDocument/inlayHint", params, timeout_ms)
+        tool_helpers.with_capability_gate(lsp, "textDocument/inlayHint", fn() {
+          session.request_with_content_modified_retry(fn() {
+            proc.request(lsp, "textDocument/inlayHint", params, timeout_ms)
+          })
         })
       },
     )

@@ -7,8 +7,10 @@
 //// MCP dispatch chain.
 
 import gleam/dynamic.{type Dynamic}
+import pharos/lsp/capabilities
 import pharos/lsp/client
 import pharos/lsp/lifecycle
+import pharos/lsp/proc.{type Proc}
 import pharos/lsp/port
 
 @external(erlang, "erlang", "system_time")
@@ -85,3 +87,30 @@ fn describe_client_error(err: client.Error) -> String {
 
 @external(erlang, "erlang", "integer_to_binary")
 fn int_to_string(n: Int) -> String
+
+/// Short-circuit a tool call when the LSP server did not advertise
+/// the required capability during its initialize handshake. Mirrors
+/// the `-32601 Method not found` shape the server itself would
+/// return, which the dogfood harness already counts as a GAP rather
+/// than a FAIL. Saves a 30s+ round-trip on servers that silently
+/// never reply to optional methods.
+///
+/// `Unknown` (no capabilities record on file — proc recovered from
+/// ETS bridge across a pool restart, or initialize result lacked
+/// the field) falls through to `body()` so we preserve the
+/// pre-gate optimistic-dispatch behaviour rather than regressing
+/// existing tools to a hard fail.
+pub fn with_capability_gate(
+  lsp: Proc,
+  method: String,
+  body: fn() -> Result(a, lifecycle.RequestError),
+) -> Result(a, lifecycle.RequestError) {
+  case capabilities.check(lsp, method) {
+    capabilities.Unsupported ->
+      Error(lifecycle.ServerError(
+        -32_601,
+        "method " <> method <> " not advertised by server capabilities",
+      ))
+    _ -> body()
+  }
+}

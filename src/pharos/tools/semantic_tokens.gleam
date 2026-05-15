@@ -87,8 +87,10 @@ pub fn handle(
       file_uri,
       method,
       fn(lsp) {
-        session.request_with_content_modified_retry(fn() {
-          proc.request(lsp, method, params, timeout_ms)
+        tool_helpers.with_capability_gate(lsp, method, fn() {
+          session.request_with_content_modified_retry(fn() {
+            proc.request(lsp, method, params, timeout_ms)
+          })
         })
       },
     )

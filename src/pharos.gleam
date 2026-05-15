@@ -32,6 +32,7 @@ import pharos/log
 import pharos/log/entry
 import pharos/log/filter
 import pharos/log/trace_ring
+import pharos/lsp/capabilities
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/dyn_sup
 import pharos/lsp/inflight
@@ -115,6 +116,7 @@ fn do_boot() -> Result(Pid, String) {
   inflight.init()
   request_workers.init()
   dyn_sup.init_subjects_bridge()
+  capabilities.init()
 
   // Diagnostic logger handler: capture every SASL/supervisor/error
   // logger event by writing the raw term to stderr. Bypasses the

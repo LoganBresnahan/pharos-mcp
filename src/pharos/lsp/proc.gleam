@@ -21,6 +21,7 @@
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
@@ -140,7 +141,16 @@ pub fn start(
         case lifecycle.initialize(c, 0, init_params, initialize_timeout_ms) {
           Error(e) ->
             Error("initialize handshake failed: " <> describe_lifecycle_error(e))
-          Ok(#(c, _capabilities)) -> {
+          Ok(#(c, initialize_result)) -> {
+            // Stash the server's advertised capabilities under the
+            // actor's own pid so tools can short-circuit calls to
+            // methods the server did not advertise (ADR 8A).
+            // `initialize_result` is the whole InitializeResult; the
+            // capabilities sub-object lives under the `capabilities`
+            // key. Best-effort: a server that omits the field
+            // becomes Unknown at the gate, which falls back to the
+            // old optimistic-dispatch path.
+            store_capabilities_for_self(initialize_result)
             // M10: drain `$/progress` notifications until the language's
             // readiness token reaches `end` (rust-analyzer's
             // `rustAnalyzer/Indexing`, gopls's `setup`, pyright's
@@ -532,6 +542,25 @@ fn cast_subject(dyn: Dynamic) -> Subject(Msg)
 
 @external(erlang, "erlang", "integer_to_binary")
 fn int_to_text(value: Int) -> String
+
+/// Extract `capabilities` from the InitializeResult Dynamic and
+/// stash it in the ETS-backed capabilities table keyed by the
+/// calling actor's pid. Called once from inside the proc actor's
+/// initialiser, right after `lifecycle.initialize/4` returns.
+fn store_capabilities_for_self(initialize_result: Dynamic) -> Nil {
+  case
+    decode.run(
+      initialize_result,
+      decode.field("capabilities", decode.dynamic, decode.success),
+    )
+  {
+    Ok(caps) -> lsp_capabilities_store(process.self(), caps)
+    Error(_) -> Nil
+  }
+}
+
+@external(erlang, "pharos_runtime_ffi", "lsp_capabilities_store")
+fn lsp_capabilities_store(pid: Pid, capabilities: Dynamic) -> Nil
 
 @external(erlang, "pharos_runtime_ffi", "safe_call_0")
 fn safe_call_0(closure: fn() -> a) -> Result(a, String)
