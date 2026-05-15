@@ -78,6 +78,18 @@ class Target:
     rename_to: str = "renamed"  # for rename_preview
     ws_sym_lang_override: str | None = None
     timeout_override_ms: int | None = None
+    # ADR-026 symbol-layer probes. Set to enable find_symbol /
+    # get_symbols_overview / find_referencing_symbols / edit_at_symbol
+    # cells. When None, those cells are recorded as
+    # "no symbol fixture configured" without firing — lets the layer
+    # roll out staged (4 reference langs first, expand to 23 once
+    # green). `symbol_name_path` resolves to a unique top-level
+    # symbol in `file_rel` (single-segment paths today). The edit
+    # body is appended after the symbol body in `insert_after` mode;
+    # comment-prefix must be valid in the target language so the
+    # rendered diff doesn't read as syntactically broken.
+    symbol_name_path: str | None = None
+    symbol_edit_body: str | None = None
 
     @property
     def workspace(self) -> str:
@@ -92,7 +104,9 @@ class Target:
 # the file at clone time — see `bin/dogfood-fixtures.sh` for the
 # pinned SHAs that lock these line numbers in place.
 TARGETS = [
-    Target("rust",       "src/cargo/lib.rs",                                       163,  7,  "exit_with_error"),
+    Target("rust",       "src/cargo/lib.rs",                                       163,  7,  "exit_with_error",
+                                                                                    symbol_name_path="exit_with_error",
+                                                                                    symbol_edit_body="// pharos dogfood probe\n"),
     # `func init()` (line 149 1-based) was the previous target — it's
     # the Go builtin lifecycle hook, has no type / impl / hierarchy,
     # so gopls correctly errored on goto_type/goto_impl/type_hierarchy.
@@ -100,7 +114,9 @@ TARGETS = [
     # both methods and field types — exercises the position-bound
     # tools meaningfully.
     Target("go",         "cmd/prometheus/main.go",                                 182,  5,  "flagConfig"),
-    Target("typescript", "src/index.js",                                            42,  9,  "withPlugins"),
+    Target("typescript", "src/index.js",                                            42,  9,  "withPlugins",
+                                                                                    symbol_name_path="withPlugins",
+                                                                                    symbol_edit_body="// pharos dogfood probe\n"),
     Target("elixir",     "lib/phoenix.ex",                                           0, 11,  "Phoenix",
                                                                                     timeout_override_ms=60_000),
     Target("ruby",       "lib/sinatra/base.rb",                                   2152, 11,  "Base"),
@@ -131,10 +147,14 @@ TARGETS = [
                                                                                     28, 17,  "KafkaClient",
                                                                                     timeout_override_ms=600_000),
     Target("gleam",      "src/gleam/list.gleam",                                    52,  7,  "length",
-                                                                                    timeout_override_ms=600_000),
+                                                                                    timeout_override_ms=600_000,
+                                                                                    symbol_name_path="length",
+                                                                                    symbol_edit_body="// pharos dogfood probe\n"),
     Target("lua",        "kong/init.lua",                                          635, 13,  "init"),
     Target("bash",       "oh-my-zsh.sh",                                             0,  0,  "main"),
-    Target("python",     "src/flask/app.py",                                        72,  4,  "_make_timedelta"),
+    Target("python",     "src/flask/app.py",                                        72,  4,  "_make_timedelta",
+                                                                                    symbol_name_path="_make_timedelta",
+                                                                                    symbol_edit_body="# pharos dogfood probe\n"),
 ]
 
 # Per-language tools — fire each at the target position, record the
@@ -161,6 +181,13 @@ PER_LANG_TOOLS = [
     "type_hierarchy_prepare",
     "type_hierarchy_supertypes",
     "type_hierarchy_subtypes",
+    # ADR-026 symbol layer. find_symbol fires first so its handle
+    # threads into find_referencing_symbols + edit_at_symbol (same
+    # chaining pattern as *_prepare → *_calls / *_types).
+    "find_symbol",
+    "get_symbols_overview",
+    "find_referencing_symbols",
+    "edit_at_symbol",
     "lsp_request_raw",
     "apply_workspace_edit",
 ]
@@ -318,6 +345,31 @@ def build_args(tool: str, t: Target | None, prepared_item=None,
         return {"item": prepared_item, **tmo} if prepared_item else None
     if tool == "type_hierarchy_subtypes":
         return {"item": prepared_item, **tmo} if prepared_item else None
+    if tool == "find_symbol":
+        if t.symbol_name_path is None:
+            return None
+        return {
+            "name_path": t.symbol_name_path,
+            "scope_uri": t.file_uri,
+            "policy": "all_matches",
+        }
+    if tool == "get_symbols_overview":
+        if t.symbol_name_path is None:
+            return None
+        return {"uri": t.file_uri}
+    if tool == "find_referencing_symbols":
+        # Chained: needs the SymbolHandle returned by find_symbol.
+        # `prepared_item` is the handle object extracted from the
+        # find_symbol result by `handle_from_find_symbol_result`.
+        return {"symbol_handle": prepared_item} if prepared_item else None
+    if tool == "edit_at_symbol":
+        if not prepared_item or t.symbol_edit_body is None:
+            return None
+        return {
+            "symbol_handle": prepared_item,
+            "mode": "insert_after",
+            "content": t.symbol_edit_body,
+        }
     if tool == "lsp_request_raw":
         return {
             "uri": t.file_uri,
@@ -901,6 +953,7 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
             _POOL_POLLER.tick(f"lang_start:{t.id}", force=True)
         prepared_call_item = None
         prepared_type_item = None
+        prepared_symbol_handle = None
         # Broken-LSP fast-path: if a lang's first N tools all
         # retry-exhaust, the LSP itself isn't responding. No point
         # firing the rest — record them as `lsp unresponsive` and
@@ -945,6 +998,23 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
                 if args is None:
                     rows.append((t.id, tool, False, "prepare returned no item"))
                     print(f"  SKIP {tool}: no prepared type item", flush=True)
+                    continue
+            elif tool in ("find_referencing_symbols", "edit_at_symbol"):
+                args = build_args(tool, t, prepared_symbol_handle)
+                if args is None:
+                    note = (
+                        "no symbol fixture configured"
+                        if t.symbol_name_path is None
+                        else "find_symbol returned no handle"
+                    )
+                    rows.append((t.id, tool, False, note))
+                    print(f"  SKIP {tool}: {note}", flush=True)
+                    continue
+            elif tool in ("find_symbol", "get_symbols_overview"):
+                args = build_args(tool, t)
+                if args is None:
+                    rows.append((t.id, tool, False, "no symbol fixture configured"))
+                    print(f"  SKIP {tool}: no symbol fixture configured", flush=True)
                     continue
             else:
                 args = build_args(tool, t)
@@ -1007,6 +1077,8 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
                                             if tool.startswith("call_hierarchy_")
                                             else prepared_type_item
                                             if tool.startswith("type_hierarchy_")
+                                            else prepared_symbol_handle
+                                            if tool in ("find_referencing_symbols", "edit_at_symbol")
                                             else None,
                                             timeout_ms=bumped_ms)
                     if retry_args is not None:
@@ -1029,6 +1101,8 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
                                 prepared_call_item = first_item_from(result2)
                             elif tool == "type_hierarchy_prepare" and result2:
                                 prepared_type_item = first_item_from(result2)
+                            elif tool == "find_symbol" and result2:
+                                prepared_symbol_handle = handle_from_find_symbol_result(result2)
                             continue
                         rows.append((t.id, tool, False,
                                      f"retry exhausted: {summary2}"))
@@ -1069,6 +1143,8 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
                 prepared_call_item = first_item_from(result)
             elif tool == "type_hierarchy_prepare" and ok and result:
                 prepared_type_item = first_item_from(result)
+            elif tool == "find_symbol" and ok and result:
+                prepared_symbol_handle = handle_from_find_symbol_result(result)
 
     print("\n=== global tools ===", flush=True)
     if _POOL_POLLER is not None:
@@ -1091,6 +1167,41 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
 
     transport.close()
     return rows
+
+
+def handle_from_find_symbol_result(result: dict):
+    """Extract a SymbolHandle out of a find_symbol result.
+
+    find_symbol returns a Resolution JSON (see
+    `pharos/tools/symbols.resolution_to_json`):
+      - status="single"   → {match: {handle: {...}, ...}}
+      - status="multiple" → {matches: [{handle: {...}, ...}, ...]}
+      - status="not_found"→ no handle
+    Returns the first handle when available, else None.
+    """
+    for c in result.get("content", []):
+        if c.get("type") != "text":
+            continue
+        try:
+            payload = json.loads(c.get("text", ""))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        status = payload.get("status")
+        if status == "single":
+            match = payload.get("match")
+            if isinstance(match, dict):
+                h = match.get("handle")
+                if isinstance(h, dict):
+                    return h
+        elif status == "multiple":
+            matches = payload.get("matches", [])
+            if matches and isinstance(matches[0], dict):
+                h = matches[0].get("handle")
+                if isinstance(h, dict):
+                    return h
+    return None
 
 
 def first_item_from(result: dict):
@@ -1125,7 +1236,7 @@ def write_report(rows, out_path: str, label: str, transport_name: str,
     passed = sum(1 for _, _, ok, _ in rows if ok)
 
     lines = [
-        f"# Dogfood pass — 23 languages × 39 tools",
+        f"# Dogfood pass — 23 languages × 43 tools",
         "",
         f"**Label:** {label}",
         f"**Binary:** `{pharos_bin}`",
@@ -1133,12 +1244,13 @@ def write_report(rows, out_path: str, label: str, transport_name: str,
         f"**Profile:** `{profile}`",
         f"**Result:** **{passed}/{total} cells PASS** ({100 * passed // max(total,1)}%)",
         "",
-        "Per-language LSP-bound tools (22): hover, document_symbols, workspace_symbols, "
+        "Per-language LSP-bound tools (26): hover, document_symbols, workspace_symbols, "
         "get_diagnostics, goto_definition, goto_type_definition, goto_implementation, "
         "find_references, signature_help, format_document, code_actions, rename_preview, "
         "inlay_hints, semantic_tokens, call_hierarchy_prepare, call_hierarchy_incoming_calls, "
         "call_hierarchy_outgoing_calls, type_hierarchy_prepare, type_hierarchy_supertypes, "
-        "type_hierarchy_subtypes, lsp_request_raw, apply_workspace_edit.",
+        "type_hierarchy_subtypes, find_symbol, get_symbols_overview, "
+        "find_referencing_symbols, edit_at_symbol, lsp_request_raw, apply_workspace_edit.",
         "",
         "Global one-shot tools (17): echo, runtime_processes, runtime_supervision_tree, "
         "runtime_ets_tables, runtime_memory, runtime_applications, runtime_scheduler_util, "
