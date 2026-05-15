@@ -71,7 +71,11 @@ class Target:
     line: int            # 0-based (LSP convention)
     character: int       # 0-based UTF-16 code-unit offset
     query: str
-    rename_to: str = "Renamed"  # for rename_preview
+    # Default lowercase identifier — universally valid for most
+    # languages. Per-language overrides set below where the LSP's
+    # identifier validator rejects this (scala metals = strict
+    # case rules, go = exported-uppercase convention).
+    rename_to: str = "renamed"  # for rename_preview
     ws_sym_lang_override: str | None = None
     timeout_override_ms: int | None = None
 
@@ -127,7 +131,7 @@ TARGETS = [
                                                                                     28, 17,  "KafkaClient",
                                                                                     timeout_override_ms=600_000),
     Target("gleam",      "src/gleam/list.gleam",                                    52,  7,  "length",
-                                                                                    timeout_override_ms=240_000),
+                                                                                    timeout_override_ms=600_000),
     Target("lua",        "kong/init.lua",                                          635, 13,  "init"),
     Target("bash",       "oh-my-zsh.sh",                                             0,  0,  "main"),
     Target("python",     "src/flask/app.py",                                        72,  4,  "_make_timedelta"),

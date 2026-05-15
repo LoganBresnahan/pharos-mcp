@@ -712,11 +712,17 @@ fn perl() -> LanguageConfig {
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
-        // PLS (FractalBoy/perl-language-server). Install via
-        // `cpanm PLS`; binary is `pls`. Stdio mode is default.
-        id: "pls",
-        command: "pls",
-        args: [],
+        // PerlNavigator (bsmppe-personal/PerlNavigator). Replaces
+        // PLS (FractalBoy/perl-language-server), which depended on
+        // the abandoned Coro module and single-threaded its parse
+        // loop, holding the first request until cold-index finished
+        // (~5 min on Mojolicious). PerlNavigator is a node-based
+        // VSCode-style LSP — `npm i -g perlnavigator-server` installs
+        // the bin at `perlnavigator`. Requires `--stdio` per
+        // vscode-languageserver protocol selector.
+        id: "perlnavigator",
+        command: "perlnavigator",
+        args: ["--stdio"],
         initialization_options: json.object([]),
         workspace_configuration: None,
         methods: All,
