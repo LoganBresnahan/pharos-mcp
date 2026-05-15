@@ -230,6 +230,14 @@ pub opaque type Msg {
   /// `runtime_lsp_state`. Bookkeeping-only — handler returns
   /// immediately.
   SnapshotReq(reply_to: Subject(PoolSnapshot))
+  /// Diagnostic: any non-Subject, non-Monitor mailbox message that
+  /// reaches the pool's `select_other` catch-all. Handler logs the
+  /// payload (typically `{'EXIT', From, Reason}` when something
+  /// linked to the pool dies) and continues. Without trap_exit +
+  /// this branch, EXIT signals would silently kill the pool actor
+  /// and the supervisor's restart loop would erase state without
+  /// any crash report.
+  UnexpectedMessage(payload: dynamic.Dynamic)
 }
 
 pub type EnsureOpenError {
@@ -336,6 +344,12 @@ pub fn start_supervised() -> Result(
 
 fn start_internal() -> Result(actor.Started(Subject(Msg)), actor.StartError) {
   let initialise = fn(self) {
+    // Trap exits so any EXIT signal arriving from a linked process
+    // becomes an `{'EXIT', From, Reason}` mailbox message caught by
+    // `select_other` below. Without this, an unexpected link to the
+    // pool would silently kill it and the supervisor would restart
+    // with an empty cache — no log trace of who sent the signal.
+    trap_exits()
     let selector =
       process.new_selector()
       |> process.select(self)
@@ -347,6 +361,7 @@ fn start_internal() -> Result(actor.Started(Subject(Msg)), actor.StartError) {
             ProcDown(monitor_ref: m, reason: process_reason_as_dynamic(r))
         }
       })
+      |> process.select_other(UnexpectedMessage)
     Ok(
       actor.initialised(State(
         cache: dict.new(),
@@ -383,6 +398,12 @@ fn lookup_global() -> Result(Subject(Msg), Nil)
 
 @external(erlang, "pharos_runtime_ffi", "as_dynamic")
 fn coerce_to_dynamic(x: a) -> dynamic.Dynamic
+
+@external(erlang, "pharos_runtime_ffi", "trap_exits")
+fn trap_exits() -> Nil
+
+@external(erlang, "pharos_runtime_ffi", "describe_term")
+fn describe_term(term: dynamic.Dynamic) -> String
 
 fn process_reason_as_dynamic(reason: process.ExitReason) -> dynamic.Dynamic {
   coerce_to_dynamic(reason)
@@ -550,6 +571,22 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       )
 
     SnapshotReq(reply_to) -> handle_snapshot(state, reply_to)
+
+    UnexpectedMessage(payload) -> {
+      // trap_exit catches EXIT signals (linked-process death,
+      // brutal shutdown from supervisor) and routes them here.
+      // Anything else hitting select_other is also unexpected and
+      // worth logging. We log + continue so a benign extra message
+      // does not bounce the pool, but a real EXIT signal is no
+      // longer silent — the source pid + reason show up in stderr.
+      log.fields_at(
+        "pharos/lsp/pool",
+        log_entry.Warn,
+        "pool received unexpected mailbox message (likely EXIT signal)",
+        [#("payload", describe_term(payload))],
+      )
+      actor.continue(state)
+    }
   }
 }
 

@@ -65,8 +65,28 @@
     self_mailbox_len/0,
     pool_diag/1,
     iolist_to_binary_safe/1,
-    safe_call_0/1
+    safe_call_0/1,
+    trap_exits/0,
+    describe_term/1
 ]).
+
+%% Set process_flag(trap_exit, true) on the calling process. EXIT
+%% signals from linked processes will then be delivered as
+%% {'EXIT', From, Reason} mailbox messages instead of terminating
+%% the trapping process. Used by pool actor to diagnose silent
+%% restarts: when an EXIT arrives, the actor's `select_other`
+%% catches it and logs the source + reason rather than dying.
+%% Side-effect: pool's supervisor shutdown becomes graceful
+%% (acknowledge + actor.stop) rather than immediate kill.
+trap_exits() ->
+    process_flag(trap_exit, true),
+    nil.
+
+%% Render any Erlang term as a printable binary via io_lib:format("~p", ...).
+%% Used by Gleam-side diagnostics to log a Dynamic without crashing on
+%% non-iolist values (the safe-iolist FFI absorbs format's output).
+describe_term(Term) ->
+    iolist_to_binary_safe(io_lib:format("~p", [Term])).
 
 %% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
 %% to the Gleam-side Subject for the lsp_proc actor handling that
