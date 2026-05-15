@@ -458,7 +458,17 @@ pub fn push_configuration(
   settings: Json,
 ) -> Result(Nil, lifecycle.RequestError) {
   let Proc(subject) = proc
-  actor.call(subject, 5000, fn(reply) { PushConfiguration(settings, reply) })
+  // Called from inside the pool actor's workspace-configuration
+  // handler — an unwrapped actor.call panic here would crash the
+  // pool the same way handle_ensure_open did (see afe7be1).
+  case
+    safe_call_0(fn() {
+      actor.call(subject, 5000, fn(reply) { PushConfiguration(settings, reply) })
+    })
+  {
+    Ok(result) -> result
+    Error(reason) -> Error(lifecycle.ActorCallPanic(reason))
+  }
 }
 
 /// Send a pre-encoded JSON-RPC body as a notification. Used by
@@ -543,9 +553,22 @@ pub fn wait_for_publish_diagnostics(
 ) -> Result(Option(String), client.Error) {
   let Proc(subject) = proc
   let call_timeout = timeout_ms + 5000
-  actor.call(subject, call_timeout, fn(reply) {
-    WaitForPublish(target_uri, timeout_ms, reply)
-  })
+  // Same containment as `request/4`: gleam_otp's actor.call uses
+  // let_assert on the reply Subject. If the proc actor is busy
+  // draining a long notification queue or has died, the timeout
+  // raises and kills the dispatcher worker. Convert to a typed
+  // transport error so the diagnostics tool surfaces a proper
+  // result instead of crashing mid-pass.
+  case
+    safe_call_0(fn() {
+      actor.call(subject, call_timeout, fn(reply) {
+        WaitForPublish(target_uri, timeout_ms, reply)
+      })
+    })
+  {
+    Ok(result) -> result
+    Error(_reason) -> Error(client.PortSendError(port.Closed))
+  }
 }
 
 /// Tear down the proc. Sends `Close`; the actor exits and the
