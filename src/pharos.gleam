@@ -116,6 +116,13 @@ fn do_boot() -> Result(Pid, String) {
   request_workers.init()
   dyn_sup.init_subjects_bridge()
 
+  // Diagnostic logger handler: capture every SASL/supervisor/error
+  // logger event by writing the raw term to stderr. Bypasses the
+  // gleam `logging` library's SASL filter and survives the
+  // EndOfStream removal of the default handler observed in
+  // dogfood pass 11. Side-effect only; idempotent.
+  install_sasl_capture_handler()
+
   let supervisor_config =
     root_supervisor.Config(
       transport: map_transport(cfg.transport),
@@ -143,6 +150,9 @@ fn register_root_supervisor(pid: Pid) -> Nil
 
 @external(erlang, "pharos_runtime_ffi", "find_root_supervisor")
 fn find_root_supervisor() -> Result(Pid, Nil)
+
+@external(erlang, "pharos_runtime_ffi", "install_sasl_capture_handler")
+fn install_sasl_capture_handler() -> Nil
 
 @external(erlang, "pharos_runtime_ffi", "argv")
 fn argv() -> List(String)

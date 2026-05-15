@@ -67,7 +67,9 @@
     iolist_to_binary_safe/1,
     safe_call_0/1,
     trap_exits/0,
-    describe_term/1
+    describe_term/1,
+    install_sasl_capture_handler/0,
+    pharos_sasl_capture/2
 ]).
 
 %% Set process_flag(trap_exit, true) on the calling process. EXIT
@@ -87,6 +89,65 @@ trap_exits() ->
 %% non-iolist values (the safe-iolist FFI absorbs format's output).
 describe_term(Term) ->
     iolist_to_binary_safe(io_lib:format("~p", [Term])).
+
+%% Install a logger handler that captures every SASL crash/supervisor/
+%% progress report and writes the raw event term to stderr via
+%% io:format(standard_error, ...). Bypasses both:
+%%   - The default logger_std_h that the gleam `logging` library
+%%     filters down (it stops sub-domains `sasl` and
+%%     `supervisor_report` and the `progress` filter).
+%%   - The `error (default): EndOfStream` failure mode we saw in
+%%     dogfood pass 11's stderr capture, where the standard handler
+%%     errored once early and the logger silently retired it.
+%%
+%% Catches everything (filter_default=log) but only formats reports
+%% whose meta carries one of the SASL/crash domains. Other events
+%% pass through to the default handler unchanged.
+install_sasl_capture_handler() ->
+    Config = #{
+        config => #{},
+        filter_default => log,
+        filters => [],
+        formatter => {?MODULE, pharos_sasl_capture}
+    },
+    case logger:add_handler(pharos_sasl_capture, ?MODULE, Config) of
+        ok -> nil;
+        {error, {already_exist, _}} -> nil;
+        {error, _} -> nil
+    end.
+
+%% logger formatter callback: write SASL-class reports raw to stderr.
+%% Returning a binary tells logger to emit it; returning <<>> drops.
+pharos_sasl_capture(#{level := Level, msg := Msg, meta := Meta}, _Config) ->
+    Domain = maps:get(domain, Meta, []),
+    IsSasl = lists:member(otp, Domain) orelse
+             lists:member(sasl, Domain) orelse
+             lists:member(supervisor_report, Domain),
+    case {Level, IsSasl} of
+        {error, _} -> format_report(Level, Msg, Meta);
+        {critical, _} -> format_report(Level, Msg, Meta);
+        {alert, _} -> format_report(Level, Msg, Meta);
+        {emergency, _} -> format_report(Level, Msg, Meta);
+        {_, true} -> format_report(Level, Msg, Meta);
+        _ -> <<>>
+    end.
+
+format_report(Level, Msg, Meta) ->
+    %% Render directly to stderr — synchronous write, survives handler
+    %% remove-on-error semantics that doomed the default handler.
+    Ts = calendar:system_time_to_rfc3339(erlang:system_time(second)),
+    Body = case Msg of
+        {report, R} -> io_lib:format("~p", [R]);
+        {string, S} -> S;
+        {Fmt, Args} -> io_lib:format(Fmt, Args);
+        Other -> io_lib:format("~p", [Other])
+    end,
+    Line = io_lib:format(
+        "[pharos-sasl] ~s level=~p meta=~p~n  msg=~s~n",
+        [Ts, Level, Meta, Body]
+    ),
+    io:format(standard_error, "~s", [Line]),
+    <<>>.
 
 %% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
 %% to the Gleam-side Subject for the lsp_proc actor handling that
