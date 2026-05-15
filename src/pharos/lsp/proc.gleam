@@ -327,22 +327,34 @@ pub fn request(
 ) -> Result(Dynamic, lifecycle.RequestError) {
   let Proc(subject) = proc
   let cid = current_cid()
-  // Add a margin to the actor.call timeout so the LSP transport
-  // timeout fires first and surfaces a meaningful RequestError.
+  // actor.call timeout (call_timeout) is intentionally longer than
+  // the LSP transport timeout (timeout_ms) so the typed error path
+  // surfaces a meaningful RequestError before the actor.call's
+  // let_assert raises. The +5000 margin handles request/reply
+  // queue jitter inside the proc actor.
   let call_timeout = timeout_ms + 5000
-  // NOTE: wrapping this in safe_call_0 (the same try/catch FFI used
-  // by pool's probe path) regressed bash/lua/python/clojure/haskell
-  // in M14 Pass 5/6. Healthy LSPs that were 18-20/22 in pre-wrap
-  // passes dropped to 0/22 with broken-LSP cascade kicked in. Root
-  // cause unclear — possibly closure-capture interaction, possibly
-  // try-frame interference with the gleam_otp actor.call receive
-  // pattern. Probe layer is safe because probe failures already
-  // route through Result-typed error paths; tool layer relies on
-  // gleam_otp's actor.call returning a typed value, and the wrap
-  // changes its semantics. Leaving the wrap on probe_call only.
-  actor.call(subject, call_timeout, fn(reply) {
-    Request(method, params, timeout_ms, cid, reply)
-  })
+  // gleam_otp's actor.call uses `let_assert` on the reply, so any
+  // timeout / dead-callee Subject raises an exception that kills
+  // the calling dispatcher worker (and previously cascaded through
+  // pool — see afe7be1 / c63d738). The wrap converts both classes
+  // of panic into the typed `ActorCallPanic` variant so the
+  // session-layer retry path catches it gracefully and the worker
+  // survives to report the error to the client.
+  //
+  // (Earlier M14 P5/6 attempts at this wrap regressed langs because
+  // the pool-restart cascade was also alive and re-eating the cache
+  // every time a panic fired. Now that pool is contained, the wrap
+  // is a clean win.)
+  case
+    safe_call_0(fn() {
+      actor.call(subject, call_timeout, fn(reply) {
+        Request(method, params, timeout_ms, cid, reply)
+      })
+    })
+  {
+    Ok(result) -> result
+    Error(reason) -> Error(lifecycle.ActorCallPanic(reason))
+  }
 }
 
 /// Send a request whose `params` is supplied as already-encoded
@@ -357,9 +369,17 @@ pub fn request_raw(
   let Proc(subject) = proc
   let cid = current_cid()
   let call_timeout = timeout_ms + 5000
-  actor.call(subject, call_timeout, fn(reply) {
-    RequestRaw(method, params_text, timeout_ms, cid, reply)
-  })
+  // See `request/4` for why the actor.call is wrapped.
+  case
+    safe_call_0(fn() {
+      actor.call(subject, call_timeout, fn(reply) {
+        RequestRaw(method, params_text, timeout_ms, cid, reply)
+      })
+    })
+  {
+    Ok(result) -> result
+    Error(reason) -> Error(lifecycle.ActorCallPanic(reason))
+  }
 }
 
 /// Read the calling process's correlation id (mcp request id) from
