@@ -30,6 +30,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import pharos/lsp/capabilities
 import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/session
@@ -227,19 +228,38 @@ pub fn find_symbol(
   case parts {
     [] -> Error(InvalidNamePath("empty path post-construction"))
     [head, ..rest] -> {
-      use ws_results <- result.try(workspace_symbol_query(
+      // ADR-026 fallback: when the server's InitializeResult does
+      // not advertise `workspaceSymbolProvider` (e.g. gleam_lsp),
+      // skip the cross-file workspace query and drill `scope_uri`
+      // directly. Honours the LSP's capability surface instead of
+      // burning the per-call budget on a method that will never
+      // respond — and still gives the LLM a usable handle for the
+      // common "edit a symbol I know lives in this file" workflow.
+      use ws_supported <- result.try(workspace_symbol_supported(
         pool,
         scope_uri,
-        head,
-        default_timeout_ms,
       ))
-      // Each workspace_symbol result is a `(name, kind, location.uri)`
-      // pointer to a file containing a top-level match for `head`.
-      // Fetch documentSymbol per uri and drill the rest of the path.
-      let unique_uris =
-        ws_results
-        |> list.map(fn(s) { s.uri })
-        |> list.unique
+      use unique_uris <- result.try(case ws_supported {
+        False -> Ok([scope_uri])
+        True -> {
+          use ws_results <- result.try(workspace_symbol_query(
+            pool,
+            scope_uri,
+            head,
+            default_timeout_ms,
+          ))
+          // Each workspace_symbol result is a `(name, kind,
+          // location.uri)` pointer to a file containing a top-level
+          // match for `head`. Bias toward `scope_uri` first so a
+          // single-file caller hits its target without paying for
+          // unrelated repo-wide candidates.
+          let uris =
+            ws_results
+            |> list.map(fn(s) { s.uri })
+            |> list.unique
+          Ok(uris)
+        }
+      })
       use matches <- result.try(
         list.try_map(unique_uris, fn(uri) {
           use tree <- result.try(document_symbol_query(
@@ -253,6 +273,32 @@ pub fn find_symbol(
       )
       Ok(apply_policy(matches, policy))
     }
+  }
+}
+
+/// True iff the LSP backing `scope_uri` advertises
+/// `workspaceSymbolProvider` in its InitializeResult. `Unknown`
+/// (no capabilities record on file) falls through to True so we
+/// preserve the pre-gate optimistic-dispatch behaviour. Used by
+/// `find_symbol` to decide between cross-file and single-file
+/// drill paths.
+fn workspace_symbol_supported(
+  pool: Pool,
+  scope_uri: String,
+) -> Result(Bool, SymbolsError) {
+  case
+    session.with_workspace_session_and_retry(pool, scope_uri, fn(lsp) {
+      case capabilities.check(lsp, "workspace/symbol") {
+        capabilities.Unsupported -> Ok(False)
+        _ -> Ok(True)
+      }
+    })
+  {
+    Ok(b) -> Ok(b)
+    Error(session.RetrySessionError(err)) ->
+      Error(SessionFailed(describe_session_error(err)))
+    Error(session.RetryRequestError(err)) ->
+      Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
 
