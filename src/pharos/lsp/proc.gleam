@@ -447,8 +447,21 @@ pub fn send_notification(
   proc: Proc,
   body: BitArray,
 ) -> Result(Nil, client.Error) {
+  // actor.call uses let_assert against the reply Subject; if the
+  // proc actor is busy or dead (common during LSP indexing thrash
+  // or a cancel-cascade) the 5s timeout fires let_assert and the
+  // caller process dies. Wrap so callers get an Error variant
+  // instead of dying — keeps both pool (when it routes didOpen
+  // through here) and the per-request dispatcher worker alive.
   let Proc(subject) = proc
-  actor.call(subject, 5000, fn(reply) { SendNotification(body, reply) })
+  case
+    safe_call_0(fn() {
+      actor.call(subject, 5000, fn(reply) { SendNotification(body, reply) })
+    })
+  {
+    Ok(result) -> result
+    Error(_reason) -> Error(client.PortSendError(port.Closed))
+  }
 }
 
 /// Send `$/cancelRequest` for a previously-issued LSP request id.
@@ -489,6 +502,9 @@ fn cast_subject(dyn: Dynamic) -> Subject(Msg)
 
 @external(erlang, "erlang", "integer_to_binary")
 fn int_to_text(value: Int) -> String
+
+@external(erlang, "pharos_runtime_ffi", "safe_call_0")
+fn safe_call_0(closure: fn() -> a) -> Result(a, String)
 
 /// Drain inbound notifications inside the proc actor (where the
 /// Port owner lives) until either:
