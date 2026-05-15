@@ -19,6 +19,7 @@
 //// returns `actor.stop_abnormal`, the supervisor / monitor see the
 //// exit.
 
+import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/json.{type Json}
@@ -463,7 +464,7 @@ pub fn cancel(proc: Proc, lsp_request_id: Int) -> Result(Nil, client.Error) {
     <> int_to_text(lsp_request_id)
     <> "}}"
 
-  send_notification(proc, bit_array_from_string(body))
+  send_notification(proc, bit_array.from_string(body))
 }
 
 /// Cancel-by-dynamic-Subject for callers (e.g.
@@ -488,9 +489,6 @@ fn cast_subject(dyn: Dynamic) -> Subject(Msg)
 
 @external(erlang, "erlang", "integer_to_binary")
 fn int_to_text(value: Int) -> String
-
-@external(erlang, "erlang", "list_to_binary")
-fn bit_array_from_string(text: String) -> BitArray
 
 /// Drain inbound notifications inside the proc actor (where the
 /// Port owner lives) until either:

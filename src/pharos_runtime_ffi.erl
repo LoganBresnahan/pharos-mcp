@@ -144,9 +144,6 @@ format(LogEvent, _Config) ->
         C:E:_ -> io_lib:format("[pharos-sasl] FORMATTER ERR ~p:~p~n", [C, E])
     end.
 
-%% Legacy helper retained in case other callers grow; replaced by inline
-%% body in pharos_sasl_capture/2 above.
-format_report(_Level, _Msg, _Meta) -> "".
 
 %% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
 %% to the Gleam-side Subject for the lsp_proc actor handling that
