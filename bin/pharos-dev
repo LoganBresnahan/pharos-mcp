@@ -65,9 +65,27 @@ cd "$ORIG_CWD"
 # the normal boot path otherwise. The M11 stdio fix added `-noinput`
 # for the burrito-release prim_tty issue and quietly broke meta-flag
 # forwarding here at the same time.
+# SASL crash + supervisor reports surface silently-restarted children
+# (e.g. pool actor) in stderr so we can chase pool-cache-wipe events.
+# `+W w` routes Erlang warnings through the same logger. PHAROS_SASL=0
+# opts out for hosts that have a noisy LSP set and want a quiet
+# stderr; default on for diagnostic builds.
+SASL_FLAGS=""
+if [ "${PHAROS_SASL:-1}" != "0" ]; then
+  # OTP 27+ routes SASL reports through `logger`. The
+  # `logger_sasl_compatible true` flag restores the old `=PROGRESS
+  # REPORT` / `=CRASH REPORT` / `=SUPERVISOR REPORT` plaintext
+  # format on stderr. `-sasl errlog_type all` opts SASL's own
+  # filter into every event class (progress + crash + supervisor)
+  # so silently-restarted children surface. `start_sasl` actually
+  # boots the sasl application so its handlers register.
+  SASL_FLAGS="-boot start_sasl -sasl errlog_type all -sasl sasl_error_logger tty -kernel logger_sasl_compatible true -kernel logger_level info"
+fi
+
 exec erl \
   -pa $PROJECT_ROOT/_build/dev/lib/*/ebin \
   -noshell \
   -noinput \
+  $SASL_FLAGS \
   -eval "pharos:main(), halt(0)." \
   -extra "$@"

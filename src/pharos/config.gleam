@@ -98,11 +98,12 @@ pub type ServerOverride {
     methods: Option(List(String)),
     diagnostics_mode: Option(String),
     readiness_token: Option(String),
-    /// Override the post-handshake / post-didOpen drain budget. None
-    /// = use the bundled default (`languages.default_readiness_timeout_ms`,
-    /// 30s). Languages with slow indexing (rust-analyzer big workspace,
-    /// jdtls big project) tune up; nothing tunes down typically.
-    readiness_timeout_ms: Option(Int),
+    /// Override the total spawn-time readiness budget — drain +
+    /// probe combined (ADR-024). None = use the bundled default
+    /// (`languages.default_ready_timeout_ms`, 60s). Languages with
+    /// slow indexing (rust-analyzer big workspace, jdtls big project)
+    /// tune up; nothing tunes down typically.
+    ready_timeout_ms: Option(Int),
     /// Override the `initialize` handshake budget. None = use the
     /// bundled default (`languages.default_initialize_timeout_ms`,
     /// 90s — accommodates jdtls cold start).
@@ -164,7 +165,7 @@ pub type LanguageOverride {
     workspace_configuration_json: Option(String),
     /// Flat-shape variants of the per-server timeout overrides;
     /// patches the language's PRIMARY server. See ServerOverride.
-    readiness_timeout_ms: Option(Int),
+    ready_timeout_ms: Option(Int),
     initialize_timeout_ms: Option(Int),
   )
 }
@@ -328,11 +329,15 @@ pub type ToolCategory {
 ///      `entries`, or
 ///   3. the meta-alias `"default"` is in `entries` AND the tool's
 ///      category is part of the default-shipped profile (read,
-///      write, or `CatDefault`).
+///      write, or `CatDefault`), or
+///   4. the meta-alias `"all"` is in `entries` (every category
+///      exposed; shorthand for read+write+debug+raw+default).
 ///
 /// Rule 3 makes `tools = ["default"]` a one-knob production preset
 /// without losing the categorical filter for stricter setups
-/// (`tools = ["read"]` still excludes everything else).
+/// (`tools = ["read"]` still excludes everything else). Rule 4
+/// makes `tools = ["all"]` the matching one-knob "expose everything"
+/// preset for dogfood / debugging / power-user installs.
 pub fn tool_allowed(
   filter: ToolFilter,
   name: String,
@@ -341,7 +346,10 @@ pub fn tool_allowed(
   let alias = category_alias(category)
   let default_member = is_in_default_profile(category)
   list.any(filter.entries, fn(e) {
-    e == alias || e == name || { e == "default" && default_member }
+    e == "all"
+    || e == alias
+    || e == name
+    || { e == "default" && default_member }
   })
 }
 
@@ -774,9 +782,19 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       value,
       "workspace_configuration_json",
     ),
-    readiness_timeout_ms: decode_optional_int(value, "readiness_timeout_ms"),
+    ready_timeout_ms: decode_ready_timeout_ms(value),
     initialize_timeout_ms: decode_optional_int(value, "initialize_timeout_ms"),
   )
+}
+
+/// ADR-024 rename: `readiness_timeout_ms` → `ready_timeout_ms`.
+/// Accept either TOML key with the new name winning so existing
+/// user configs do not break silently.
+fn decode_ready_timeout_ms(value: Dynamic) -> Option(Int) {
+  case decode_optional_int(value, "ready_timeout_ms") {
+    Some(n) -> Some(n)
+    None -> decode_optional_int(value, "readiness_timeout_ms")
+  }
 }
 
 /// Decode `[[languages.<id>.servers]]` array of tables. Tomerl
@@ -800,7 +818,7 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
     methods: decode_optional_string_list(value, "methods"),
     diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
     readiness_token: decode_optional_string(value, "readiness_token"),
-    readiness_timeout_ms: decode_optional_int(value, "readiness_timeout_ms"),
+    ready_timeout_ms: decode_ready_timeout_ms(value),
     initialize_timeout_ms: decode_optional_int(value, "initialize_timeout_ms"),
     initialization_options_json: decode_optional_string(
       value,

@@ -34,12 +34,36 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
+/// JSON-RPC 2.0 allows the `id` field to be either a JSON number or
+/// a JSON string. Pharos's own outbound requests always use integer
+/// ids, so responses we await are always Int. But server-initiated
+/// requests (workDoneProgress/create, registerCapability) may use
+/// either — gleam-lsp uses strings like
+/// `"create-token--downloading-dependencies"`. Echoing the wrong
+/// shape back means the LSP never sees its reply and blocks
+/// indefinitely (M14 dogfood follow-up: gleam stuck at 1/22 for
+/// exactly this reason).
+pub type LspId {
+  LspIdInt(value: Int)
+  LspIdString(value: String)
+}
+
+/// Render an LspId back to its JSON shape for use in response
+/// envelopes. Round-trips the inbound id verbatim so the server
+/// can match its outstanding request.
+pub fn lsp_id_to_json(id: LspId) -> Json {
+  case id {
+    LspIdInt(n) -> json.int(n)
+    LspIdString(s) -> json.string(s)
+  }
+}
+
 /// Handler signature: the request id (rarely needed) and the raw
 /// `params` Dynamic. Handlers return either a success `Reply` whose
 /// JSON becomes the response's `result`, or an `ErrorReply` whose
 /// fields populate the JSON-RPC error object.
 pub type Handler =
-  fn(Int, Dynamic) -> HandlerResult
+  fn(LspId, Dynamic) -> HandlerResult
 
 pub type HandlerResult {
   Reply(Json)
@@ -103,7 +127,7 @@ pub fn lookup(registry: Registry, method: String) -> Option(Handler) {
 /// accept a null result as a valid acknowledgement. Used as the
 /// default handler for each of those methods until a tool needs
 /// finer-grained behavior.
-fn default_accept_noop(_id: Int, _params: Dynamic) -> HandlerResult {
+fn default_accept_noop(_id: LspId, _params: Dynamic) -> HandlerResult {
   Reply(json.null())
 }
 
@@ -112,7 +136,7 @@ fn default_accept_noop(_id: Int, _params: Dynamic) -> HandlerResult {
 /// reaching this default is one nobody asked for. Refuse explicitly.
 /// Tools that want the edit (`rename_preview`, `code_actions`)
 /// install a capture handler via Stage 0E's `with_handler` API.
-fn default_decline_apply_edit(_id: Int, _params: Dynamic) -> HandlerResult {
+fn default_decline_apply_edit(_id: LspId, _params: Dynamic) -> HandlerResult {
   Reply(
     json.object([
       #("applied", json.bool(False)),
@@ -126,7 +150,7 @@ fn default_decline_apply_edit(_id: Int, _params: Dynamic) -> HandlerResult {
 /// per-language config (Stage 0C), reply with an array of nulls of
 /// the same length so the spec's `result.length == items.length`
 /// invariant holds.
-fn default_workspace_configuration(_id: Int, params: Dynamic) -> HandlerResult {
+fn default_workspace_configuration(_id: LspId, params: Dynamic) -> HandlerResult {
   let item_count = case decode.run(params, configuration_items_decoder()) {
     Ok(items) -> list.length(items)
     Error(_) -> 0

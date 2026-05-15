@@ -61,7 +61,11 @@
     session_overrides_load/0,
     argv/0,
     burrito_cache_root/0,
-    beam_version_info/0
+    beam_version_info/0,
+    self_mailbox_len/0,
+    pool_diag/1,
+    iolist_to_binary_safe/1,
+    safe_call_0/1
 ]).
 
 %% ETS bridge for ADR-017a — maps a (Language, Workspace) tuple
@@ -717,3 +721,230 @@ beam_version_info() ->
     Sys = list_to_binary(erlang:system_info(system_version)),
     Trim = string:trim(Sys),
     {ok, {beam_info, Erts, Otp, Trim}}.
+
+%% Convert any iolist / binary / charlist / pid_to_list result to a
+%% Gleam-friendly UTF-8 binary. Used by pool's describe_pid and
+%% describe_dynamic. unicode:characters_to_binary returns a raw
+%% binary (or an {error, _, _} tuple), NOT a {ok, _} / {error, _}
+%% pair, so calling it directly from Gleam with a `Result(...)` FFI
+%% signature pattern-match fails and crashes the calling process.
+%% This shim absorbs the shape mismatch.
+iolist_to_binary_safe(IO) ->
+    try unicode:characters_to_binary(IO) of
+        Bin when is_binary(Bin) -> Bin;
+        {error, Partial, _Rest} when is_binary(Partial) -> Partial;
+        {incomplete, Partial, _Rest} when is_binary(Partial) -> Partial;
+        _ -> <<"<unprintable>">>
+    catch
+        %% Atoms, integers, and other non-iolist terms raise badarg
+        %% rather than returning a tuple. The shim must absorb that
+        %% too — describe_dynamic's whole purpose is "rendering ANY
+        %% term to a string", and a panic here would defeat that.
+        %% Runtime FFI test caught this gap on Pass 7+.
+        _:_ -> <<"<unprintable>">>
+    end.
+
+%% Wrap a zero-arg Gleam closure in a try/catch so a `callee exited`
+%% panic (from gleam_otp actor.call against a dead Subject) returns
+%% Error instead of killing the calling process. Used by pool's
+%% probe_call to close the is_alive→actor.call race window where
+%% the lsp_proc can die between the is_alive read and the actual
+%% message send. ADR-024 follow-up M14 Pass 1c finding.
+%%
+%% Returns {ok, ResultValue} on success or {error, BinaryReason} on
+%% any error/exit/throw. ResultValue is whatever the closure
+%% returned — the caller is responsible for further pattern matching.
+safe_call_0(Fun) when is_function(Fun, 0) ->
+    try
+        {ok, Fun()}
+    catch
+        error:#{gleam_error := _, message := Msg}:_ when is_binary(Msg) ->
+            {error, Msg};
+        error:Reason:_ ->
+            {error, iolist_to_binary(io_lib:format("error: ~p", [Reason]))};
+        exit:Reason:_ ->
+            {error, iolist_to_binary(io_lib:format("exit: ~p", [Reason]))};
+        throw:Reason:_ ->
+            {error, iolist_to_binary(io_lib:format("throw: ~p", [Reason]))}
+    end.
+
+%% Pool actor calls this from inside handle_snapshot to record its
+%% own mailbox depth. Counts other Msg's queued behind the
+%% SnapshotReq; non-zero = pool is keeping up but not free.
+self_mailbox_len() ->
+    case erlang:process_info(self(), message_queue_len) of
+        {message_queue_len, N} -> N;
+        undefined -> 0
+    end.
+
+%% recon-backed pool diagnostics. Returns a 4-tuple:
+%%   {pool_diag, PoolInfo, TopMailboxes, PoolStateDump, SpawnerStacktraces}
+%%
+%% - PoolInfo: {pool_info_row, PidText, RegName, MailboxLen, MemoryBytes,
+%%               CurrentFunctionText, Status}
+%% - TopMailboxes: list of {top_proc, PidText, RegName, MailboxLen, MemoryBytes, CurrentFunctionText}
+%%   ranked by message_queue_len descending; limited to TopN.
+%% - PoolStateDump: best-effort sys:get_state(PoolPid, 1000) rendered
+%%   as a binary; empty binary on failure (pool is gen_server-ish so
+%%   this usually works).
+%% - SpawnerStacktraces: list of {spawner_trace, PidText, CurrentFunctionText, StackText}
+%%   for every process whose initial_call's first element is
+%%   `pharos@lsp@pool` (these are the spawn workers — knowing where
+%%   they're parked tells us if they're stuck inside lifecycle.wait
+%%   or probe_call). Best-effort; empty list under load.
+%%
+%% Used by runtime_pool_recon MCP tool for diagnosing pool-blocked
+%% spawn cascades.
+pool_diag(TopN) when is_integer(TopN), TopN > 0 ->
+    PoolPid = case persistent_term:get(pharos_pool_subject, undefined) of
+        undefined -> undefined;
+        Subject ->
+            %% Subject is a gleam process Subject — record shape
+            %% {subject, OwnerPid, Tag} or similar. Try unwrap.
+            extract_pid(Subject)
+    end,
+    PoolInfo = case PoolPid of
+        undefined -> {pool_info_row, <<>>, <<>>, 0, 0, <<>>, <<"unregistered">>};
+        _ -> describe_proc(PoolPid)
+    end,
+    Top = top_by_mailbox(TopN),
+    PoolStateDump = case PoolPid of
+        undefined -> <<>>;
+        _ ->
+            try
+                State = sys:get_state(PoolPid, 1000),
+                iolist_to_binary(io_lib:format("~p", [State]))
+            catch
+                _:_ -> <<>>
+            end
+    end,
+    Spawners = find_spawner_traces(),
+    {pool_diag, PoolInfo, Top, PoolStateDump, Spawners}.
+
+extract_pid(Subject) ->
+    %% gleam_erlang Subjects are records — try a few likely shapes.
+    case Subject of
+        {subject, Pid, _Tag} when is_pid(Pid) -> Pid;
+        Pid when is_pid(Pid) -> Pid;
+        T when is_tuple(T), tuple_size(T) >= 2 ->
+            case element(2, T) of
+                Pid when is_pid(Pid) -> Pid;
+                _ -> undefined
+            end;
+        _ -> undefined
+    end.
+
+describe_proc(Pid) when is_pid(Pid) ->
+    case erlang:process_info(Pid, [
+        registered_name,
+        message_queue_len,
+        memory,
+        current_function,
+        status
+    ]) of
+        undefined ->
+            {pool_info_row, list_to_binary(pid_to_list(Pid)),
+                <<>>, 0, 0, <<>>, <<"dead">>};
+        Info ->
+            Get = fun(K) -> proplists:get_value(K, Info) end,
+            Name = case Get(registered_name) of
+                [] -> <<>>;
+                undefined -> <<>>;
+                A when is_atom(A) -> atom_to_binary(A, utf8)
+            end,
+            Cur = case Get(current_function) of
+                {M, F, Ar} ->
+                    iolist_to_binary(io_lib:format("~p:~p/~p", [M, F, Ar]));
+                _ -> <<>>
+            end,
+            Status = case Get(status) of
+                S when is_atom(S) -> atom_to_binary(S, utf8);
+                _ -> <<>>
+            end,
+            {pool_info_row,
+                list_to_binary(pid_to_list(Pid)),
+                Name,
+                default(Get(message_queue_len), 0),
+                default(Get(memory), 0),
+                Cur,
+                Status}
+    end.
+
+top_by_mailbox(N) ->
+    Pids = erlang:processes(),
+    Rows = lists:foldl(fun(Pid, Acc) ->
+        case erlang:process_info(Pid, [
+            registered_name,
+            message_queue_len,
+            memory,
+            current_function
+        ]) of
+            undefined -> Acc;
+            Info ->
+                Get = fun(K) -> proplists:get_value(K, Info) end,
+                MQ = default(Get(message_queue_len), 0),
+                case MQ > 0 of
+                    false -> Acc;
+                    true ->
+                        Name = case Get(registered_name) of
+                            [] -> <<>>;
+                            undefined -> <<>>;
+                            A when is_atom(A) -> atom_to_binary(A, utf8)
+                        end,
+                        Cur = case Get(current_function) of
+                            {M, F, Ar} ->
+                                iolist_to_binary(io_lib:format("~p:~p/~p", [M, F, Ar]));
+                            _ -> <<>>
+                        end,
+                        Row = {top_proc,
+                            list_to_binary(pid_to_list(Pid)),
+                            Name,
+                            MQ,
+                            default(Get(memory), 0),
+                            Cur},
+                        [Row | Acc]
+                end
+        end
+    end, [], Pids),
+    Sorted = lists:sort(fun(A, B) ->
+        element(4, A) >= element(4, B)
+    end, Rows),
+    lists:sublist(Sorted, N).
+
+find_spawner_traces() ->
+    Pids = erlang:processes(),
+    lists:foldl(fun(Pid, Acc) ->
+        case erlang:process_info(Pid, [initial_call, current_function]) of
+            undefined -> Acc;
+            Info ->
+                IC = proplists:get_value(initial_call, Info),
+                case is_spawner_initial_call(IC) of
+                    false -> Acc;
+                    true ->
+                        Cur = case proplists:get_value(current_function, Info) of
+                            {M, F, Ar} ->
+                                iolist_to_binary(io_lib:format("~p:~p/~p", [M, F, Ar]));
+                            _ -> <<>>
+                        end,
+                        Stack = case erlang:process_info(Pid, current_stacktrace) of
+                            {current_stacktrace, S} ->
+                                iolist_to_binary(io_lib:format("~p", [S]));
+                            _ -> <<>>
+                        end,
+                        [{spawner_trace,
+                            list_to_binary(pid_to_list(Pid)),
+                            Cur,
+                            Stack} | Acc]
+                end
+        end
+    end, [], Pids).
+
+%% A pool spawner is `process.spawn_unlinked(fun)` invoked from
+%% pharos@lsp@pool:spawn_worker. erlang process_info's initial_call
+%% records the entry MFA; gleam compiles closure-spawners through
+%% `erlang:spawn/1` so the initial_call ends up `erlang:apply/2`.
+%% We can't filter on module name alone; instead match anything
+%% whose current_stacktrace mentions our pool module. This is
+%% best-effort but cheap.
+is_spawner_initial_call({pharos@lsp@pool, _, _}) -> true;
+is_spawner_initial_call(_) -> false.

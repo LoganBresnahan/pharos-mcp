@@ -96,6 +96,19 @@ pub fn empty_filter_blocks_everything_test() {
   config.tool_allowed(filter, "rename_preview", CatWrite) |> should.be_false
 }
 
+pub fn all_alias_exposes_every_category_test() {
+  // The `"all"` meta-alias is the inverse of `[]` — every tool in
+  // every category is exposed. Used by dogfood / debug / power-user
+  // installs that want the full surface in one entry.
+  let filter = ToolFilter(entries: ["all"])
+  config.tool_allowed(filter, "hover", CatRead) |> should.be_true
+  config.tool_allowed(filter, "rename_preview", CatWrite) |> should.be_true
+  config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_true
+  config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_true
+  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDefault)
+  |> should.be_true
+}
+
 pub fn defaults_use_stdio_transport_test() {
   let cfg: Config = config.defaults()
   cfg.transport |> should.equal(config.Stdio)

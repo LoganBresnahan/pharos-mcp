@@ -56,6 +56,10 @@ pub fn describe_request_error(err: lifecycle.RequestError) -> String {
       "response decode error: " <> reason
     lifecycle.ServerError(code, message) ->
       "server error " <> int_to_string(code) <> ": " <> message
+    lifecycle.ActorCallPanic(reason) ->
+      "lsp actor call panicked (likely cached lsp_proc died before this "
+      <> "call dispatched; retry should re-spawn): "
+      <> reason
   }
 }
 

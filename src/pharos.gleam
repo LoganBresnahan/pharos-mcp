@@ -27,18 +27,22 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import pharos/cli
 import pharos/config.{type Config}
+import pharos/env
 import pharos/log
 import pharos/log/entry
 import pharos/log/filter
 import pharos/log/trace_ring
 import pharos/lsp/diagnostics_cache
-import pharos/lsp/post_didopen_drained
 import pharos/lsp/dyn_sup
 import pharos/lsp/inflight
+import pharos/lsp/languages
+import pharos/lsp/pool
 import pharos/lsp/registry
 import pharos/lsp/registry_toml
 import pharos/mcp/request_workers
 import pharos/supervisor as root_supervisor
+import pharos/tools/session
+import pharos/workspace_root
 
 const server_version: String = "0.0.1"
 
@@ -58,6 +62,13 @@ pub fn main() -> Nil {
               <> transport_label(cfg.transport)
               <> ")",
           )
+          // ADR-024: ops-only `PHAROS_WARMUP_LANGS` CSV pre-spawns
+          // the listed languages' LSPs against cwd before the first
+          // LLM request lands. Each warm-up blocks until pool's
+          // readiness probe succeeds; failures log + continue so a
+          // single missing binary does not break the rest of the
+          // pool.
+          warmup_from_env()
           // Stdio/Both: stdio_worker drives termination via stdin
           // EOF. Http only: no stdio termination signal; sleep
           // until SIGTERM.
@@ -99,7 +110,6 @@ fn do_boot() -> Result(Pid, String) {
   // AFTER config.load so persistent_term carries the user's
   // language overrides at merge time.
   diagnostics_cache.init()
-  post_didopen_drained.init()
   trace_ring.init(trace_ring.default_capacity)
   registry.init()
   inflight.init()
@@ -276,6 +286,143 @@ fn print_language_config(language: String) -> Nil {
 @external(erlang, "pharos_stdin_ffi", "write_line")
 fn stdio_write_line(body: String) -> Nil
 
+// -- ADR-024 boot-time warmup --------------------------------------------
+
+/// Read `PHAROS_WARMUP_LANGS` (CSV of language ids) and pre-spawn
+/// each language's LSP against cwd. Blocking — pool.get only returns
+/// after the readiness probe succeeds. Failures (no workspace, no
+/// pool, probe budget exhausted) log warn + continue so a missing
+/// rust toolchain does not block gopls from warming. Ops-only knob;
+/// production stays cold-start-on-first-call.
+fn warmup_from_env() -> Nil {
+  case env.get("PHAROS_WARMUP_LANGS") {
+    option.None -> Nil
+    option.Some(raw) ->
+      case split_csv(raw) {
+        [] -> Nil
+        langs ->
+          case pool.global() {
+            Error(_) ->
+              log.warn_at(
+                "pharos/lsp/pool",
+                "PHAROS_WARMUP_LANGS set but pool not running; skipping warmup",
+              )
+            Ok(pool_handle) ->
+              list.each(langs, fn(lang) { warmup_one(pool_handle, lang) })
+          }
+      }
+  }
+}
+
+fn warmup_one(pool_handle: pool.Pool, lang: String) -> Nil {
+  case registry_for_language(lang) {
+    Error(reason) -> {
+      log.fields_at(
+        "pharos/lsp/pool",
+        entry.Warn,
+        "warmup: skipping language",
+        [#("language", lang), #("reason", reason)],
+      )
+      Nil
+    }
+    Ok(config) ->
+      case languages.primary_server(config) {
+        Error(_) -> {
+          log.fields_at(
+            "pharos/lsp/pool",
+            entry.Warn,
+            "warmup: language has no primary server",
+            [#("language", lang)],
+          )
+          Nil
+        }
+        Ok(server) -> {
+          case workspace_root.discover_from_dir(cwd_for_warmup(), config.root_markers) {
+            Error(_) -> {
+              log.fields_at(
+                "pharos/lsp/pool",
+                entry.Warn,
+                "warmup: no workspace root marker found near cwd",
+                [#("language", lang), #("cwd", cwd_for_warmup())],
+              )
+              Nil
+            }
+            Ok(workspace) -> {
+              let started_ms = system_time_ms()
+              let spec = session.build_spawn_spec(workspace, config, server)
+              case pool.get(pool_handle, config.id, workspace, spec) {
+                Ok(_) ->
+                  log.fields_at(
+                    "pharos/lsp/pool",
+                    entry.Info,
+                    "warmup: spawned LSP",
+                    [
+                      #("language", lang),
+                      #("workspace", workspace),
+                      #(
+                        "elapsed_ms",
+                        int_to_string(system_time_ms() - started_ms),
+                      ),
+                    ],
+                  )
+                Error(err) ->
+                  log.fields_at(
+                    "pharos/lsp/pool",
+                    entry.Warn,
+                    "warmup: spawn failed",
+                    [
+                      #("language", lang),
+                      #("workspace", workspace),
+                      #("reason", describe_get_error(err)),
+                    ],
+                  )
+              }
+              Nil
+            }
+          }
+        }
+      }
+  }
+}
+
+fn describe_get_error(err: pool.GetError) -> String {
+  case err {
+    pool.ProcStartFailed(reason) -> "spawn failed: " <> reason
+    pool.ProbeFailed(reason) -> "probe failed: " <> reason
+    pool.SpawnerCrashed(reason) -> "spawner crashed: " <> reason
+  }
+}
+
+fn registry_for_language(lang: String) -> Result(languages.LanguageConfig, String) {
+  let r = registry.cached()
+  case dict.get(r, lang) {
+    Ok(config) -> Ok(config)
+    Error(_) -> Error("unknown language id (not in registry)")
+  }
+}
+
+@external(erlang, "pharos_fs_ffi", "cwd")
+fn cwd_for_warmup() -> String
+
+@external(erlang, "erlang", "system_time")
+fn system_time_raw(unit: ErlangTimeUnit) -> Int
+
+type ErlangTimeUnit {
+  Millisecond
+}
+
+fn system_time_ms() -> Int {
+  system_time_raw(Millisecond)
+}
+
+@external(erlang, "erlang", "integer_to_binary")
+fn int_to_string(n: Int) -> String
+
+fn split_csv(raw: String) -> List(String) {
+  string.split(raw, ",")
+  |> list.map(string.trim)
+  |> list.filter(fn(s) { s != "" })
+}
 
 fn usage() -> String {
   "Usage: pharos [FLAG]

@@ -95,7 +95,9 @@ pub fn category_for(name: String) -> ToolCategory {
     | "runtime_log_level"
     | "runtime_trace_lsp"
     | "runtime_trace_calls"
-    | "runtime_kill_lsp" -> CatDebug
+    | "runtime_kill_lsp"
+    | "runtime_lsp_state"
+    | "runtime_pool_recon" -> CatDebug
 
     // -- raw (power-user escape hatch) --
     "lsp_request_raw" -> CatRaw

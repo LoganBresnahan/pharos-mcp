@@ -70,6 +70,8 @@ pub fn named_definitions() -> List(#(String, fn() -> Json)) {
     #("runtime_language_config", runtime_language_config_definition),
     #("runtime_set_tool_timeout", runtime_set_tool_timeout_definition),
     #("runtime_effective_tool_config", runtime_effective_tool_config_definition),
+    #("runtime_lsp_state", runtime_lsp_state_definition),
+    #("runtime_pool_recon", runtime_pool_recon_definition),
   ]
 }
 
@@ -99,6 +101,8 @@ pub fn dispatch(
     "runtime_set_tool_timeout" -> Some(handle_set_tool_timeout(arguments))
     "runtime_effective_tool_config" ->
       Some(handle_effective_tool_config(arguments))
+    "runtime_lsp_state" -> Some(handle_lsp_state(pool))
+    "runtime_pool_recon" -> Some(handle_pool_recon(arguments))
     _ -> None
   }
 }
@@ -1479,4 +1483,262 @@ fn render_effective_summary(
   <> ",\"source\":\""
   <> source
   <> "\"}"
+}
+
+// -- runtime_lsp_state ---------------------------------------------------
+
+fn runtime_lsp_state_definition() -> Json {
+  json.object([
+    #("name", json.string("runtime_lsp_state")),
+    #(
+      "description",
+      json.string(
+        "Snapshot every LSP pharos is tracking — both in-flight spawns "
+          <> "(Spawning / Probing) and finished entries (Ready / Failed). "
+          <> "ADR-024. Per cache key `(language, workspace, server_id)` "
+          <> "returns the current state, spawn timestamp, probe attempt "
+          <> "count, and last probe error if any. Useful for diagnosing "
+          <> "slow first calls (is the LSP still warming?) or stuck "
+          <> "spawners (Failed with a reason). No side effects.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #("properties", json.object([])),
+      ]),
+    ),
+  ])
+}
+
+fn handle_lsp_state(pool: Pool) -> ToolResult {
+  let snap = pool.snapshot(pool)
+  let pool.PoolSnapshot(
+    entries: entries,
+    mailbox_len: mailbox_len,
+    inflight_key_count: inflight_keys,
+    inflight_waiter_total: inflight_waiters,
+    spawner_monitor_count: spawner_monitors,
+    lsp_child_monitor_count: child_monitors,
+    cache_size: cache_size,
+  ) = snap
+  let payload =
+    json.object([
+      #(
+        "pool",
+        json.object([
+          #("mailbox_len", json.int(mailbox_len)),
+          #("inflight_key_count", json.int(inflight_keys)),
+          #("inflight_waiter_total", json.int(inflight_waiters)),
+          #("spawner_monitor_count", json.int(spawner_monitors)),
+          #("lsp_child_monitor_count", json.int(child_monitors)),
+          #("cache_size", json.int(cache_size)),
+        ]),
+      ),
+      #("entries", json.array(entries, of: lsp_state_entry_to_json)),
+    ])
+    |> json.to_string
+  Ok(payload)
+}
+
+fn lsp_state_entry_to_json(entry: pool.LspStateEntry) -> Json {
+  let pool.LspStateEntry(
+    language: language,
+    workspace: workspace,
+    server_id: server_id,
+    state: state,
+    spawned_at_unix_ms: spawned_at,
+    probe_attempts: attempts,
+    last_probe_error: maybe_err,
+    inflight_waiters: inflight_waiters,
+  ) = entry
+  let #(state_label, state_reason) = case state {
+    pool.Spawning -> #("Spawning", None)
+    pool.Probing -> #("Probing", None)
+    pool.Ready -> #("Ready", None)
+    pool.Failed(reason) -> #("Failed", Some(reason))
+  }
+  let last_err = case maybe_err {
+    Some(s) -> json.string(s)
+    None -> json.null()
+  }
+  let reason = case state_reason {
+    Some(s) -> json.string(s)
+    None -> json.null()
+  }
+  json.object([
+    #("language", json.string(language)),
+    #("workspace", json.string(workspace)),
+    #("server_id", json.string(server_id)),
+    #("state", json.string(state_label)),
+    #("state_reason", reason),
+    #("spawned_at_unix_ms", json.int(spawned_at)),
+    #("probe_attempts", json.int(attempts)),
+    #("last_probe_error", last_err),
+    #("inflight_waiters", json.int(inflight_waiters)),
+  ])
+}
+
+// -- runtime_pool_recon --------------------------------------------------
+
+const default_pool_recon_top_n: Int = 20
+
+fn runtime_pool_recon_definition() -> Json {
+  json.object([
+    #("name", json.string("runtime_pool_recon")),
+    #(
+      "description",
+      json.string(
+        "Pool-actor BEAM-level diagnostics. Returns the pool process's "
+          <> "current mailbox depth, memory, current_function, and "
+          <> "(best-effort) sys:get_state dump; plus the top-N BEAM "
+          <> "processes by mailbox length and stacktraces for every "
+          <> "in-flight spawn worker. Use to diagnose pool-blocked "
+          <> "spawn cascades and to see where spawners are parked "
+          <> "when many gets queue. ADR-024 follow-up. Read-only.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "top_n",
+              json.object([
+                #("type", json.string("integer")),
+                #("minimum", json.int(1)),
+                #("default", json.int(default_pool_recon_top_n)),
+                #(
+                  "description",
+                  json.string(
+                    "Limit on the number of top-mailbox processes returned.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn handle_pool_recon(arguments: Option(Dynamic)) -> ToolResult {
+  let top_n = case arguments {
+    None -> default_pool_recon_top_n
+    Some(args) -> {
+      let decoder = {
+        use value <- decode.optional_field(
+          "top_n",
+          default_pool_recon_top_n,
+          decode.int,
+        )
+        decode.success(value)
+      }
+      case decode.run(args, decoder) {
+        Ok(n) -> n
+        Error(_) -> default_pool_recon_top_n
+      }
+    }
+  }
+  let diag = ffi_pool_diag(top_n)
+  Ok(pool_diag_to_json(diag))
+}
+
+type PoolInfoRow {
+  PoolInfoRow(
+    pid: String,
+    name: String,
+    mailbox_len: Int,
+    memory: Int,
+    current_function: String,
+    status: String,
+  )
+}
+
+type TopProc {
+  TopProc(
+    pid: String,
+    name: String,
+    mailbox_len: Int,
+    memory: Int,
+    current_function: String,
+  )
+}
+
+type SpawnerTrace {
+  SpawnerTrace(pid: String, current_function: String, stack: String)
+}
+
+type PoolDiag {
+  PoolDiag(
+    pool: PoolInfoRow,
+    top_mailboxes: List(TopProc),
+    pool_state_dump: String,
+    spawners: List(SpawnerTrace),
+  )
+}
+
+@external(erlang, "pharos_runtime_ffi", "pool_diag")
+fn ffi_pool_diag(top_n: Int) -> PoolDiag
+
+fn pool_diag_to_json(d: PoolDiag) -> String {
+  let PoolDiag(pool: p, top_mailboxes: top, pool_state_dump: dump, spawners: spawners) =
+    d
+  json.object([
+    #("pool", pool_info_to_json(p)),
+    #("top_mailboxes", json.array(top, of: top_proc_to_json)),
+    #("pool_state_dump", json.string(dump)),
+    #("spawners", json.array(spawners, of: spawner_to_json)),
+  ])
+  |> json.to_string
+}
+
+fn pool_info_to_json(p: PoolInfoRow) -> Json {
+  let PoolInfoRow(
+    pid: pid,
+    name: name,
+    mailbox_len: mq,
+    memory: mem,
+    current_function: cur,
+    status: status,
+  ) = p
+  json.object([
+    #("pid", json.string(pid)),
+    #("registered_name", json.string(name)),
+    #("mailbox_len", json.int(mq)),
+    #("memory_bytes", json.int(mem)),
+    #("current_function", json.string(cur)),
+    #("status", json.string(status)),
+  ])
+}
+
+fn top_proc_to_json(p: TopProc) -> Json {
+  let TopProc(
+    pid: pid,
+    name: name,
+    mailbox_len: mq,
+    memory: mem,
+    current_function: cur,
+  ) = p
+  json.object([
+    #("pid", json.string(pid)),
+    #("registered_name", json.string(name)),
+    #("mailbox_len", json.int(mq)),
+    #("memory_bytes", json.int(mem)),
+    #("current_function", json.string(cur)),
+  ])
+}
+
+fn spawner_to_json(s: SpawnerTrace) -> Json {
+  let SpawnerTrace(pid: pid, current_function: cur, stack: stack) = s
+  json.object([
+    #("pid", json.string(pid)),
+    #("current_function", json.string(cur)),
+    #("stack", json.string(stack)),
+  ])
 }

@@ -286,6 +286,20 @@ Both gates must be green to tag.
 - New language additions. The 23 currently bundled is the M14
   scope. Adding a 24th lang triggers an M14b mini-cycle.
 
+## Tracked defects
+
+### D-M14-001 PLS hangs on `goto_type_definition`
+
+* **Cell**: all profiles/all binaries/all transports/perl.goto_type_definition (and the per-target tools serialized behind it: `goto_implementation`, `find_references`, then the short-circuited tail)
+* **Symptom**: tool times out at 285s wall-clock (override × harness slack). Pharos's probe budget is satisfied — PLS answered hover/document_symbols/workspace_symbols/get_diagnostics/goto_definition in the same lang section. Specifically `textDocument/typeDefinition` never responds.
+* **Root cause**: PLS does not implement `textDocument/typeDefinition` for Perl (no static type system), but instead of returning `-32601 Method not found`, it hangs the request indefinitely. LSP-side bug in `FractalBoy/perl-language-server`.
+* **Fix**: won't-fix-pharos. Upstream tracking only. Pharos's `apply_workspace_edit` plus the 5 working PLS tools stay green; the cascading short-circuit is a harness artifact (3 strikes for unrelated `goto_*` calls), not a pharos defect.
+* **Verification**: re-run `bin/dogfood-23lang.py perl --label "D-M14-001 check"`. Expect first 5 tools PASS, then 3 consecutive 285s wall-clock failures, then short-circuit. Pattern stable across passes.
+
 ## Phase results (rolling)
 
-_Phase 1 not yet started. Update after each phase lands._
+_Phase 1 with ADR-024 readiness gate landed: 351/524 cells PASS (67%).
+18/23 languages working (vs 7/23 pre-ADR-024). 5 short-circuits:
+scala (metals crash mid-probe), java/erlang/gleam (per-server
+`ready_timeout_ms` bumped post-Pass-1), perl (D-M14-001). Update after
+each subsequent phase lands._

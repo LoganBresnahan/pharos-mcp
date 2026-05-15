@@ -154,6 +154,28 @@ pub fn primary_server_for_method(
   }
 }
 
+/// Spawn-time readiness probe (ADR-024). After the LSP's `initialize`
+/// handshake + optional `$/progress` drain, pool's spawner fires a
+/// real query and waits for a non-error / non-null response before
+/// marking the proc Ready. The probe is a direct test of "can this
+/// LSP answer a question?" — server-agnostic and stronger than the
+/// existing proxy signals (initialize done, progress-token drain).
+pub type WarmupProbe {
+  /// Default — `workspace/symbol` with empty query. Forces the LSP
+  /// to walk its symbol index at least once. Works across
+  /// rust-analyzer, gopls, pyright, marksman, terraform-ls,
+  /// clojure-lsp, metals, jdtls, HLS, PLS, ELP, lua-LS, ruby-lsp,
+  /// vscode-*-language-server.
+  ProbeWorkspaceSymbol(query: String)
+  /// `textDocument/documentSymbol` against `<workspace>/<rel>`. For
+  /// LSPs where `workspace/symbol` is unreliable.
+  ProbeDocumentSymbol(uri_relative_to_workspace: String)
+  /// Opt-out. The LSP is considered Ready as soon as the readiness
+  /// drain completes (legacy behavior). Reserved for servers where
+  /// no useful probe exists.
+  ProbeNone
+}
+
 /// A single LSP server pharos can spawn. One language may have
 /// several. Per ADR-019.
 pub type ServerConfig {
@@ -184,12 +206,12 @@ pub type ServerConfig {
     /// `$/progress` token name the server emits during readiness
     /// work (typically initial indexing). `None` skips the wait.
     readiness_token: Option(String),
-    /// How long to wait for `readiness_token` to reach `kind: "end"`
-    /// before giving up. `None` uses the global default
-    /// (30s — see `default_readiness_timeout_ms`). Servers with slow
-    /// indexing on big workspaces (rust-analyzer, jdtls) can override
-    /// to e.g. 60000-90000.
-    readiness_timeout_ms: Option(Int),
+    /// Per ADR-024: total wall-clock budget for the spawn-time
+    /// `$/progress` drain + readiness probe loop combined. `None`
+    /// uses the global default (60s — see `default_ready_timeout_ms`).
+    /// Servers with slow indexing on big workspaces (rust-analyzer,
+    /// jdtls) can override to e.g. 90000-180000.
+    ready_timeout_ms: Option(Int),
     /// How long to wait for the `initialize` handshake response
     /// before failing. `None` uses the global default
     /// (90s — see `default_initialize_timeout_ms`). jdtls cold start
@@ -197,12 +219,18 @@ pub type ServerConfig {
     /// override here to TIGHTEN the budget for fast servers if a
     /// faster fail-fast is desired.
     initialize_timeout_ms: Option(Int),
+    /// Spawn-time readiness probe (ADR-024). Default
+    /// `ProbeWorkspaceSymbol("")` works for ~all bundled servers;
+    /// override per-language only when empirical testing shows the
+    /// default probe is unreliable.
+    warmup_probe: WarmupProbe,
   )
 }
 
-/// Used when a `ServerConfig.readiness_timeout_ms` is `None`.
-/// Matches what `session.gleam` previously hard-coded.
-pub const default_readiness_timeout_ms: Int = 30_000
+/// Used when a `ServerConfig.ready_timeout_ms` is `None`. Per
+/// ADR-024 this bounds drain + probe combined; bumped from 30s
+/// to 60s so the probe has room to retry on slow indexers.
+pub const default_ready_timeout_ms: Int = 60_000
 
 /// Used when a `ServerConfig.initialize_timeout_ms` is `None`.
 /// Matches what `pool.gleam` previously hard-coded (after the M12
@@ -331,8 +359,9 @@ fn rust() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: Some("rustAnalyzer/Indexing"),
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -357,8 +386,9 @@ fn go() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: Some("setup"),
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -401,8 +431,9 @@ fn typescript() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -475,8 +506,9 @@ fn elixir() -> LanguageConfig {
         // next-ls's progress token shape varies; skip drain. Pharos's
         // content-modified retry catches cold-start races.
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -501,8 +533,9 @@ fn ruby() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -526,8 +559,9 @@ fn zig() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -558,8 +592,9 @@ fn cpp() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -589,8 +624,20 @@ fn scala() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        // metals + Bloop bootstrap on scala3 mainline: `initialize`
+        // returns in ~1s but `workspace/symbol` doesn't reply until
+        // bloop has imported the build (2-3 min on first run, faster
+        // on cached). M14 dogfood showed every probe attempt time
+        // out as `transport error during probe` for the full 240s
+        // ready_timeout. Same shape as gleam-lsp's deps-download
+        // case (ADR-024 follow-up): `ProbeNone` lets pool return
+        // the Proc as soon as the initialize handshake completes;
+        // the first real tool call carries the cold-bootstrap cost
+        // instead of failing the entire spawn. Subsequent tool calls
+        // are fast because the Proc is cached.
+        ready_timeout_ms: Some(240_000),
         initialize_timeout_ms: Some(180_000),
+        warmup_probe: ProbeNone,
       ),
     ],
   )
@@ -617,8 +664,9 @@ fn clojure() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -646,8 +694,9 @@ fn haskell() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -673,8 +722,9 @@ fn perl() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -699,8 +749,9 @@ fn html() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -722,8 +773,9 @@ fn css() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -747,8 +799,9 @@ fn json_lang() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -772,8 +825,9 @@ fn yaml() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -797,8 +851,9 @@ fn markdown() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -824,8 +879,9 @@ fn terraform() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -854,8 +910,15 @@ fn erlang() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        // ELP emits `-32801 content modified` during the initial
+        // workspace-symbol walk on rebar3 (and other multi-app
+        // projects). M14 Pass 1c–4 dogfood saw 14 probe attempts
+        // burn the full 180s budget without elp ever leaving the
+        // indexing window. 300s covers it on the kafka-sized
+        // fixture.
+        ready_timeout_ms: Some(300_000),
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -884,8 +947,13 @@ fn java() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        // jdtls + Gradle daemon cold-build on a real project (kafka,
+        // spring-boot) takes minutes to walk every Gradle subproject
+        // before workspace/symbol returns. 360s covers the typical
+        // case; truly massive monorepos may need TOML override.
+        ready_timeout_ms: Some(360_000),
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -909,8 +977,19 @@ fn gleam() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        // gleam-lsp doesn't reply to `workspace/symbol` until the
+        // compiler finishes downloading the project's dependency
+        // manifest (visible as `window/workDoneProgress/create` for
+        // the `downloading-dependencies` token before any tool
+        // response). On the stdlib fixture this stretches past
+        // every probe budget we set. ADR-024 explicitly supports
+        // `ProbeNone` for LSPs where the probe is more harmful
+        // than the slow-first-call experience; gleam falls into
+        // that bucket. First tool call carries the cold-start cost
+        // instead of failing the entire spawn.
+        ready_timeout_ms: Some(180_000),
         initialize_timeout_ms: None,
+        warmup_probe: ProbeNone,
       ),
     ],
   )
@@ -939,8 +1018,9 @@ fn lua() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -970,8 +1050,9 @@ fn bash() -> LanguageConfig {
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )
@@ -1007,8 +1088,9 @@ fn python() -> LanguageConfig {
         // does not reliably push notifications. Pull mode wins.
         diagnostics_mode: Pull,
         readiness_token: Some("Indexing"),
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
       ServerConfig(
         id: "ruff",
@@ -1023,8 +1105,9 @@ fn python() -> LanguageConfig {
         ]),
         diagnostics_mode: Pull,
         readiness_token: None,
-        readiness_timeout_ms: None,
+        ready_timeout_ms: None,
         initialize_timeout_ms: None,
+        warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
   )

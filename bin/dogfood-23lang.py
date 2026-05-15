@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Dogfood pass: 23 languages × 39 tools against real-world fixtures.
 
-Drives pharos through stdio + NDJSON, exercises every advertised MCP
-tool against `tmp/fixtures/<lang>/` repos cloned by
-`bin/dogfood-fixtures.sh`. Records each tool's outcome into a markdown
-report (default `doc/dogfood-23lang.md`).
+Drives pharos through stdio NDJSON or HTTP POST (`--transport http`),
+exercises every advertised MCP tool against `tmp/fixtures/<lang>/`
+repos cloned by `bin/dogfood-fixtures.sh`. Records each tool's
+outcome into a markdown report (default `doc/dogfood-23lang.md`).
 
 Per-language exercises **22 LSP-bound tools** at a curated symbol
 position; 16 runtime tools + `echo` + `lsp_request_raw` run once
@@ -14,12 +14,19 @@ Many tools return `-32601 Method not supported` for languages whose
 LSP doesn't implement them. Those are recorded as `PASS (-32601)` —
 plumbing works, server-side gap. Real failures are `FAIL: <reason>`.
 
+When a per-call timeout fires (pharos returns
+`tool timeout: LSP did not respond in <N>ms`), the harness fires
+`runtime_set_tool_timeout` to bump the budget for that
+(tool, language) pair and retries the original call once. This
+mirrors the LLM-realistic recovery path documented in ADR-021.
+
 Usage:
 
-    python3 bin/dogfood-23lang.py                  # all langs
-    python3 bin/dogfood-23lang.py rust go gleam    # specific langs
-    PHAROS_TEST_BIN=burrito_out/pharos_linux_x64 python3 bin/dogfood-23lang.py
-    python3 bin/dogfood-23lang.py --label "binary, post-rebuild"
+    python3 bin/dogfood-23lang.py                       # dev/stdio/all
+    python3 bin/dogfood-23lang.py --transport http      # dev/http/all
+    python3 bin/dogfood-23lang.py --profile default     # default surface
+    PHAROS_TEST_BIN=burrito_out/pharos_linux_x64 \\
+      python3 bin/dogfood-23lang.py --label "binary, post-rebuild"
 
 Pass label appears in the report header so multiple runs can be
 diff-walked. Default label = `pharos-dev`.
@@ -28,9 +35,13 @@ diff-walked. Default label = `pharos-dev`.
 import argparse
 import json
 import os
+import select
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,10 +103,10 @@ TARGETS = [
     Target("zig",        "src/main.zig",                                             3,  6,  "std"),
     Target("cpp",        "src/google/protobuf/message.h",                          132,  6,  "Message"),
     Target("scala",      "library/src/scala/Tuple.scala",                          113,  7,  "Tuple",
-                                                                                    timeout_override_ms=60_000),
+                                                                                    timeout_override_ms=300_000),
     Target("clojure",    "src/clj/clojure/core.clj",                                12,  5,  "unquote"),
     Target("haskell",    "Cabal/src/Distribution/Simple.hs",                       143,  0,  "defaultMain",
-                                                                                    timeout_override_ms=60_000),
+                                                                                    timeout_override_ms=180_000),
     # PLS single-threads workspace indexing on first cross-file query;
     # 240s matches `bin/test-suite.py`'s `serial_per_request_timeout`
     # for perl. Without this, every position-bound tool times out.
@@ -107,14 +118,16 @@ TARGETS = [
     Target("yaml",       "changelogs/config.yaml",                                   0,  0,  "title"),
     Target("markdown",   "README.md",                                                0,  0,  "MDN"),
     Target("terraform",  "main.tf",                                                  0,  0,  "vpc"),
-    Target("erlang",     "apps/rebar/src/rebar3.erl",                               58,  0,  "main"),
+    Target("erlang",     "apps/rebar/src/rebar3.erl",                               58,  0,  "main",
+                                                                                    timeout_override_ms=240_000),
     # jdtls + Gradle cold-build of kafka takes minutes per call;
     # bump generously. Smaller java fixtures are an option too but
     # kafka exercises a real polyglot codebase well.
     Target("java",       "clients/src/main/java/org/apache/kafka/clients/KafkaClient.java",
                                                                                     28, 17,  "KafkaClient",
-                                                                                    timeout_override_ms=180_000),
-    Target("gleam",      "src/gleam/list.gleam",                                    52,  7,  "length"),
+                                                                                    timeout_override_ms=600_000),
+    Target("gleam",      "src/gleam/list.gleam",                                    52,  7,  "length",
+                                                                                    timeout_override_ms=240_000),
     Target("lua",        "kong/init.lua",                                          635, 13,  "init"),
     Target("bash",       "oh-my-zsh.sh",                                             0,  0,  "main"),
     Target("python",     "src/flask/app.py",                                        72,  4,  "_make_timedelta"),
@@ -166,13 +179,38 @@ GLOBAL_TOOLS = [
     "runtime_set_tool_timeout",
     "runtime_effective_tool_config",
     "runtime_pid_info",
+    "runtime_lsp_state",
+]
+
+# Tools filtered out under `--profile default` (debug + raw categories).
+# `default` profile = read + write + CatDefault essentials. The harness
+# uses this list to (a) skip live calls that would error with
+# "Tool not enabled" and (b) emit synthetic `PASS (filter rejected)`
+# rows so the cell count and the verifier match between profiles.
+DEFAULT_FILTERED_TOOLS = [
+    "lsp_request_raw",
+    "runtime_processes",
+    "runtime_supervision_tree",
+    "runtime_ets_tables",
+    "runtime_memory",
+    "runtime_applications",
+    "runtime_scheduler_util",
+    "runtime_log_tail",
+    "runtime_log_level",
+    "runtime_log_clear",
+    "runtime_trace_lsp",
+    "runtime_kill_lsp",
+    "runtime_trace_calls",
+    "runtime_pid_info",
+    "runtime_lsp_state",
 ]
 
 
 PER_LANG_TIMEOUT_MS = 25_000  # 25s ceiling per LSP-bound call
 
 
-def build_args(tool: str, t: Target | None, prepared_item=None) -> dict:
+def build_args(tool: str, t: Target | None, prepared_item=None,
+               timeout_ms: int | None = None) -> dict:
     """Compose the `arguments` body for one tool call.
 
     `t` is None for global tools. `prepared_item` carries the call/type
@@ -180,12 +218,9 @@ def build_args(tool: str, t: Target | None, prepared_item=None) -> dict:
     of the chained `*_incoming_calls` / `*_outgoing_calls` /
     `*_supertypes` / `*_subtypes`.
 
-    Every per-lang LSP-bound tool gets a `timeout_ms` arg capped at
-    `PER_LANG_TIMEOUT_MS` so pharos's wait does not extend past the
-    harness's outer deadline (we want pharos to fail fast and let us
-    record the timeout, then continue to the next tool — slow LSPs
-    like PLS / metals can otherwise hold one tool open for 3+ minutes
-    on cold start).
+    Every per-lang LSP-bound tool gets a `timeout_ms` arg so pharos's
+    wait does not extend past the harness's outer deadline. Caller
+    can pass an override via `timeout_ms` (used by retry-on-timeout).
     """
     if tool == "echo":
         return {"message": "dogfood-23lang"}
@@ -217,7 +252,8 @@ def build_args(tool: str, t: Target | None, prepared_item=None) -> dict:
 
     pos = {"line": t.line, "character": t.character}
     uri_pos = {"uri": t.file_uri, **pos}
-    tmo = {"timeout_ms": t.timeout_override_ms or PER_LANG_TIMEOUT_MS}
+    effective = timeout_ms or t.timeout_override_ms or PER_LANG_TIMEOUT_MS
+    tmo = {"timeout_ms": effective}
 
     if tool == "hover":
         return {**uri_pos, **tmo}
@@ -320,50 +356,20 @@ def request(rid: int, tool: str, args) -> dict:
     }
 
 
-def call_one(proc, rid: int, tool: str, args, timeout_s: float) -> tuple[bool, str, dict | None]:
-    """Send one tools/call, drain stdout until matching response or
-    timeout. Returns (pass, summary, raw_result_dict).
-
-    PASS criteria, in priority order:
-      1. response with `"result"` and `isError=false` (or absent) — pass.
-      2. response with `"result"` and `isError=true` whose body mentions
-         `-32601`/`Method not found`/`unsupported file type` — pass with
-         that note (server-side gap, not pharos plumbing).
-      3. response with `"error"` field — fail with the error message.
-      4. no response within timeout — fail "no response".
-    """
-    proc.stdin.write(json.dumps(request(rid, tool, args)) + "\n")
-    proc.stdin.flush()
-
-    deadline = time.monotonic() + timeout_s
-    buf = ""
-    while time.monotonic() < deadline:
-        chunk = os.read(proc.stdout.fileno(), 65536)
-        if not chunk:
-            return False, "stdout EOF (proc died)", None
-        try:
-            buf += chunk.decode("utf-8", errors="replace")
-        except Exception:
-            return False, "decode error on stdout", None
-        while "\n" in buf:
-            line, buf = buf.split("\n", 1)
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if obj.get("id") != rid:
-                continue
-            return classify(tool, obj)
-    return False, f"no response within {timeout_s:.0f}s", None
-
-
-def classify(tool: str, obj: dict) -> tuple[bool, str, dict | None]:
+def classify(tool: str, obj: dict, expect_filter_reject: bool = False
+             ) -> tuple[bool, str, dict | None]:
     if "error" in obj:
         e = obj["error"]
-        return False, f"protocol error {e.get('code')}: {e.get('message','')[:120]}", None
+        msg = e.get("message", "")
+        # JSON-RPC -32601 (Method not found) is also how pharos's MCP
+        # router reports filtered tools at the protocol level — when
+        # `default` profile hides a tool, the tools/call dispatch
+        # responds with `error.code = -32601`. Treat as a graceful
+        # filter rejection when the harness expected it.
+        if expect_filter_reject and (e.get("code") == -32601
+                                     or "method not found" in msg.lower()):
+            return True, "filter rejected (-32601)", None
+        return False, f"protocol error {e.get('code')}: {msg[:120]}", None
     result = obj.get("result")
     if result is None:
         return False, "result missing", None
@@ -372,72 +378,489 @@ def classify(tool: str, obj: dict) -> tuple[bool, str, dict | None]:
     for c in result.get("content", []):
         if c.get("type") == "text":
             text += c.get("text", "")
+    low = text.lower()
     if is_err:
-        low = text.lower()
+        # Pharos returns isError=true with "Tool not enabled" when a
+        # caller hits a tool that isn't exposed under the active
+        # profile filter. That's the graceful path the M14 plan
+        # asserts on under `--profile default`.
+        if expect_filter_reject and ("tool not enabled" in low
+                                     or "not enabled" in low):
+            return True, "filter rejected (Tool not enabled)", result
         if "-32601" in low or "method not found" in low or "unsupported file type" in low:
-            return True, f"server gap (-32601 / unsupported)", result
+            return True, "server gap (-32601 / unsupported)", result
         return False, f"isError=true: {text[:160]}", None
+    if expect_filter_reject:
+        # Tool was supposed to be filtered out under default profile
+        # but pharos answered it normally. That's a defect — the
+        # filter is leaking. Fail loudly.
+        return False, f"expected filter rejection but got OK: {text[:120]}", None
     n = len(text)
     summary = f"ok ({n}b)"
     return True, summary, result
 
 
-def initialize(proc) -> bool:
-    proc.stdin.write(json.dumps({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "dogfood-23lang", "version": "1"},
-        },
-    }) + "\n")
-    proc.stdin.write(json.dumps({
-        "jsonrpc": "2.0", "method": "notifications/initialized", "params": {},
-    }) + "\n")
-    proc.stdin.flush()
+# ---------------------------------------------------------------------------
+# Transports
+# ---------------------------------------------------------------------------
 
-    deadline = time.monotonic() + 30
-    buf = ""
-    while time.monotonic() < deadline:
-        chunk = os.read(proc.stdout.fileno(), 65536)
-        if not chunk:
-            return False
-        buf += chunk.decode("utf-8", errors="replace")
-        while "\n" in buf:
-            line, buf = buf.split("\n", 1)
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+
+class Transport:
+    """Send/receive JSON-RPC against a running pharos process.
+
+    `send(req, timeout_s)` returns the response object whose `id`
+    matches `req['id']`, or None on timeout / transport error.
+    """
+
+    def initialize(self) -> bool:
+        raise NotImplementedError
+
+    def send(self, req: dict, timeout_s: float) -> dict | None:
+        raise NotImplementedError
+
+    def cancel(self, rid: int) -> None:
+        """Tell pharos to abandon an in-flight request — fire-and-forget
+        `notifications/cancelled`. Critical under long runs: without
+        cancel, every wall-clock timeout leaves a dispatcher worker
+        wedged in pharos waiting on its LSP, which queues subsequent
+        requests behind it and ultimately starves the pool. See M14
+        pass-1 finding (316 in-flight workers at shutdown)."""
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
+
+
+def cancelled_notification(rid: int) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {"requestId": rid},
+    }
+
+
+class StdioTransport(Transport):
+    """Streaming NDJSON over child stdin/stdout. Mirrors the M13 path.
+
+    Pharos's stderr is redirected to a tempfile, not a PIPE. Under
+    long runs against real fixtures, pharos can produce >64KB of
+    stderr (info/debug log lines), and a PIPE-buffered stderr with
+    no concurrent drainer will fill the kernel buffer and deadlock
+    pharos. Tempfile lets pharos write freely and post-mortem reads
+    work via `transport.stderr_path`.
+    """
+
+    def __init__(self, env: dict[str, str]):
+        bin_path = env.get(
+            "PHAROS_TEST_BIN",
+            os.path.join(PROJECT_ROOT, "bin", "pharos-dev"),
+        )
+        if not os.path.exists(bin_path):
+            sys.exit(f"FATAL: pharos binary not found at {bin_path}")
+        self.bin_path = bin_path
+        self.stderr_path = tempfile.mktemp(prefix="pharos-stdio-stderr-", suffix=".log")
+        self._stderr_file = open(self.stderr_path, "w")
+        self.proc = subprocess.Popen(
+            [bin_path],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=self._stderr_file,
+            env=env,
+            cwd=PROJECT_ROOT,
+            text=True,
+        )
+        self._buf = ""
+
+    def initialize(self) -> bool:
+        self.proc.stdin.write(json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "dogfood-23lang", "version": "1"},
+            },
+        }) + "\n")
+        self.proc.stdin.write(json.dumps({
+            "jsonrpc": "2.0", "method": "notifications/initialized", "params": {},
+        }) + "\n")
+        self.proc.stdin.flush()
+
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            obj = self._next_message(deadline)
+            if obj is None:
+                return False
             if obj.get("id") == 1 and "result" in obj:
                 return True
+        return False
+
+    def send(self, req: dict, timeout_s: float) -> dict | None:
+        self.proc.stdin.write(json.dumps(req) + "\n")
+        self.proc.stdin.flush()
+        rid = req.get("id")
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            obj = self._next_message(deadline)
+            if obj is None:
+                return None
+            if obj.get("id") == rid:
+                return obj
+        return None
+
+    def _next_message(self, deadline: float) -> dict | None:
+        """Drain one JSON line from stdout, honoring the absolute
+        deadline. Returns None on EOF or deadline expiry (callers
+        treat both as a failed read)."""
+        while True:
+            if "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            ready, _, _ = select.select([self.proc.stdout], [], [], remaining)
+            if not ready:
+                return None
+            try:
+                chunk = os.read(self.proc.stdout.fileno(), 65536)
+            except Exception:
+                return None
+            if not chunk:
+                return None
+            self._buf += chunk.decode("utf-8", errors="replace")
+
+    def cancel(self, rid: int) -> None:
+        try:
+            self.proc.stdin.write(json.dumps(cancelled_notification(rid)) + "\n")
+            self.proc.stdin.flush()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        try:
+            self.proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        try:
+            self._stderr_file.close()
+        except Exception:
+            pass
+
+
+class HttpTransport(Transport):
+    """One-shot POSTs against pharos's HTTP MCP endpoint.
+
+    Spawns pharos with `PHAROS_TRANSPORT=http PHAROS_HTTP_PORT=0
+    PHAROS_HTTP_PORT_FILE=...`. Polls the port file for the bound
+    port, then POSTs to `http://127.0.0.1:<port>/mcp`. Captures
+    `Mcp-Session-Id` from the initialize response and includes it on
+    every subsequent request.
+    """
+
+    def __init__(self, env: dict[str, str]):
+        bin_path = env.get(
+            "PHAROS_TEST_BIN",
+            os.path.join(PROJECT_ROOT, "bin", "pharos-dev"),
+        )
+        if not os.path.exists(bin_path):
+            sys.exit(f"FATAL: pharos binary not found at {bin_path}")
+        self.bin_path = bin_path
+        self.port_file = tempfile.mktemp(prefix="pharos-http-port-", suffix=".txt")
+        self.stderr_path = tempfile.mktemp(prefix="pharos-http-stderr-", suffix=".log")
+        self._stderr_file = open(self.stderr_path, "w")
+        env = {
+            **env,
+            "PHAROS_TRANSPORT": "http",
+            "PHAROS_HTTP_PORT": "0",
+            "PHAROS_HTTP_BIND": "127.0.0.1",
+            "PHAROS_HTTP_PORT_FILE": self.port_file,
+        }
+        self.proc = subprocess.Popen(
+            [bin_path],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=self._stderr_file,
+            env=env,
+            cwd=PROJECT_ROOT,
+        )
+        self.port = self._wait_for_port_file(timeout_s=60)
+        if self.port is None:
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=5)
+            except Exception:
+                self.proc.kill()
+            sys.exit(f"FATAL: HTTP port file did not appear at {self.port_file}")
+        self.base_url = f"http://127.0.0.1:{self.port}/mcp"
+        self.session_id: str | None = None
+
+    def _wait_for_port_file(self, timeout_s: float) -> int | None:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if os.path.exists(self.port_file):
+                try:
+                    with open(self.port_file) as f:
+                        text = f.read().strip()
+                        if text:
+                            return int(text)
+                except (OSError, ValueError):
+                    pass
+            time.sleep(0.1)
+        return None
+
+    def initialize(self) -> bool:
+        init_req = {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "dogfood-23lang", "version": "1"},
+            },
+        }
+        resp = self._post(init_req, timeout_s=30)
+        if resp is None:
+            return False
+        return "result" in resp
+
+    def send(self, req: dict, timeout_s: float) -> dict | None:
+        return self._post(req, timeout_s)
+
+    def cancel(self, rid: int) -> None:
+        # HTTP transport: each request runs on its mist connection
+        # process. Pharos's cancel handler short-circuits on lookup
+        # miss (see request_workers.gleam — HTTP doesn't populate
+        # the worker table). But emit the notification anyway so the
+        # LSP-side `$/cancelRequest` path still fires.
+        try:
+            self._post(cancelled_notification(rid), timeout_s=5)
+        except Exception:
+            pass
+
+    def _post(self, body: dict, timeout_s: float) -> dict | None:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if self.session_id is not None:
+            headers["Mcp-Session-Id"] = self.session_id
+        data = json.dumps(body).encode("utf-8")
+        http_req = urllib.request.Request(
+            self.base_url, data=data, headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(http_req, timeout=timeout_s) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                if self.session_id is None:
+                    sid = resp.headers.get("Mcp-Session-Id")
+                    if sid:
+                        self.session_id = sid
+                if not raw.strip():
+                    return None
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError:
+                    return None
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode("utf-8", errors="replace") if e.fp else ""
+            return {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "error": {
+                    "code": -32000,
+                    "message": f"HTTP {e.code}: {body_text[:300]}",
+                },
+            }
+        except Exception as e:  # noqa: BLE001
+            return {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "error": {
+                    "code": -32001,
+                    "message": f"transport: {type(e).__name__}: {e}",
+                },
+            }
+
+    def close(self) -> None:
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=5)
+        except Exception:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+        try:
+            self._stderr_file.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(self.port_file)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Call orchestration (timeout retry, chained items)
+# ---------------------------------------------------------------------------
+
+
+def call_one(transport: Transport, rid: int, tool: str, args,
+             timeout_s: float, expect_filter_reject: bool = False
+             ) -> tuple[bool, str, dict | None]:
+    """Send one tools/call, classify the response.
+
+    PASS criteria, in priority order:
+      1. response with `"result"` and `isError=false` (or absent) — pass.
+      2. response with `"result"` and `isError=true` whose body mentions
+         `-32601`/`Method not found`/`unsupported file type` — pass with
+         that note (server-side gap, not pharos plumbing).
+      3. response with `"error"` field — fail with the error message.
+      4. no response within timeout — fail "no response".
+
+    When `expect_filter_reject` is True (caller is firing a tool the
+    active profile is supposed to deny), a `Tool not enabled` /
+    `-32601` rejection counts as PASS instead of FAIL.
+    """
+    resp = transport.send(request(rid, tool, args), timeout_s=timeout_s)
+    if resp is None:
+        return False, f"no response within {timeout_s:.0f}s", None
+    return classify(tool, resp, expect_filter_reject=expect_filter_reject)
+
+
+def is_timeout_summary(summary: str) -> bool:
+    """Recognize a timeout — either pharos's typed response (ADR-021)
+    OR the harness's own wall-clock deadline firing because pharos's
+    typed response never arrived in time.
+
+    Wall-clock fires when total cold-start cost (workspace discovery
+    + LSP spawn + initialize + readiness drain + per-call) exceeds
+    the harness's outer deadline. The retry path bumps the per-call
+    timeout via `runtime_set_tool_timeout` and retries — by the
+    retry the LSP is warm, so cold-start is no longer in the budget.
+    """
+    s = summary.lower()
+    if "tool timeout" in s and "lsp did not respond" in s:
+        return True
+    if s.startswith("no response within"):
+        return True
     return False
 
 
-def run_pass(filter_langs: list[str] | None, skip: set[str] = frozenset()) -> list[tuple[str, str, bool, str]]:
+def runtime_set_tool_timeout_request(rid: int, tool: str, language: str,
+                                     timeout_ms: int) -> dict:
+    return request(rid, "runtime_set_tool_timeout", {
+        "tool": tool, "language": language, "timeout_ms": timeout_ms,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Pass driver
+# ---------------------------------------------------------------------------
+
+
+class PoolTracePoller:
+    """Periodic snapshot of pool state via runtime_lsp_state +
+    runtime_pool_recon. Appends a JSONL record to `path` whenever
+    `tick(label)` is invoked and at least `every_s` seconds have
+    elapsed since the last successful poll. Reuses the harness's
+    own transport (no parallel transport, no thread-safety on
+    JSON-RPC ids — caller controls ordering).
+
+    Records have shape:
+      {"ts": <unix_ms>, "label": "<phase tag>",
+       "lsp_state": <runtime_lsp_state json>,
+       "pool_recon": <runtime_pool_recon json>}
+
+    Skips silently if the tool is filtered (default profile) or
+    pharos returned an error — diagnostics must never fail the
+    pass."""
+
+    def __init__(self, transport: "Transport", path: str | None, every_s: float,
+                 rid_start: int):
+        self.transport = transport
+        self.path = path
+        self.every_s = every_s
+        self._next_rid = rid_start
+        self._last_at = 0.0
+        self._fh = open(path, "a") if path else None
+
+    def _alloc_rid(self) -> int:
+        self._next_rid += 1
+        return self._next_rid
+
+    def tick(self, label: str, force: bool = False) -> None:
+        if self._fh is None:
+            return
+        now = time.monotonic()
+        if not force and (now - self._last_at) < self.every_s:
+            return
+        ts_ms = int(time.time() * 1000)
+
+        def _call(name: str, args: dict, timeout_s: float = 15) -> dict | None:
+            rid = self._alloc_rid()
+            try:
+                resp = self.transport.send(
+                    {"jsonrpc": "2.0", "id": rid, "method": "tools/call",
+                     "params": {"name": name, "arguments": args}},
+                    timeout_s=timeout_s,
+                )
+            except Exception:  # noqa: BLE001
+                return None
+            if resp is None or "result" not in resp:
+                return None
+            content = resp["result"].get("content") or []
+            for c in content:
+                if c.get("type") == "text":
+                    try:
+                        return json.loads(c.get("text", ""))
+                    except json.JSONDecodeError:
+                        return None
+            return None
+
+        lsp_state = _call("runtime_lsp_state", {})
+        pool_recon = _call("runtime_pool_recon", {"top_n": 15})
+        if lsp_state is None and pool_recon is None:
+            return  # filtered or pharos refused; skip silently
+        rec = {
+            "ts": ts_ms,
+            "label": label,
+            "lsp_state": lsp_state,
+            "pool_recon": pool_recon,
+        }
+        self._fh.write(json.dumps(rec) + "\n")
+        self._fh.flush()
+        self._last_at = now
+
+    def close(self) -> None:
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._fh = None
+
+
+# Module-level handle so run_pass + per-language loop can reach the poller
+# without rethreading it through every function signature.
+_POOL_POLLER: PoolTracePoller | None = None
+
+
+def run_pass(transport: Transport, filter_langs: list[str] | None,
+             skip: set[str], profile: str
+             ) -> list[tuple[str, str, bool, str]]:
     """Returns [(lang, tool, pass, summary), ...]."""
-    bin_path = os.environ.get(
-        "PHAROS_TEST_BIN", os.path.join(PROJECT_ROOT, "bin", "pharos-dev")
-    )
-    if not os.path.exists(bin_path):
-        sys.exit(f"FATAL: pharos binary not found at {bin_path}")
-
-    env = os.environ.copy()
-    proc = subprocess.Popen(
-        [bin_path],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        cwd=PROJECT_ROOT,
-        text=True,
-    )
-
-    if not initialize(proc):
-        proc.kill()
+    if not transport.initialize():
+        transport.close()
         sys.exit("FATAL: initialize handshake failed")
 
     rows: list[tuple[str, str, bool, str]] = []
@@ -447,6 +870,7 @@ def run_pass(filter_langs: list[str] | None, skip: set[str] = frozenset()) -> li
     if filter_langs:
         targets = [t for t in TARGETS if t.id in filter_langs]
         if not targets:
+            transport.close()
             sys.exit(f"no fixture matches: {filter_langs}")
 
     for t in targets:
@@ -469,11 +893,43 @@ def run_pass(filter_langs: list[str] | None, skip: set[str] = frozenset()) -> li
             continue
 
         print(f"\n=== {t.id} ({t.file_rel}) ===", flush=True)
+        if _POOL_POLLER is not None:
+            _POOL_POLLER.tick(f"lang_start:{t.id}", force=True)
         prepared_call_item = None
         prepared_type_item = None
+        # Broken-LSP fast-path: if a lang's first N tools all
+        # retry-exhaust, the LSP itself isn't responding. No point
+        # firing the rest — record them as `lsp unresponsive` and
+        # move on. Without this, a fully-broken LSP burns ~22 × 170s
+        # = ~60 min per pass per pass for nothing.
+        consecutive_timeouts = 0
+        lsp_broken = False
+        BROKEN_LSP_THRESHOLD = 3
 
         for tool in PER_LANG_TOOLS:
             rid += 1
+
+            if lsp_broken:
+                rows.append((t.id, tool, False, "lsp unresponsive (short-circuited)"))
+                print(f"  SKIP {tool}: lsp unresponsive (short-circuited)", flush=True)
+                continue
+
+            # `default` profile filter: fire the call but expect
+            # pharos to reject it with `Tool not enabled` (or
+            # `-32601`). Live confirmation is the M14 acceptance
+            # criterion: filter rejection is graceful, not a crash.
+            expect_reject = profile == "default" and tool in DEFAULT_FILTERED_TOOLS
+            if expect_reject:
+                args = build_args(tool, t)
+                rid_local = rid
+                ok, summary, _ = call_one(
+                    transport, rid_local, tool, args,
+                    timeout_s=10, expect_filter_reject=True,
+                )
+                rows.append((t.id, tool, ok, summary))
+                print(f"  {'PASS' if ok else 'FAIL'} {tool}: {summary}", flush=True)
+                continue
+
             if tool in ("call_hierarchy_incoming_calls", "call_hierarchy_outgoing_calls"):
                 args = build_args(tool, t, prepared_call_item)
                 if args is None:
@@ -489,38 +945,147 @@ def run_pass(filter_langs: list[str] | None, skip: set[str] = frozenset()) -> li
             else:
                 args = build_args(tool, t)
 
-            # Harness wall-clock cap = pharos's per-call cap + 10s
-            # slack so pharos returns its own typed timeout response
-            # before this loop bails. Without the slack we'd surface
-            # `no response within Ns` instead of pharos's structured
-            # `tool timeout` error.
-            tmo_ms = t.timeout_override_ms or PER_LANG_TIMEOUT_MS
+            # Harness wall-clock cap = pharos's per-call cap + 45s
+            # slack. The slack must cover pharos's cold-start cost
+            # (workspace discovery + LSP spawn + initialize handshake
+            # + readiness drain) on top of the per-call budget. 45s
+            # comfortably covers gopls/rust-analyzer/pyright; slower
+            # LSPs already carry explicit `timeout_override_ms`.
+            current_tmo_ms = t.timeout_override_ms or PER_LANG_TIMEOUT_MS
             ok, summary, result = call_one(
-                proc, rid, tool, args, timeout_s=(tmo_ms / 1000) + 10
+                transport, rid, tool, args,
+                timeout_s=(current_tmo_ms / 1000) + 45,
             )
+
+            # Wall-clock timeout? Tell pharos to abandon the worker
+            # so the LSP queue doesn't back up behind a zombie call.
+            if not ok and is_timeout_summary(summary):
+                transport.cancel(rid)
+
+            # ADR-021 LLM-realistic recovery: bump timeout once via
+            # runtime_set_tool_timeout, retry the original call. Only
+            # for per-lang LSP-bound tools — global / runtime tools
+            # don't honor a per-language timeout knob.
+            #
+            # Skip retry when the lang already carries a tuned
+            # `timeout_override_ms`. Those overrides were chosen for
+            # PLS / jdtls / metals / HLS specifically — when the
+            # tuned value is itself exceeded, doubling it almost
+            # never helps and burns retry-wait minutes per cell.
+            # Record FAIL immediately so the report shows the real
+            # ceiling instead of a slower retry-exhausted ceiling.
+            retry_eligible = (
+                not ok
+                and is_timeout_summary(summary)
+                and t.timeout_override_ms is None
+            )
+            if retry_eligible:
+                bumped_ms = current_tmo_ms * 2
+                rid += 1
+                # Generous deadline (60s): pharos may still be
+                # finishing the timed-out original call when this
+                # runtime tool is queued behind it. send() will drop
+                # any stale rids that arrive first; the deadline
+                # needs to outlast pharos's in-flight work.
+                rs_resp = transport.send(
+                    runtime_set_tool_timeout_request(rid, tool, t.id, bumped_ms),
+                    timeout_s=60,
+                )
+                rs_ok = rs_resp is not None and "result" in rs_resp
+                print(
+                    f"  RETRY {tool}: bumping timeout {current_tmo_ms}→{bumped_ms}ms "
+                    f"(set_tool_timeout: {'ok' if rs_ok else 'failed'})",
+                    flush=True,
+                )
+                if rs_ok:
+                    rid += 1
+                    retry_args = build_args(tool, t, prepared_call_item
+                                            if tool.startswith("call_hierarchy_")
+                                            else prepared_type_item
+                                            if tool.startswith("type_hierarchy_")
+                                            else None,
+                                            timeout_ms=bumped_ms)
+                    if retry_args is not None:
+                        retry_rid = rid
+                        ok2, summary2, result2 = call_one(
+                            transport, retry_rid, tool, retry_args,
+                            timeout_s=(bumped_ms / 1000) + 45,
+                        )
+                        if not ok2 and is_timeout_summary(summary2):
+                            transport.cancel(retry_rid)
+                        if ok2:
+                            rows.append((t.id, tool, True,
+                                         f"OK (after retry @ {bumped_ms}ms)"))
+                            print(
+                                f"  PASS {tool}: OK after retry "
+                                f"({summary2})",
+                                flush=True,
+                            )
+                            if tool == "call_hierarchy_prepare" and result2:
+                                prepared_call_item = first_item_from(result2)
+                            elif tool == "type_hierarchy_prepare" and result2:
+                                prepared_type_item = first_item_from(result2)
+                            continue
+                        rows.append((t.id, tool, False,
+                                     f"retry exhausted: {summary2}"))
+                        print(
+                            f"  FAIL {tool}: retry exhausted "
+                            f"({summary2})",
+                            flush=True,
+                        )
+                        consecutive_timeouts += 1
+                        if consecutive_timeouts >= BROKEN_LSP_THRESHOLD:
+                            lsp_broken = True
+                            print(
+                                f"  ! LSP for {t.id} marked unresponsive "
+                                f"after {BROKEN_LSP_THRESHOLD} consecutive "
+                                f"retry exhaustions; short-circuiting rest",
+                                flush=True,
+                            )
+                        continue
+
             rows.append((t.id, tool, ok, summary))
             print(f"  {'PASS' if ok else 'FAIL'} {tool}: {summary}", flush=True)
+            if _POOL_POLLER is not None:
+                _POOL_POLLER.tick(f"after_tool:{t.id}:{tool}")
+            if ok:
+                consecutive_timeouts = 0
+            elif is_timeout_summary(summary):
+                consecutive_timeouts += 1
+                if consecutive_timeouts >= BROKEN_LSP_THRESHOLD:
+                    lsp_broken = True
+                    print(
+                        f"  ! LSP for {t.id} marked unresponsive after "
+                        f"{BROKEN_LSP_THRESHOLD} consecutive timeouts; "
+                        f"short-circuiting rest",
+                        flush=True,
+                    )
 
-            # Capture prepare items for chained follow-ups.
             if tool == "call_hierarchy_prepare" and ok and result:
                 prepared_call_item = first_item_from(result)
             elif tool == "type_hierarchy_prepare" and ok and result:
                 prepared_type_item = first_item_from(result)
 
-    print(f"\n=== global tools ===", flush=True)
+    print("\n=== global tools ===", flush=True)
+    if _POOL_POLLER is not None:
+        _POOL_POLLER.tick("global_tools_start", force=True)
     for tool in GLOBAL_TOOLS:
         rid += 1
+
+        expect_reject = profile == "default" and tool in DEFAULT_FILTERED_TOOLS
         args = build_args(tool, None)
-        ok, summary, _ = call_one(proc, rid, tool, args, timeout_s=30)
+        ok, summary, _ = call_one(
+            transport, rid, tool, args,
+            timeout_s=30, expect_filter_reject=expect_reject,
+        )
         rows.append(("(global)", tool, ok, summary))
         print(f"  {'PASS' if ok else 'FAIL'} {tool}: {summary}", flush=True)
 
-    proc.stdin.close()
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+    if _POOL_POLLER is not None:
+        _POOL_POLLER.tick("pass_complete", force=True)
+        _POOL_POLLER.close()
 
+    transport.close()
     return rows
 
 
@@ -545,7 +1110,8 @@ def first_item_from(result: dict):
     return None
 
 
-def write_report(rows, out_path: str, label: str):
+def write_report(rows, out_path: str, label: str, transport_name: str,
+                 profile: str):
     by_lang: dict[str, list] = {}
     for lang, tool, ok, summary in rows:
         by_lang.setdefault(lang, []).append((tool, ok, summary))
@@ -559,6 +1125,8 @@ def write_report(rows, out_path: str, label: str):
         "",
         f"**Label:** {label}",
         f"**Binary:** `{pharos_bin}`",
+        f"**Transport:** `{transport_name}`",
+        f"**Profile:** `{profile}`",
         f"**Result:** **{passed}/{total} cells PASS** ({100 * passed // max(total,1)}%)",
         "",
         "Per-language LSP-bound tools (22): hover, document_symbols, workspace_symbols, "
@@ -576,7 +1144,11 @@ def write_report(rows, out_path: str, label: str):
         "",
         "Result keys: `OK` = response without isError. "
         "`server gap` = isError carrying -32601 / Method not found / unsupported file type — "
-        "plumbing fine, LSP doesn't implement it. `FAIL` = anything else.",
+        "plumbing fine, LSP doesn't implement it. `FAIL` = anything else. "
+        "`OK (after retry …)` = first call timed out, harness fired "
+        "`runtime_set_tool_timeout` to bump the budget, retry passed. "
+        "`filter rejected (default profile)` rows mark tools the default "
+        "profile is configured to deny — graceful filter, not a defect.",
         "",
     ]
 
@@ -591,6 +1163,10 @@ def write_report(rows, out_path: str, label: str):
             mark = "OK" if ok else "FAIL"
             if "server gap" in summary:
                 mark = "GAP"
+            elif "filter rejected" in summary:
+                mark = "FILT"
+            elif "after retry" in summary:
+                mark = "RETRY"
             lines.append(f"| `{tool}` | {mark} | {summary} |")
         lines.append("")
 
@@ -609,11 +1185,75 @@ def main():
                     help="pass label written into the report header")
     ap.add_argument("--out", default=DEFAULT_REPORT,
                     help=f"output markdown path (default: {DEFAULT_REPORT})")
+    ap.add_argument("--transport", choices=("stdio", "http"), default="stdio",
+                    help="MCP transport (default: stdio)")
+    ap.add_argument("--profile", choices=("all", "default"), default="all",
+                    help="tool surface profile. `all` exposes every category; "
+                         "`default` ships read+write+CatDefault and the harness "
+                         "records 14 debug+raw tools as `filter rejected` "
+                         "without firing them.")
+    ap.add_argument("--pool-trace-path", default=None,
+                    help="if set, harness writes a JSONL pool-state trace "
+                         "(runtime_lsp_state + runtime_pool_recon snapshots) "
+                         "to this path. Required for Option B regression "
+                         "diagnostics. Forces --profile=all (debug tools).")
+    ap.add_argument("--pool-trace-every", type=float, default=20.0,
+                    help="poll interval in seconds for the pool-state trace "
+                         "(default 20s). Lang-start and pass-end snapshots "
+                         "fire regardless.")
+    ap.add_argument("--pool-trace-pharos-log",
+                    default="info,pharos/lsp/pool/trace=debug",
+                    help="value to set as PHAROS_LOG when pool-trace is on. "
+                         "Default routes pool-trace events to stderr.")
     args = ap.parse_args()
 
     skip = set(s.strip() for s in args.skip.split(",") if s.strip())
-    rows = run_pass(args.languages or None, skip)
-    write_report(rows, args.out, args.label)
+
+    env = os.environ.copy()
+    env["PHAROS_TOOLS"] = args.profile  # `all` or `default`
+
+    effective_profile = args.profile
+    if args.pool_trace_path:
+        # Pool-state tools live in `debug` category; default profile
+        # filters them. Force `all` so the snapshots actually return
+        # data instead of `Tool not enabled`.
+        if args.profile != "all":
+            print(f"  ! --pool-trace-path forces --profile=all "
+                  f"(was {args.profile}); switching", flush=True)
+        env["PHAROS_TOOLS"] = "all"
+        env["PHAROS_LOG"] = args.pool_trace_pharos_log
+        effective_profile = "all"
+
+    if args.transport == "stdio":
+        transport: Transport = StdioTransport(env)
+    else:
+        transport = HttpTransport(env)
+
+    global _POOL_POLLER
+    if args.pool_trace_path:
+        # Use a high rid offset so poller-owned ids never collide with
+        # the main pass's rid space (which starts at 100 and increments).
+        _POOL_POLLER = PoolTracePoller(
+            transport=transport,
+            path=args.pool_trace_path,
+            every_s=args.pool_trace_every,
+            rid_start=900_000,
+        )
+        print(f"  pool-trace enabled: {args.pool_trace_path} "
+              f"(every {args.pool_trace_every}s)", flush=True)
+
+    try:
+        rows = run_pass(transport, args.languages or None, skip, effective_profile)
+    except SystemExit:
+        raise
+    except BaseException:
+        try:
+            transport.close()
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+
+    write_report(rows, args.out, args.label, args.transport, effective_profile)
 
     total = len(rows)
     passed = sum(1 for _, _, ok, _ in rows if ok)

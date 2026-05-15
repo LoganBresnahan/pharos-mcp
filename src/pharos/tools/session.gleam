@@ -28,7 +28,6 @@ import pharos/lsp/languages.{
 }
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
-import pharos/lsp/post_didopen_drained
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/registry
 import pharos/workspace_root
@@ -54,9 +53,10 @@ const content_modified_code: Int = -32_801
 /// `retry_delays_ms: Option(List(Int))` field and read it here.
 const content_modified_retry_delays_ms: List(Int) = [1000, 3000]
 
-// Per-server `readiness_timeout_ms` lives on `ServerConfig` now. The
-// global default is `languages.default_readiness_timeout_ms` (30s).
-// `server_readiness_timeout_ms/1` resolves the two below.
+// Per-server `ready_timeout_ms` lives on `ServerConfig` now (renamed
+// per ADR-024; was `readiness_timeout_ms`). The global default is
+// `languages.default_ready_timeout_ms` (60s). `server_ready_timeout_ms/1`
+// resolves the two below.
 
 pub type SessionError {
   NotAFileUri(uri: String)
@@ -86,6 +86,18 @@ pub fn request_with_content_modified_retry(
   request: fn() -> Result(a, lifecycle.RequestError),
 ) -> Result(a, lifecycle.RequestError) {
   retry_loop(request, content_modified_retry_delays_ms)
+}
+
+/// Fetch the currently-registered pool Subject from persistent_term.
+/// When the registry holds a Subject (the normal case) we use it; if
+/// the registry is empty (race during boot or post-restart re-register
+/// gap), we fall back to the caller-supplied handle so the request
+/// path still has something to call.
+fn refresh_pool(fallback: Pool) -> Pool {
+  case pool.global() {
+    Ok(fresh) -> fresh
+    Error(_) -> fallback
+  }
 }
 
 fn retry_loop(
@@ -124,6 +136,13 @@ pub fn with_session_and_retry(
   file_uri: String,
   body: fn(Proc) -> Result(a, lifecycle.RequestError),
 ) -> Result(a, RetryError) {
+  // Refresh from persistent_term. stdio_worker captures the pool
+  // Subject at boot and reuses it; if the pool actor has been
+  // restarted by its supervisor in the meantime, the captured
+  // Subject points at a dead pid and every actor.call panics.
+  // Re-reading the registry on each request guarantees we hold a
+  // live Subject. No-op cost when pool has not restarted.
+  let pool = refresh_pool(pool)
   case prepare(pool, file_uri) {
     Error(err) -> Error(RetrySessionError(err))
     Ok(lsp) ->
@@ -133,6 +152,14 @@ pub fn with_session_and_retry(
           log.warn_at(
             "pharos/tools/session",
             "transport error; evicting and retrying once",
+          )
+          let _ = reason
+          retry_after_evict(pool, file_uri, body)
+        }
+        Error(lifecycle.ActorCallPanic(reason)) -> {
+          log.warn_at(
+            "pharos/tools/session",
+            "lsp actor.call panicked (callee died); evicting and retrying once",
           )
           let _ = reason
           retry_after_evict(pool, file_uri, body)
@@ -154,6 +181,8 @@ pub fn with_session_and_retry_for_method(
   method: String,
   body: fn(Proc) -> Result(a, lifecycle.RequestError),
 ) -> Result(a, RetryError) {
+  // See `with_session_and_retry` for why pool is refreshed here.
+  let pool = refresh_pool(pool)
   case prepare_for_method(pool, file_uri, method) {
     Error(err) -> Error(RetrySessionError(err))
     Ok(lsp) ->
@@ -164,6 +193,16 @@ pub fn with_session_and_retry_for_method(
             "pharos/tools/session",
             log_entry.Warn,
             "transport error; evicting and retrying once",
+            [#("method", method)],
+          )
+          let _ = reason
+          retry_for_method_after_evict(pool, file_uri, method, body)
+        }
+        Error(lifecycle.ActorCallPanic(reason)) -> {
+          log.fields_at(
+            "pharos/tools/session",
+            log_entry.Warn,
+            "lsp actor.call panicked (callee died); evicting and retrying once",
             [#("method", method)],
           )
           let _ = reason
@@ -251,6 +290,7 @@ pub fn with_workspace_session_and_retry(
   workspace_uri_hint: String,
   body: fn(Proc) -> Result(a, lifecycle.RequestError),
 ) -> Result(a, RetryError) {
+  let pool = refresh_pool(pool)
   case prepare_workspace(pool, workspace_uri_hint) {
     Error(err) -> Error(RetrySessionError(err))
     Ok(lsp) ->
@@ -279,6 +319,7 @@ pub fn with_workspace_session_and_retry_by_language(
   workspace_uri_hint: String,
   body: fn(Proc) -> Result(a, lifecycle.RequestError),
 ) -> Result(a, RetryError) {
+  let pool = refresh_pool(pool)
   case prepare_workspace_for_language(pool, language, workspace_uri_hint) {
     Error(err) -> Error(RetrySessionError(err))
     Ok(lsp) ->
@@ -373,7 +414,6 @@ pub fn prepare(pool: Pool, file_uri: String) -> Result(Proc, SessionError) {
   let workspace = promote_root(raw_workspace, config)
   use lsp <- result.try(get_lsp(pool, config, workspace))
   let _ = ensure_doc_opened(pool, config, workspace, file_uri)
-  let _ = drain_post_didopen_if_needed_primary(lsp, config, workspace)
   Ok(lsp)
 }
 
@@ -465,7 +505,6 @@ pub fn prepare_for_method(
               file_uri,
               server.id,
             )
-          let _ = drain_post_didopen_if_needed(lsp, server, workspace)
           Ok(lsp)
         }
         Error(err) -> Error(err)
@@ -528,7 +567,6 @@ pub fn prepare_all_covering_method(
               file_uri,
               server.id,
             )
-          let _ = drain_post_didopen_if_needed(proc, server, workspace)
           Ok(#(server, proc))
         }
         Error(err) -> {
@@ -574,7 +612,6 @@ fn prepare_all_with_selector(
               file_uri,
               server.id,
             )
-          let _ = drain_post_didopen_if_needed(proc, server, workspace)
           Ok(#(server.id, proc))
         }
         Error(err) -> {
@@ -615,36 +652,60 @@ fn get_lsp_for_server(
   workspace: String,
   server: languages.ServerConfig,
 ) -> Result(Proc, SessionError) {
-  let spec =
-    pool.SpawnSpec(
-      server_id: server.id,
-      command: server.command,
-      args: server.args,
-      init_params: build_initialize_params(workspace, config, server),
-      workspace_configuration: server.workspace_configuration,
-      readiness_token: server.readiness_token,
-      readiness_timeout_ms: server_readiness_timeout_ms(server),
-      initialize_timeout_ms: server_initialize_timeout_ms(server),
-    )
+  let spec = build_spawn_spec(workspace, config, server)
   pool.get(pool, config.id, workspace, spec)
-  |> result.map_error(fn(err) {
-    case err {
-      pool.ProcStartFailed(reason) -> SpawnFailed(reason)
-    }
-  })
+  |> result.map_error(map_get_error)
 }
 
-/// Resolve the per-server readiness drain budget. ServerConfig's
+/// Build a `pool.SpawnSpec` from the language + server registry
+/// entry. Exposed so the boot-time warmup path
+/// (`pharos.warmup_from_env`) can reuse the exact wiring tool calls
+/// use.
+pub fn build_spawn_spec(
+  workspace: String,
+  config: LanguageConfig,
+  server: languages.ServerConfig,
+) -> pool.SpawnSpec {
+  pool.SpawnSpec(
+    server_id: server.id,
+    command: server.command,
+    args: server.args,
+    init_params: build_initialize_params(workspace, config, server),
+    workspace_configuration: server.workspace_configuration,
+    readiness_token: server.readiness_token,
+    ready_timeout_ms: server_ready_timeout_ms(server),
+    initialize_timeout_ms: server_initialize_timeout_ms(server),
+    warmup_probe: server.warmup_probe,
+  )
+}
+
+fn map_get_error(err: pool.GetError) -> SessionError {
+  case err {
+    pool.ProcStartFailed(reason) -> SpawnFailed(reason)
+    // ADR-024: probe-budget exhausted → surface as SpawnFailed so
+    // the tool layer reports "tool timeout: LSP still initializing"
+    // via `tool_helpers.describe_request_error`.
+    pool.ProbeFailed(reason) ->
+      SpawnFailed("readiness probe never succeeded: " <> reason)
+    // ADR-024 follow-up: spawn worker crashed before sending
+    // SpawnCompleted. Treat as a spawn failure with the captured
+    // exit reason; same recovery path as ProcStartFailed.
+    pool.SpawnerCrashed(reason) ->
+      SpawnFailed("spawn worker crashed: " <> reason)
+  }
+}
+
+/// Resolve the per-server ready budget (ADR-024). ServerConfig's
 /// override wins; otherwise fall back to the bundled default.
-fn server_readiness_timeout_ms(server: languages.ServerConfig) -> Int {
-  case server.readiness_timeout_ms {
+fn server_ready_timeout_ms(server: languages.ServerConfig) -> Int {
+  case server.ready_timeout_ms {
     option.Some(n) -> n
-    option.None -> languages.default_readiness_timeout_ms
+    option.None -> languages.default_ready_timeout_ms
   }
 }
 
 /// Resolve the per-server initialize handshake budget. Same shape as
-/// readiness — ServerConfig override wins; default covers most.
+/// ready — ServerConfig override wins; default covers most.
 fn server_initialize_timeout_ms(server: languages.ServerConfig) -> Int {
   case server.initialize_timeout_ms {
     option.Some(n) -> n
@@ -725,23 +786,9 @@ fn get_lsp(
           <> "` has no servers configured (check pharos.toml)",
       ))
     Ok(server) -> {
-      let spec =
-        pool.SpawnSpec(
-          server_id: server.id,
-          command: server.command,
-          args: server.args,
-          init_params: build_initialize_params(workspace, config, server),
-          workspace_configuration: server.workspace_configuration,
-          readiness_token: server.readiness_token,
-          readiness_timeout_ms: server_readiness_timeout_ms(server),
-          initialize_timeout_ms: server_initialize_timeout_ms(server),
-        )
+      let spec = build_spawn_spec(workspace, config, server)
       pool.get(pool, config.id, workspace, spec)
-      |> result.map_error(fn(err) {
-        case err {
-          pool.ProcStartFailed(reason) -> SpawnFailed(reason)
-        }
-      })
+      |> result.map_error(map_get_error)
     }
   }
 }
@@ -950,103 +997,10 @@ fn ensure_doc_opened(
   ensure_doc_opened_for_server_id(pool, config, workspace, file_uri, server_id)
 }
 
-/// Drain the post-didOpen indexing burst for `(server.id, workspace)`
-/// once. rust-analyzer (and any LSP whose `readiness_token` matches
-/// indexing progress) only starts indexing AFTER didOpen — the
-/// post-handshake `wait_for_ready` in proc's initialiser sees no
-/// progress to wait on. Without this second drain the first request
-/// races indexing and surfaces as `null` or `-32801 content modified`.
-///
-/// Servers without a `readiness_token` (typescript-language-server,
-/// ruff) skip the drain — `proc.wait_for_ready` is a no-op for them.
-///
-/// Idempotent: subsequent calls for the same `(server.id, workspace)`
-/// pair short-circuit on the ETS-backed marker. wait_for_ready Error
-/// returns leave the entry absent so the next call retries (matches
-/// the transport-error retry semantics in `with_session_and_retry`).
-/// Poll interval for non-claiming workers waiting on the drainer to
-/// finish. ETS lookups are cheap; 100ms keeps wakeup latency low
-/// without burning CPU.
-const drain_poll_interval_ms: Int = 100
-
-/// Maximum time a non-claiming worker waits for the drainer to mark
-/// done before proceeding anyway. If drainer fails or stalls, the
-/// content-modified retry path absorbs the residual race.
-const drain_wait_budget_ms: Int = 45_000
-
-fn drain_post_didopen_if_needed(
-  lsp: Proc,
-  server: languages.ServerConfig,
-  workspace: String,
-) -> Nil {
-  case post_didopen_drained.is_done(server.id, workspace) {
-    True -> Nil
-    False ->
-      case post_didopen_drained.try_claim(server.id, workspace) {
-        True ->
-          drain_and_mark(lsp, server, workspace, server_readiness_timeout_ms(server))
-        // Lost the race — another worker is already draining. Block
-        // until they mark done so our subsequent proc.request does NOT
-        // queue behind the drainer's WaitForReady in the proc actor's
-        // mailbox (which would expire proc.request's small actor.call
-        // timeout — `5s + 5s buffer` for hover/document_symbols — and
-        // crash the worker silently). Polling stays out of the proc
-        // actor; the drainer alone serializes through it.
-        False -> wait_for_drain_done(server, workspace, drain_wait_budget_ms)
-      }
-  }
-}
-
-fn drain_and_mark(
-  lsp: Proc,
-  server: languages.ServerConfig,
-  workspace: String,
-  timeout_ms: Int,
-) -> Nil {
-  case
-    proc.wait_for_ready(lsp, server.readiness_token, timeout_ms)
-  {
-    Ok(_) -> post_didopen_drained.mark_done(server.id, workspace)
-    // Drain failed (transport error). Leave claim in place so future
-    // workers don't redrive — the proc itself is broken and the M9
-    // retry-on-transport-error wrapper at the tool layer spawns a
-    // fresh proc.
-    Error(_) -> Nil
-  }
-}
-
-fn wait_for_drain_done(
-  server: languages.ServerConfig,
-  workspace: String,
-  remaining_ms: Int,
-) -> Nil {
-  case remaining_ms <= 0 {
-    True -> Nil
-    False ->
-      case post_didopen_drained.is_done(server.id, workspace) {
-        True -> Nil
-        False -> {
-          process.sleep(drain_poll_interval_ms)
-          wait_for_drain_done(server, workspace, remaining_ms - drain_poll_interval_ms)
-        }
-      }
-  }
-}
-
-/// Like `drain_post_didopen_if_needed/3` but resolves the language's
-/// primary server first. Used by single-server prepare paths
-/// (`prepare/2`, `prepare_for_method/3`) where the caller has the
-/// LanguageConfig but not a specific ServerConfig.
-fn drain_post_didopen_if_needed_primary(
-  lsp: Proc,
-  config: LanguageConfig,
-  workspace: String,
-) -> Nil {
-  case languages.primary_server(config) {
-    Ok(server) -> drain_post_didopen_if_needed(lsp, server, workspace)
-    Error(_) -> Nil
-  }
-}
+// ADR-024 retired the post-didOpen drain barrier. Probe-before-Ready
+// (pool.spawn_worker's probe loop) guarantees the LSP has answered
+// at least one query before pool releases waiters from `pool.get`,
+// so the race the barrier guarded against is structurally impossible.
 
 /// Like `ensure_doc_opened/4` but targets one explicit `server_id`
 /// instead of the language's primary. Used by the multi-server merge

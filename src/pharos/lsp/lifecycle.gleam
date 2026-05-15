@@ -25,12 +25,23 @@ import gleam/result
 import pharos/lsp/client.{type Client}
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/port
-import pharos/lsp/server_request_handlers.{type Handler, ErrorReply, Reply}
+import pharos/lsp/server_request_handlers.{
+  type Handler, type LspId, ErrorReply, LspIdInt, LspIdString, Reply,
+  lsp_id_to_json,
+}
 
 pub type RequestError {
   ClientFailure(client.Error)
   ResponseDecodeError(reason: String)
   ServerError(code: Int, message: String)
+  /// The underlying `actor.call` panicked — typically because the
+  /// callee `lsp_proc` died between pool returning a cached `Proc`
+  /// and this tool worker dispatching its request. Recoverable: the
+  /// tool layer evicts and respawns via
+  /// `session.with_session_and_retry`. Without this typed error the
+  /// tool worker exits abnormally and (under HTTP transport) mist
+  /// returns 500 to the client. M14 follow-up.
+  ActorCallPanic(reason: String)
 }
 
 /// Backwards-compat alias — initialize was the first user of the
@@ -548,7 +559,7 @@ fn wait_for_response(
 /// were originally waiting for should still arrive.
 fn dispatch_server_request(
   client: Client,
-  id: Int,
+  id: LspId,
   method: String,
   params: Dynamic,
 ) -> Result(Nil, RequestError) {
@@ -562,7 +573,7 @@ fn dispatch_server_request(
 
 fn send_handler_result(
   client: Client,
-  id: Int,
+  id: LspId,
   result: server_request_handlers.HandlerResult,
 ) -> Result(Nil, RequestError) {
   case result {
@@ -574,13 +585,13 @@ fn send_handler_result(
 
 fn send_result_response(
   client: Client,
-  id: Int,
+  id: LspId,
   result: Json,
 ) -> Result(Nil, RequestError) {
   let body =
     json.object([
       #("jsonrpc", json.string("2.0")),
-      #("id", json.int(id)),
+      #("id", lsp_id_to_json(id)),
       #("result", result),
     ])
     |> json.to_string
@@ -592,14 +603,14 @@ fn send_result_response(
 
 fn send_error_response(
   client: Client,
-  id: Int,
+  id: LspId,
   code: Int,
   message: String,
 ) -> Result(Nil, RequestError) {
   let body =
     json.object([
       #("jsonrpc", json.string("2.0")),
-      #("id", json.int(id)),
+      #("id", lsp_id_to_json(id)),
       #(
         "error",
         json.object([
@@ -621,10 +632,13 @@ type Classified {
   ResponseOk(id: Int, result: Dynamic)
   ResponseErr(id: Int, code: Int, message: String)
   /// Server-initiated request: has both `id` and `method`. Server
-  /// expects a response with the same id. Examples:
-  /// `workspace/configuration`, `workspace/applyEdit`,
-  /// `client/registerCapability`. See ADR-012.
-  ServerRequest(id: Int, method: String, params: Dynamic)
+  /// expects a response with the same id (string OR integer per
+  /// JSON-RPC 2.0). Examples: `workspace/configuration`,
+  /// `workspace/applyEdit`, `client/registerCapability`,
+  /// `window/workDoneProgress/create` (gleam-lsp issues this with
+  /// a string id like `"create-token--downloading-dependencies"`).
+  /// See ADR-012.
+  ServerRequest(id: LspId, method: String, params: Dynamic)
   /// Server-side notification: has `method` but no `id`. Fire-and-
   /// forget; no response expected. Examples:
   /// `textDocument/publishDiagnostics`, `$/progress`,
@@ -668,8 +682,18 @@ fn classify_dynamic(value: Dynamic) -> Classified {
 ///
 /// Anything else is treated as a notification with an empty method
 /// (drained by the receive loop).
+fn lsp_id_decoder() -> decode.Decoder(LspId) {
+  decode.one_of(decode.int |> decode.map(LspIdInt), [
+    decode.string |> decode.map(LspIdString),
+  ])
+}
+
 fn message_decoder() -> decode.Decoder(Classified) {
-  use maybe_id <- decode.optional_field("id", None, decode.optional(decode.int))
+  use maybe_id <- decode.optional_field(
+    "id",
+    None,
+    decode.optional(lsp_id_decoder()),
+  )
   use maybe_method <- decode.optional_field(
     "method",
     None,
@@ -700,15 +724,17 @@ fn message_decoder() -> decode.Decoder(Classified) {
   let params = option.unwrap(maybe_params, dynamic.nil())
 
   case maybe_id, maybe_method, maybe_result, maybe_error {
-    // Response (success): id + result, no method.
-    Some(id), None, Some(result_value), _ ->
-      decode.success(ResponseOk(id: id, result: result_value))
+    // Response (success): integer id + result, no method.
+    // Pharos only ever sends integer ids on outbound requests, so a
+    // response with a string id is anomalous; drop as notification.
+    Some(LspIdInt(n)), None, Some(result_value), _ ->
+      decode.success(ResponseOk(id: n, result: result_value))
 
-    // Response (error): id + error, no method.
-    Some(id), None, _, Some(#(code, message)) ->
-      decode.success(ResponseErr(id: id, code: code, message: message))
+    // Response (error): integer id + error, no method.
+    Some(LspIdInt(n)), None, _, Some(#(code, message)) ->
+      decode.success(ResponseErr(id: n, code: code, message: message))
 
-    // Server-initiated request: id + method.
+    // Server-initiated request: id (int OR string) + method.
     Some(id), Some(method), _, _ ->
       decode.success(ServerRequest(id: id, method: method, params: params))
 
@@ -716,7 +742,9 @@ fn message_decoder() -> decode.Decoder(Classified) {
     None, Some(method), _, _ ->
       decode.success(Notification(method: method, params: params))
 
-    // Anything else: treat as notification with empty method.
+    // Anything else (including string-id responses, which we never
+    // generate so should not see in practice): treat as
+    // notification with empty method.
     _, _, _, _ -> decode.success(Notification(method: "", params: params))
   }
 }

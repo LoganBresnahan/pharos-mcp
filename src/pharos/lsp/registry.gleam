@@ -43,8 +43,8 @@ import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
   type DiagnosticsMode, type LanguageConfig, type LookupError, type MethodScope,
-  type ServerConfig, All, LanguageConfig, NoPromotion, Only, Pull, Push,
-  ServerConfig,
+  type ServerConfig, All, LanguageConfig, NoPromotion, Only, ProbeWorkspaceSymbol,
+  Pull, Push, ServerConfig,
 }
 
 /// Load the effective registry into `persistent_term`. Call once at
@@ -162,8 +162,9 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     methods: All,
     diagnostics_mode: parse_mode(override.diagnostics_mode),
     readiness_token: override.readiness_token,
-    readiness_timeout_ms: override.readiness_timeout_ms,
+    ready_timeout_ms: override.ready_timeout_ms,
     initialize_timeout_ms: override.initialize_timeout_ms,
+    warmup_probe: ProbeWorkspaceSymbol(""),
   )
 }
 
@@ -280,14 +281,15 @@ fn merge_server(
       None -> default.readiness_token
       Some(_) -> ovr.readiness_token
     },
-    readiness_timeout_ms: case ovr.readiness_timeout_ms {
-      None -> default.readiness_timeout_ms
-      Some(_) -> ovr.readiness_timeout_ms
+    ready_timeout_ms: case ovr.ready_timeout_ms {
+      None -> default.ready_timeout_ms
+      Some(_) -> ovr.ready_timeout_ms
     },
     initialize_timeout_ms: case ovr.initialize_timeout_ms {
       None -> default.initialize_timeout_ms
       Some(_) -> ovr.initialize_timeout_ms
     },
+    warmup_probe: default.warmup_probe,
   )
 }
 
@@ -306,8 +308,9 @@ fn server_from_override(target_id: String, ovr: ServerOverride) -> ServerConfig 
     methods: parse_methods(ovr.methods, All),
     diagnostics_mode: parse_mode(ovr.diagnostics_mode),
     readiness_token: ovr.readiness_token,
-    readiness_timeout_ms: ovr.readiness_timeout_ms,
+    ready_timeout_ms: ovr.ready_timeout_ms,
     initialize_timeout_ms: ovr.initialize_timeout_ms,
+    warmup_probe: ProbeWorkspaceSymbol(""),
   )
 }
 
@@ -355,14 +358,15 @@ fn merge_primary(
       None -> primary.readiness_token
       Some(_) -> override.readiness_token
     },
-    readiness_timeout_ms: case override.readiness_timeout_ms {
-      None -> primary.readiness_timeout_ms
-      Some(_) -> override.readiness_timeout_ms
+    ready_timeout_ms: case override.ready_timeout_ms {
+      None -> primary.ready_timeout_ms
+      Some(_) -> override.ready_timeout_ms
     },
     initialize_timeout_ms: case override.initialize_timeout_ms {
       None -> primary.initialize_timeout_ms
       Some(_) -> override.initialize_timeout_ms
     },
+    warmup_probe: primary.warmup_probe,
   )
 }
 

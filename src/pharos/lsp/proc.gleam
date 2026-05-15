@@ -125,7 +125,7 @@ pub fn start(
   init_params: Json,
   initialize_timeout_ms: Int,
   readiness_token: Option(String),
-  readiness_timeout_ms: Int,
+  ready_timeout_ms: Int,
 ) -> Result(Proc, StartError) {
   // Run client.start + lifecycle.initialize INSIDE the actor's
   // initialiser so the Erlang Port is owned by the actor process
@@ -151,7 +151,7 @@ pub fn start(
             // if no progress was seen, so a server with no readiness
             // token (typescript-language-server) just no-ops here.
             let c = case
-              lifecycle.wait_for_ready(c, readiness_token, readiness_timeout_ms)
+              lifecycle.wait_for_ready(c, readiness_token, ready_timeout_ms)
             {
               Ok(c) -> c
               Error(_) -> c
@@ -206,7 +206,7 @@ pub fn start_link_supervised(
   init_params: Json,
   initialize_timeout_ms: Int,
   readiness_token: Option(String),
-  readiness_timeout_ms: Int,
+  ready_timeout_ms: Int,
 ) -> Result(Pid, String) {
   case
     start(
@@ -217,7 +217,7 @@ pub fn start_link_supervised(
       init_params,
       initialize_timeout_ms,
       readiness_token,
-      readiness_timeout_ms,
+      ready_timeout_ms,
     )
   {
     Error(err) -> Error(describe_start_error(err))
@@ -311,6 +311,7 @@ fn describe_lifecycle_error(err: lifecycle.RequestError) -> String {
     lifecycle.ResponseDecodeError(reason) -> "response decode: " <> reason
     lifecycle.ServerError(code, message) ->
       "server error " <> int_to_text(code) <> ": " <> message
+    lifecycle.ActorCallPanic(reason) -> "actor.call panic: " <> reason
   }
 }
 
@@ -328,6 +329,16 @@ pub fn request(
   // Add a margin to the actor.call timeout so the LSP transport
   // timeout fires first and surfaces a meaningful RequestError.
   let call_timeout = timeout_ms + 5000
+  // NOTE: wrapping this in safe_call_0 (the same try/catch FFI used
+  // by pool's probe path) regressed bash/lua/python/clojure/haskell
+  // in M14 Pass 5/6. Healthy LSPs that were 18-20/22 in pre-wrap
+  // passes dropped to 0/22 with broken-LSP cascade kicked in. Root
+  // cause unclear — possibly closure-capture interaction, possibly
+  // try-frame interference with the gleam_otp actor.call receive
+  // pattern. Probe layer is safe because probe failures already
+  // route through Result-typed error paths; tool layer relies on
+  // gleam_otp's actor.call returning a typed value, and the wrap
+  // changes its semantics. Leaving the wrap on probe_call only.
   actor.call(subject, call_timeout, fn(reply) {
     Request(method, params, timeout_ms, cid, reply)
   })

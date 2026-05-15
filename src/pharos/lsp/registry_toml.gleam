@@ -68,9 +68,9 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "diagnostics_mode = " <> render_diagnostics_mode(server.diagnostics_mode),
     "readiness_token = " <> render_optional_string(server.readiness_token),
     render_optional_int(
-      "readiness_timeout_ms",
-      server.readiness_timeout_ms,
-      "30000",
+      "ready_timeout_ms",
+      server.ready_timeout_ms,
+      "60000",
     ),
     render_optional_int(
       "initialize_timeout_ms",

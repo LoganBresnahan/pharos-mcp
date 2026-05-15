@@ -93,6 +93,16 @@ pub fn run(workspace_path: String) -> Nil {
           client.close(client)
         }
 
+        Error(lifecycle.ActorCallPanic(reason)) -> {
+          log.fields_at(
+            "pharos",
+            log_entry.Critical,
+            "smoke: actor.call panicked during initialize",
+            [#("reason", reason)],
+          )
+          client.close(client)
+        }
+
         Ok(#(client, capabilities)) -> {
           log.info("smoke: initialize OK")
           log.fields_at(
