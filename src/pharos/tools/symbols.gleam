@@ -260,14 +260,19 @@ pub fn find_symbol(
           Ok(uris)
         }
       })
+      // workspace_symbol can return URIs that the same LSP cannot
+      // open (eg cpp's clangd surfacing `/usr/include/...` matches —
+      // outside the fixture's workspace root). Swallow SessionFailed
+      // per URI rather than failing the whole resolution; other
+      // candidates still get drilled. Decode / request errors still
+      // propagate so we don't mask LSP bugs.
       use matches <- result.try(
         list.try_map(unique_uris, fn(uri) {
-          use tree <- result.try(document_symbol_query(
-            pool,
-            uri,
-            default_timeout_ms,
-          ))
-          Ok(drill(tree, [head, ..rest], [], uri))
+          case document_symbol_query(pool, uri, default_timeout_ms) {
+            Ok(tree) -> Ok(drill(tree, [head, ..rest], [], uri))
+            Error(SessionFailed(_)) -> Ok([])
+            Error(other) -> Error(other)
+          }
         })
         |> result.map(list.flatten),
       )
@@ -325,7 +330,7 @@ fn drill(
     [last] -> {
       let matches_here =
         symbols
-        |> list.filter(fn(s) { s.name == last })
+        |> list.filter(fn(s) { name_matches(s.name, last) })
         |> list.map(fn(s) {
           SymbolMatch(
             name: s.name,
@@ -349,7 +354,7 @@ fn drill(
     [head, ..rest] -> {
       let exact =
         symbols
-        |> list.filter(fn(s) { s.name == head })
+        |> list.filter(fn(s) { name_matches(s.name, head) })
         |> list.flat_map(fn(s) {
           drill(s.children, rest, [s.name, ..path_so_far], uri)
         })
@@ -359,6 +364,70 @@ fn drill(
         })
       list.append(exact, shadowed)
     }
+  }
+}
+
+/// Compare a documentSymbol name against a name_path segment with
+/// LSP-server-quirk tolerance:
+///
+///   - Exact match wins. Always tried first.
+///   - Strip `/<digits>` arity suffix (Erlang/Elixir/HLS function
+///     conventions: `main/1` matches `main`).
+///   - Strip whitespace-suffix decorators (jdtls / metals sometimes
+///     return `KafkaClient class` or `Foo trait` as the symbol name).
+///   - Strip leading `block-type.` or `kind.` namespacing
+///     (terraform-ls names resources `resource.vpc`).
+///
+/// All comparisons are case-sensitive — case-insensitive matching
+/// would over-collide on languages with case-meaningful identifiers
+/// (Go's exported-vs-package distinction, Haskell's
+/// constructor-vs-variable rule).
+fn name_matches(symbol_name: String, query: String) -> Bool {
+  symbol_name == query
+  || strip_arity_suffix(symbol_name) == query
+  || strip_kind_suffix(symbol_name) == query
+  || trailing_segment(symbol_name) == query
+}
+
+fn strip_arity_suffix(name: String) -> String {
+  case string.split(name, "/") {
+    [base, arity] ->
+      case int.parse(arity) {
+        Ok(_) -> base
+        Error(_) -> name
+      }
+    _ -> name
+  }
+}
+
+fn strip_kind_suffix(name: String) -> String {
+  // "KafkaClient class" → "KafkaClient". Only strip when the tail is
+  // a known LSP kind word (avoid false positives on multi-word
+  // function names from Markdown headings etc.).
+  case string.split(name, " ") {
+    [base, kind_word] ->
+      case kind_word {
+        "class" | "interface" | "struct" | "enum" | "trait"
+        | "object" | "module" | "namespace" | "function"
+        | "method" | "field" | "property" | "type"
+        | "macro" | "constant" | "variable" | "constructor" -> base
+        _ -> name
+      }
+    _ -> name
+  }
+}
+
+fn trailing_segment(name: String) -> String {
+  // "resource.vpc" → "vpc". Some LSPs (terraform-ls) prefix block
+  // names with their block type. Take the trailing dot-separated
+  // segment if multi-part.
+  case string.split(name, ".") {
+    [_] -> name
+    parts ->
+      case list.last(parts) {
+        Ok(tail) -> tail
+        Error(_) -> name
+      }
   }
 }
 
@@ -846,6 +915,19 @@ fn workspace_symbol_decoder() -> decode.Decoder(WorkspaceSymbolRow) {
 }
 
 fn document_symbol_decoder() -> decode.Decoder(DocumentSymbolDecoded) {
+  // textDocument/documentSymbol may return either:
+  //   - DocumentSymbol[] (modern, hierarchical, with `selectionRange`
+  //     + `children`), or
+  //   - SymbolInformation[] (legacy, flat, with `location.range` +
+  //     `containerName`).
+  // bash-language-server, vscode-html-language-server, perlnavigator
+  // and a few others still ship the legacy shape. Accept both.
+  decode.one_of(modern_document_symbol_decoder(), [
+    legacy_symbol_information_decoder(),
+  ])
+}
+
+fn modern_document_symbol_decoder() -> decode.Decoder(DocumentSymbolDecoded) {
   use name <- decode.field("name", decode.string)
   use kind <- decode.field("kind", decode.int)
   use range <- decode.field("range", range_decoder())
@@ -867,6 +949,32 @@ fn document_symbol_decoder() -> decode.Decoder(DocumentSymbolDecoded) {
     selection_range: selection_range,
     detail: detail,
     children: children,
+  ))
+}
+
+/// Legacy `SymbolInformation` shape — flat (no `children`), single
+/// range carried under `location.range`. We synthesize the modern
+/// fields: `range` and `selection_range` both take the location's
+/// range (no separate identifier-vs-body range available), and the
+/// hierarchical container info from `containerName` is dropped
+/// (drill's shadow-recursion fallback still finds nested symbols
+/// because legacy servers return them all at the top level anyway).
+fn legacy_symbol_information_decoder() -> decode.Decoder(
+  DocumentSymbolDecoded,
+) {
+  use name <- decode.field("name", decode.string)
+  use kind <- decode.field("kind", decode.int)
+  use range <- decode.field("location", {
+    use r <- decode.field("range", range_decoder())
+    decode.success(r)
+  })
+  decode.success(DocumentSymbolDecoded(
+    name: name,
+    kind: kind,
+    range: range,
+    selection_range: range,
+    detail: None,
+    children: [],
   ))
 }
 
