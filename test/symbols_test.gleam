@@ -154,6 +154,7 @@ pub fn resolution_single_json_includes_status_test() {
       full_path: ["User", "authenticate"],
       detail: Some("(self, password)"),
       matched_via: "exact",
+      body_hash: "",
     )
   // Wrap into Single and convert.
   let json_text =
@@ -193,6 +194,7 @@ pub fn symbol_handle_round_trip_through_json_test() {
       selection_line: 42,
       selection_character: 8,
       kind: 6,
+      body_hash: "deadbeef",
     )
   let json_text =
     symbols.symbol_handle_to_json(original) |> json.to_string
@@ -201,6 +203,39 @@ pub fn symbol_handle_round_trip_through_json_test() {
   let dyn = json_to_dynamic(json_text)
   case decode.run(dyn, symbols.symbol_handle_decoder()) {
     Ok(parsed) -> should.equal(parsed, original)
+    Error(_) -> should.fail()
+  }
+}
+
+// -- body_hash on SymbolHandle ------------------------------------------
+
+pub fn symbol_handle_with_body_hash_round_trips_test() {
+  let original =
+    symbols.SymbolHandle(
+      uri: "file:///tmp/x.py",
+      name: "f",
+      selection_line: 1,
+      selection_character: 0,
+      kind: 12,
+      body_hash: "a1b2c3d4e5f6",
+    )
+  let dyn =
+    json_to_dynamic(symbols.symbol_handle_to_json(original) |> json.to_string)
+  case decode.run(dyn, symbols.symbol_handle_decoder()) {
+    Ok(parsed) -> should.equal(parsed.body_hash, "a1b2c3d4e5f6")
+    Error(_) -> should.fail()
+  }
+}
+
+pub fn symbol_handle_legacy_no_body_hash_decodes_test() {
+  // Handles minted by pre-staleness pharos versions omit body_hash.
+  // Decoder must accept; downstream drift check becomes a no-op.
+  let legacy_json =
+    "{\"uri\":\"file:///tmp/x.py\",\"name\":\"f\",\"selection_line\":1,"
+    <> "\"selection_character\":0,\"kind\":12}"
+  let dyn = json_to_dynamic(legacy_json)
+  case decode.run(dyn, symbols.symbol_handle_decoder()) {
+    Ok(parsed) -> should.equal(parsed.body_hash, "")
     Error(_) -> should.fail()
   }
 }
@@ -228,6 +263,7 @@ fn sym_match(
     full_path: full_path,
     detail: None,
     matched_via: "exact",
+    body_hash: "",
   )
 }
 

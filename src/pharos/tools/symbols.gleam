@@ -22,6 +22,8 @@
 //// `find_symbol`, never a `name_path` directly — the two-call
 //// protocol forces the LLM to acknowledge which match it wants.
 
+import gleam/bit_array
+import gleam/crypto
 import gleam/dict.{type Dict}
 import gleam/dynamic/decode
 import gleam/int
@@ -128,6 +130,11 @@ pub type SymbolMatch {
     /// of dead-ending in NotFound. LLM uses this to weight its
     /// disambiguation picks.
     matched_via: String,
+    /// SHA-256 of the symbol's line-range body text, hex-encoded.
+    /// Empty when the file couldn't be read at handle-mint time;
+    /// edit_at_symbol skips the drift check in that case rather
+    /// than refusing the call.
+    body_hash: String,
   )
 }
 
@@ -146,6 +153,16 @@ pub type SymbolHandle {
     selection_line: Int,
     selection_character: Int,
     kind: Int,
+    /// SHA-256 (lowercase hex) of the symbol's body text at the time
+    /// the handle was minted. `edit_at_symbol` re-computes the hash
+    /// from the freshly-fetched documentSymbol range and rejects with
+    /// `HandleStale` if it doesn't match. Catches the case where an
+    /// external edit between `find_symbol` and `edit_at_symbol` left
+    /// the symbol's identity intact (same name + line) but changed
+    /// its body content — the LLM may have reasoned its replacement
+    /// against the old body and applying it would silently corrupt
+    /// the new one.
+    body_hash: String,
   )
 }
 
@@ -336,7 +353,12 @@ pub fn find_symbol(
         }
         _ -> strict
       }
-      Ok(apply_policy(matches, policy))
+      // Decorate with body_hash so the handle returned to the LLM
+      // carries a drift-detection seed for the eventual edit_at_symbol
+      // call. Batched per-uri so multiple matches in one file share a
+      // single read.
+      let hashed = enrich_with_body_hashes(matches)
+      Ok(apply_policy(hashed, policy))
     }
   }
 }
@@ -403,6 +425,7 @@ fn drill(
                 full_path: list.reverse([s.name, ..path_so_far]),
                 detail: s.detail,
                 matched_via: via,
+                body_hash: "",
               ))
             None -> Error(Nil)
           }
@@ -679,7 +702,7 @@ pub fn find_referencing_symbols(
           }
       }
     })
-  Ok(owners)
+  Ok(enrich_with_body_hashes(owners))
 }
 
 fn smallest_containing(
@@ -703,6 +726,7 @@ fn smallest_containing(
             full_path: list.reverse([sym.name, ..path_so_far]),
             detail: sym.detail,
             matched_via: "containing_range",
+            body_hash: "",
           ))
         let nested =
           smallest_containing(
@@ -771,6 +795,11 @@ pub fn edit_at_symbol(
     default_timeout_ms,
   ))
   use sym <- result.try(verify_handle(tree, handle))
+  // Drift check: recompute body_hash from the freshly-fetched range
+  // and compare. Catches external edits that left identity intact
+  // (same name + selection line) but changed the body — the LLM's
+  // replacement content was reasoned against the OLD body.
+  use _ <- result.try(verify_body_unchanged(handle, sym))
   let edit_range = case mode {
     ReplaceBody -> body_range_of(sym)
     InsertBefore -> Range(start: sym.range.start, end: sym.range.start)
@@ -820,6 +849,42 @@ fn verify_handle(
         <> int.to_string(handle.selection_line)
         <> "; call find_symbol again to refresh the handle",
       ))
+  }
+}
+
+/// Compare handle's recorded body_hash to the current body's hash.
+/// Empty recorded hash skips the check (graceful degradation when
+/// the original handle-mint couldn't read the file). Mismatch =
+/// HandleStale with a strong reconsider-content cue — the LLM must
+/// re-run find_symbol AND rethink its replacement, not just retry
+/// the edit.
+fn verify_body_unchanged(
+  handle: SymbolHandle,
+  sym: DocumentSymbolDecoded,
+) -> Result(Nil, SymbolsError) {
+  case handle.body_hash {
+    "" -> Ok(Nil)
+    expected ->
+      case body_hash_for(handle.uri, sym.range) {
+        "" -> Ok(Nil)
+        current ->
+          case current == expected {
+            True -> Ok(Nil)
+            False ->
+              Error(HandleStale(
+                "body content drift for symbol '"
+                <> handle.name
+                <> "' at "
+                <> handle.uri
+                <> " line "
+                <> int.to_string(handle.selection_line)
+                <> "; the file changed since find_symbol minted this "
+                <> "handle. Re-run find_symbol AND re-decide your "
+                <> "replacement content against the new body before "
+                <> "calling edit_at_symbol again.",
+              ))
+          }
+      }
   }
 }
 
@@ -896,6 +961,91 @@ fn render_preview(
     False -> new_text
   }
   header <> "\n---\n" <> preview_body
+}
+
+// -- Body-hash helpers (handle-staleness detection) ---------------------
+
+/// Hex-encoded SHA-256 of the lines that fall inside `range`. Lines
+/// are split on `\n` and joined with `\n` (no trailing newline) so
+/// any column-level edit inside those lines flips the hash. Range is
+/// inclusive on both ends. Returns `""` when the URI can't be read
+/// (binary file, file deleted, etc.) — handle still mints, but
+/// edit_at_symbol's drift check becomes a no-op.
+fn body_hash_for(uri: String, range: Range) -> String {
+  case read_uri_lines(uri) {
+    Error(_) -> ""
+    Ok(all_lines) -> hash_lines_at_range(all_lines, range)
+  }
+}
+
+fn read_uri_lines(uri: String) -> Result(List(String), Nil) {
+  let path = case string.starts_with(uri, "file://") {
+    True -> string.drop_start(uri, 7)
+    False -> uri
+  }
+  case fs_read_file(path) {
+    Ok(bytes) ->
+      case bit_array.to_string(bytes) {
+        Ok(text) -> Ok(string.split(text, "\n"))
+        Error(_) -> Error(Nil)
+      }
+    Error(_) -> Error(Nil)
+  }
+}
+
+fn int_max(a: Int, b: Int) -> Int {
+  case a > b {
+    True -> a
+    False -> b
+  }
+}
+
+@external(erlang, "pharos_fs_ffi", "read_file")
+fn fs_read_file(path: String) -> Result(BitArray, String)
+
+/// Decorate a freshly-drilled SymbolMatch list with `body_hash`
+/// values, batching reads so one file is opened at most once per
+/// resolution. Called by `find_symbol` after drill so the JSON
+/// response carries hashes the caller can later present back via
+/// edit_at_symbol.
+fn enrich_with_body_hashes(
+  matches: List(SymbolMatch),
+) -> List(SymbolMatch) {
+  let unique_uris =
+    matches
+    |> list.map(fn(m) { m.uri })
+    |> list.unique
+  let file_cache: Dict(String, List(String)) =
+    list.fold(unique_uris, dict.new(), fn(acc, uri) {
+      case read_uri_lines(uri) {
+        Ok(lines) -> dict.insert(acc, uri, lines)
+        Error(_) -> acc
+      }
+    })
+  list.map(matches, fn(m) {
+    case dict.get(file_cache, m.uri) {
+      Error(_) -> SymbolMatch(..m, body_hash: "")
+      Ok(lines) -> SymbolMatch(..m, body_hash: hash_lines_at_range(lines, m.range))
+    }
+  })
+}
+
+fn hash_lines_at_range(all_lines: List(String), range: Range) -> String {
+  let start = int_max(range.start.line, 0)
+  let end = int_max(range.end.line, start)
+  let total = list.length(all_lines)
+  let end_clamped = case end < total {
+    True -> end
+    False -> total - 1
+  }
+  let slice =
+    all_lines
+    |> list.drop(start)
+    |> list.take(end_clamped - start + 1)
+  let joined = string.join(slice, "\n")
+  crypto.hash(crypto.Sha256, <<joined:utf8>>)
+  |> bit_array.base16_encode
+  |> string.lowercase
 }
 
 // -- LSP request helpers -------------------------------------------------
@@ -1262,6 +1412,7 @@ pub fn symbol_handle_of_match(m: SymbolMatch) -> SymbolHandle {
     selection_line: m.selection_range.start.line,
     selection_character: m.selection_range.start.character,
     kind: m.kind,
+    body_hash: m.body_hash,
   )
 }
 
@@ -1272,24 +1423,30 @@ pub fn symbol_handle_to_json(h: SymbolHandle) -> json.Json {
     #("selection_line", json.int(h.selection_line)),
     #("selection_character", json.int(h.selection_character)),
     #("kind", json.int(h.kind)),
+    #("body_hash", json.string(h.body_hash)),
   ])
 }
 
 /// Decode a SymbolHandle from a Dynamic argument (the MCP layer
 /// passes args as Dynamic). Exposed so the MCP wrapper can parse
-/// the `symbol_handle` field on inbound tool calls.
+/// the `symbol_handle` field on inbound tool calls. `body_hash` is
+/// optional for backwards compatibility — handles minted by
+/// pre-staleness pharos versions carry no hash and skip the drift
+/// check downstream.
 pub fn symbol_handle_decoder() -> decode.Decoder(SymbolHandle) {
   use uri <- decode.field("uri", decode.string)
   use name <- decode.field("name", decode.string)
   use selection_line <- decode.field("selection_line", decode.int)
   use selection_character <- decode.field("selection_character", decode.int)
   use kind <- decode.field("kind", decode.int)
+  use body_hash <- decode.optional_field("body_hash", "", decode.string)
   decode.success(SymbolHandle(
     uri: uri,
     name: name,
     selection_line: selection_line,
     selection_character: selection_character,
     kind: kind,
+    body_hash: body_hash,
   ))
 }
 
