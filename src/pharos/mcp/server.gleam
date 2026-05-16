@@ -426,8 +426,8 @@ fn hover_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "LSP textDocument/hover. Position is zero-based "
-          <> "(line, character UTF-16). Returns Hover or null.",
+        "LSP textDocument/hover. Returns Hover or null. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -440,8 +440,9 @@ fn goto_definition_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "LSP textDocument/definition. Position is zero-based. "
-          <> "Returns Location, Location[], LocationLink[], or null.",
+        "LSP textDocument/definition. Returns Location, Location[], "
+          <> "LocationLink[], or null. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -456,7 +457,8 @@ fn find_references_tool_definition() -> Json {
       json.string(
         "LSP textDocument/references. Returns Location[]. "
           <> "`include_declaration` (default true) includes the "
-          <> "definition site.",
+          <> "definition site. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -1584,7 +1586,8 @@ fn goto_type_definition_tool_definition() -> Json {
       json.string(
         "LSP textDocument/typeDefinition. Returns the location "
           <> "of the *type* of the symbol at position. Same shape as "
-          <> "goto_definition.",
+          <> "goto_definition. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1599,7 +1602,8 @@ fn goto_implementation_tool_definition() -> Json {
       json.string(
         "LSP textDocument/implementation. Returns up to `limit` "
           <> "(default 50) implementation sites for the trait or "
-          <> "interface method at position. Trims excess.",
+          <> "interface method at position. Trims excess. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -1678,7 +1682,8 @@ fn signature_help_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/signatureHelp. Position inside the call "
-          <> "parens. Returns SignatureHelp or null.",
+          <> "parens. Returns SignatureHelp or null. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1695,7 +1700,8 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
           <> "CallHierarchyItem[]. Pass items back to "
           <> "call_hierarchy_incoming_calls / outgoing_calls. "
           <> "Returns -32601 if server didn't advertise "
-          <> "callHierarchyProvider.",
+          <> "callHierarchyProvider. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1768,7 +1774,8 @@ fn rename_preview_tool_definition() -> Json {
       json.string(
         "LSP textDocument/rename, preview-only — never writes. "
           <> "Returns the proposed WorkspaceEdit summary. Apply via "
-          <> "apply_workspace_edit.",
+          <> "apply_workspace_edit. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -1897,7 +1904,8 @@ fn type_hierarchy_prepare_tool_definition() -> Json {
         "LSP textDocument/prepareTypeHierarchy. Returns "
           <> "TypeHierarchyItem[]. Pass items to "
           <> "type_hierarchy_supertypes / subtypes. Server support "
-          <> "sparse — many return -32601.",
+          <> "sparse — many return -32601. "
+          <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -2054,7 +2062,8 @@ fn inlay_hints_tool_definition() -> Json {
       json.string(
         "LSP textDocument/inlayHint. Range-scoped. Returns "
           <> "InlayHint[] or null. Returns -32601 if server didn't "
-          <> "advertise inlayHintProvider.",
+          <> "advertise inlayHintProvider. "
+          <> "Positions/ranges are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -2215,7 +2224,8 @@ fn lsp_request_raw_tool_definition() -> Json {
         "Escape hatch — send any (method, params) to the LSP for "
           <> "`uri`'s extension. Returns the verbatim JSON result. "
           <> "Use for server-specific extensions or methods pharos "
-          <> "does not wrap.",
+          <> "does not wrap. When constructing position fields in "
+          <> "params: line is 0-based, character is UTF-16 code units.",
       ),
     ),
     #(
@@ -2290,7 +2300,8 @@ fn code_actions_tool_definition() -> Json {
       json.string(
         "LSP textDocument/codeAction. Range-scoped. Returns "
           <> "(Command | CodeAction)[]. Pharos does not auto-execute "
-          <> "commands or auto-apply edits.",
+          <> "commands or auto-apply edits. "
+          <> "Positions/ranges are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
