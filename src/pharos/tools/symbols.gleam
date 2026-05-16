@@ -266,11 +266,24 @@ pub fn find_symbol(
           // match for `head`. Bias toward `scope_uri` first so a
           // single-file caller hits its target without paying for
           // unrelated repo-wide candidates.
+          //
+          // Empty result list: some servers advertise
+          // `workspaceSymbolProvider` but never return matches
+          // (jdtls on freshly-opened workspaces; ELP doesn't
+          // workspace-index `.erl` file functions globally; some
+          // language servers return [] until a save event occurs).
+          // Fall back to single-file drill the same way as the
+          // unsupported-capability branch — gives the LLM a usable
+          // resolution against `scope_uri` rather than a misleading
+          // not_found.
           let uris =
             ws_results
             |> list.map(fn(s) { s.uri })
             |> list.unique
-          Ok(uris)
+          case uris {
+            [] -> Ok([scope_uri])
+            _ -> Ok(uris)
+          }
         }
       })
       // workspace_symbol can return URIs that the same LSP cannot
@@ -998,7 +1011,13 @@ fn references_query(
     })
   {
     Ok(raw) ->
-      decode.run(raw, decode.list(reference_location_decoder()))
+      // textDocument/references can return `Location[]` (modern),
+      // `LocationLink[]` (rare; servers that opted into 3.14
+      // declarationLink), or `null` (no references — lua-language-server
+      // emits this when includeDeclaration=false yields nothing).
+      // Accept all three; the loose decoder maps each to a flat
+      // `ReferenceLocation` list.
+      decode.run(raw, references_response_decoder())
       |> result.map_error(fn(_) {
         DecodeFailed("textDocument/references returned an unrecognised shape")
       })
@@ -1098,6 +1117,29 @@ fn reference_location_decoder() -> decode.Decoder(ReferenceLocation) {
   use uri <- decode.field("uri", decode.string)
   use range <- decode.field("range", range_decoder())
   decode.success(ReferenceLocation(uri: uri, range: range))
+}
+
+/// `LocationLink` is the spec's link-style alternative to `Location`.
+/// Servers that respond to `textDocument/references` with LocationLink
+/// (rare, but spec-compliant under client linkSupport) put the URI at
+/// `targetUri` and the range at `targetRange`.
+fn location_link_decoder() -> decode.Decoder(ReferenceLocation) {
+  use uri <- decode.field("targetUri", decode.string)
+  use range <- decode.field("targetRange", range_decoder())
+  decode.success(ReferenceLocation(uri: uri, range: range))
+}
+
+/// Loose decoder for `textDocument/references` responses. Accepts:
+///   - `Location[]` (canonical)
+///   - `LocationLink[]` (clients with linkSupport opt-in)
+///   - `null` or `[]` (no references; lua-language-server emits null
+///     when `includeDeclaration=false` and the symbol has no other
+///     uses)
+fn references_response_decoder() -> decode.Decoder(List(ReferenceLocation)) {
+  decode.one_of(decode.list(reference_location_decoder()), [
+    decode.list(location_link_decoder()),
+    decode.success([]),
+  ])
 }
 
 fn range_decoder() -> decode.Decoder(Range) {
