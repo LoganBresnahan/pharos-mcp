@@ -53,7 +53,69 @@ with their `*_prepare` parent). `apply_workspace_edit` and
 | yaml       | yaml-language-server          | ✓ | ✓ | G | G | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | G | G |
 | zig        | zls                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G |
 
-## Symbol-layer support (ADR-026, pass 21)
+## Symbol-layer support (ADR-026, pass 22)
+
+After pass-21 fixes A (cross-workspace URI swallow), B (legacy
+`SymbolInformation[]` decoder), C (fuzzy drill name match) committed
+in 9342897.
+
+| Lang | find_sym | overview | refs | edit | notes |
+|------|----------|----------|------|------|-------|
+| bash       | ✓ | ✓ | ✓ | ✓ | Fix B unlocked (was decode FAIL) |
+| clojure    | ✓ | ✓ | ✓ | ✓ | |
+| cpp        | ✓ | ✓ | ✓ | ✓ | Fix A unlocked (was cross-workspace FAIL) |
+| css        | ✓-NF | ✓ | F | F | `root` not in doc-symbol tree |
+| elixir     | F | ✓ | F | F | next-ls `-32603 Timeout` on workspace/symbol |
+| erlang     | ✓-NF | ✓ | F | F | fuzzy drill didn't catch — `main` not surfacing in workspace_symbol result |
+| gleam      | ✓ | ✓ | ✓ | ✓ | fallback active |
+| go         | ✓ | ✓ | ✓ | ✓ | (spawn flake from pass 21 cleared) |
+| haskell    | ✓ | ✓ | ✓ | ✓ | |
+| html       | ✓-NF | ✓ | F | F | `html` not in vscode-html doc-symbol output |
+| java       | ✓-NF | ✓ | F | F | jdtls doc-symbol naming pattern not yet covered |
+| json       | ✓ | ✓ | G | ✓ | refs GAP (legit cap absent) |
+| lua        | F | ✓ | F | F | **NEW**: response decode error: body is not valid UTF-8 |
+| markdown   | ✓-NF | ✓ | F | F | marksman names headings differently |
+| perl       | ✓ | ✓ | G | ✓ | Fix B unlocked; refs GAP (legit cap absent) |
+| python     | ✓ | ✓ | ✓ | ✓ | |
+| ruby       | ✓ | ✓ | F | ✓ | refs FAIL only — investigate |
+| rust       | ✓ | ✓ | ✓ | ✓ | |
+| scala      | F | ✓ | F | F | metals workspace/symbol still timing out |
+| terraform  | ✓-NF | ✓ | F | F | terraform-ls names blocks not covered by fuzzy match |
+| typescript | ✓ | ✓ | ✓ | ✓ | |
+| yaml       | ✓ | ✓ | G | ✓ | refs GAP (legit cap absent) |
+| zig        | ✓ | ✓ | ✓ | ✓ | |
+
+Legend: `✓` = OK. `✓-NF` = OK but `not_found` (downstream tools skip).
+`F` = FAIL. `G` = GAP (-32601, cap not advertised).
+
+**11/23 langs fully green** (was 9/23 in pass 21). +4 from fixes:
+bash, cpp, go, perl. perl/json/yaml return refs as legitimate
+capability GAP — useful UX signal, not a defect.
+
+**Outstanding follow-ups for next iteration:**
+
+1. **6 NF langs (css, erlang, html, java, markdown, terraform)** —
+   fuzzy drill didn't widen find_symbol's net. Either fixture's
+   `symbol_name_path` doesn't match how the LSP names that symbol in
+   either `workspace/symbol` or `documentSymbol` responses, or the
+   LSP indexes the fixture differently. Most likely a fixture-quality
+   issue per lang, not a layer bug.
+
+2. **lua UTF-8 decode error (new)** — `response decode error: body
+   is not valid UTF-8`. lua-language-server emitted bytes the JSON
+   framing layer rejected. Investigate whether the response is a
+   legitimate non-UTF-8 path or a framing-layer corruption.
+
+3. **ruby refs FAIL** — find_symbol PASSes but
+   find_referencing_symbols fails. Either ruby-lsp returns
+   references in a shape symbols.gleam doesn't decode, or the
+   handle's `selection_line/character` is off by one on
+   ruby-lsp's doc-symbol output.
+
+4. **3 LSP timeouts/spawns (elixir, lua, scala)** — separate
+   LSP-side issues. Track outside symbol-layer scope.
+
+## Symbol-layer support (ADR-026, pass 21 — superseded)
 
 Four tools: `find_symbol`, `get_symbols_overview`,
 `find_referencing_symbols`, `edit_at_symbol`. `find_symbol` falls back
@@ -161,3 +223,4 @@ After a `bin/dogfood-23lang.py` run:
 | pass 19 | 2026-05-15 | 435/524 (83.0%) | Compressed tool descriptions + capability gate + symbol-layer registration (no tests via the 4 symbol cells yet). +22 cells over baseline; cap gate flips several `inlay_hints`/`semantic_tokens` from F → G. |
 | pass 20c | 2026-05-15 | 108/122 (88.5%) | 4-lang stage; symbol layer all-green (incl. gleam via scope_uri fallback). Subset only — not directly comparable to 19. |
 | pass 21  | 2026-05-15 | 487/616 (79.0%) | Full 23-lang grid w/ 4 symbol cells per lang (+92 cells over pass 19). 9 langs symbol-layer green; surfaced 3 layer bugs (cross-workspace URI, legacy SymbolInformation, exact-name drill) and 3 LSP spawn flakes. |
+| pass 22  | 2026-05-15 | 505/616 (82.0%) | Fixes A+B+C landed (9342897). 11/23 langs symbol-layer green; +4 langs (bash, cpp, go, perl) over pass 21. NF-class fixture issues + lua UTF-8 framing + ruby refs FAIL pending. |
