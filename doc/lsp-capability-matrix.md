@@ -53,7 +53,114 @@ with their `*_prepare` parent). `apply_workspace_edit` and
 | yaml       | yaml-language-server          | ✓ | ✓ | G | G | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | G | G |
 | zig        | zls                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G |
 
-## Symbol-layer support (ADR-026, pass 22)
+## Symbol-layer support (ADR-026, pass 24 — stdio + http)
+
+After pass-23 fixes landed (two-tier fuzzy match, find_referencing_symbols
+Resolution envelope + cross-workspace URI swallow, universal Latin-1
+fallback in `lifecycle.classify`) and pass-24 follow-ups
+(empty-`workspace/symbol` fallback to `scope_uri` drill,
+`references_response_decoder` accepting Location / LocationLink / null,
+fixture tunes for html + markdown).
+
+**Stdio and HTTP transports are at full parity** — every lang's
+symbol-cell result is identical across `--transport stdio` and
+`--transport http`. HTTP plumbing (mist + JSON-RPC handler) does not
+introduce drift.
+
+| Lang | find_sym | overview | refs | edit | notes |
+|------|----------|----------|------|------|-------|
+| bash       | ✓ | ✓ | ✓ | ✓ | Fix B (legacy `SymbolInformation[]`) active |
+| clojure    | ✓ | ✓ | ✓ | ✓ | |
+| cpp        | ✓ | ✓ | ✓ | ✓ | Fix A (cross-workspace URI swallow) active |
+| css        | ✓ | ✓ | ✓ | ✓ | tier-2 fuzzy (case-insensitive `root` ↔ `:root`) |
+| elixir     | F | ✓ | F | F | next-ls `-32603 Timeout` on workspace/symbol (LSP-side) |
+| erlang     | ✓ | ✓ | ✓ | ✓ | empty-`workspace/symbol` → scope_uri fallback |
+| gleam      | ✓ | ✓ | ✓ | ✓ | `workspaceSymbolProvider` not advertised → scope_uri fallback |
+| go         | ✓ | ✓ | ✓ | ✓ | |
+| haskell    | ✓ | ✓ | ✓ | ✓ | |
+| html       | ✓ | ✓ | ✓ | ✓ | fixture symbol_name_path tuned to `h1` |
+| java       | ✓-NF | ✓ | F | F | jdtls cold-build returns empty workspace/symbol + scope_uri drill doesn't surface `KafkaClient` — LSP-side fixture issue |
+| json       | ✓ | ✓ | G | ✓ | refs GAP (no `referencesProvider`) |
+| lua        | ✓ | ✓ | ✓ | ✓ | Latin-1 fallback active; references decoder accepts null |
+| markdown   | ✓ | ✓ | ✓ | ✓ | fixture symbol_name_path tuned to `GitHub Docs` |
+| perl       | ✓ | ✓ | G | ✓ | refs GAP (no `referencesProvider`) |
+| python     | ✓ | ✓ | ✓ | ✓ | |
+| ruby       | ✓ | ✓ | ✓ | ✓ | |
+| rust       | ✓ | ✓ | ✓ | ✓ | |
+| scala      | F | ✓ | F | F | metals `workspace/symbol` timeout on cold workspace (LSP-side) |
+| terraform  | ✓ | ✓ | ✓ | ✓ | |
+| typescript | ✓ | ✓ | ✓ | ✓ | |
+| yaml       | ✓ | ✓ | G | ✓ | refs GAP (no `referencesProvider`) |
+| zig        | ✓ | ✓ | ✓ | ✓ | |
+
+Legend: `✓` = OK. `✓-NF` = OK but `not_found` (downstream tools skip).
+`F` = FAIL. `G` = GAP (-32601, cap not advertised — legit).
+
+**17/23 langs fully green, 3/23 functional with legit refs-GAP, 3/23
+hard-fail on LSP-side issues:**
+
+- **elixir / scala**: workspace/symbol timeouts originate in the LSP
+  (next-ls, metals on cold workspace). Both servers eventually
+  respond on the second call but exceed the per-tool budget; bumping
+  `timeout_override_ms` further runs into the harness wall clock.
+  Not a Pharos defect.
+
+- **java (jdtls)**: cold-build returns `[]` for workspace/symbol
+  during the first ~60s of indexing, and `documentSymbol` on the
+  fixture file lists method-level symbols without surfacing the
+  containing `KafkaClient` interface as a top-level entry. Both the
+  empty-workspace fallback and tier-2 fuzzy run cleanly; the symbol
+  simply isn't in jdtls's documentSymbol output. Likely fixture
+  positioning interacts poorly with jdtls's outline mode.
+
+## Per-LSP cross-language adapter notes
+
+Where pharos applies a special protocol-level handler beyond the
+default JSON-RPC + LSP framing:
+
+- **Universal Latin-1 fallback.** Applies to every LSP. When a
+  response body fails strict UTF-8 decode in `lifecycle.classify`,
+  pharos retries with `unicode:characters_to_binary(Body, latin1, utf8)`
+  and emits a once-per-BEAM-lifetime `warn` log. Triggered by
+  lua-language-server when filesystem paths contain non-ASCII bytes
+  in non-UTF-8 locales. JSON-RPC spec mandates UTF-8 but real-world
+  compliance is uneven.
+
+- **scope_uri drill fallback.** Triggers in two cases:
+  (1) the LSP doesn't advertise `workspaceSymbolProvider` (gleam-lsp)
+  (2) workspace/symbol returns an empty array (jdtls on cold workspace,
+      ELP — ELP doesn't workspace-index `.erl` function symbols).
+  `find_symbol` falls back to `documentSymbol` on `scope_uri` only;
+  cross-file resolution becomes single-file resolution.
+
+- **Cross-workspace URI swallow.** Applies in both `find_symbol`
+  drill and `find_referencing_symbols` owner-resolution. When
+  `workspace/symbol` or `textDocument/references` returns URIs that
+  the same LSP session cannot open (clangd → `/usr/include/...`,
+  rust-analyzer → `~/.rustup/...` stdlib refs), pharos drops those
+  URIs per-result and continues with the rest. Without this, a
+  single out-of-tree symbol fails the entire resolution.
+
+- **Two-tier fuzzy name match in drill.** Tier 1 (exact, arity-strip,
+  kind-strip, trailing-dot) runs first; tier 2 (case-insensitive,
+  substring) only fires when tier 1 returns zero candidates. Tier-2
+  matches surface as `Resolution.Multiple` with `matched_via`
+  provenance so the LLM can weight them lower than exact matches.
+  Capped at `fuzzy_match_cap = 20` to bound response size.
+
+- **Legacy `SymbolInformation[]` shape.** bash-language-server,
+  vscode-html-language-server, and perlnavigator still emit
+  `textDocument/documentSymbol` as the legacy flat
+  `SymbolInformation[]` shape rather than the hierarchical
+  `DocumentSymbol[]`. `document_symbol_decoder` tries modern first,
+  falls back to legacy.
+
+- **`textDocument/references` loose decoder.** Accepts `Location[]`
+  (canonical), `LocationLink[]` (spec's link-style alternative under
+  client linkSupport), or `null` / `[]` (lua-language-server's
+  `includeDeclaration=false` no-match response).
+
+## Symbol-layer support (ADR-026, pass 22 — superseded)
 
 After pass-21 fixes A (cross-workspace URI swallow), B (legacy
 `SymbolInformation[]` decoder), C (fuzzy drill name match) committed
@@ -224,3 +331,6 @@ After a `bin/dogfood-23lang.py` run:
 | pass 20c | 2026-05-15 | 108/122 (88.5%) | 4-lang stage; symbol layer all-green (incl. gleam via scope_uri fallback). Subset only — not directly comparable to 19. |
 | pass 21  | 2026-05-15 | 487/616 (79.0%) | Full 23-lang grid w/ 4 symbol cells per lang (+92 cells over pass 19). 9 langs symbol-layer green; surfaced 3 layer bugs (cross-workspace URI, legacy SymbolInformation, exact-name drill) and 3 LSP spawn flakes. |
 | pass 22  | 2026-05-15 | 505/616 (82.0%) | Fixes A+B+C landed (9342897). 11/23 langs symbol-layer green; +4 langs (bash, cpp, go, perl) over pass 21. NF-class fixture issues + lua UTF-8 framing + ruby refs FAIL pending. |
+| pass 23  | 2026-05-16 | 512/616 (83.1%) | Two-tier fuzzy + refs Resolution envelope + Latin-1 fallback (9c705d8). 13/23 green; tier-2 unlocked css/terraform; Latin-1 unlocked lua find_symbol. Surfaced lua refs decoder gap (Location[]/LocationLink[]/null) + 4 NF-on-empty-ws cases. |
+| pass 24  | 2026-05-16 | 519/616 (84.3%) | Empty-ws fallback + LocationLink/null refs decoder + html/markdown fixture tunes (3a91eaf). **17/23 fully green + 3 refs-GAP-legit = 20/23 functional.** Remaining 3 are LSP-side issues. |
+| pass 24h | 2026-05-16 | 519/616 (84.3%) | Same as pass 24 over HTTP transport. **Perfect parity stdio↔http** across all 23 langs × 26 tools. |
