@@ -53,20 +53,53 @@ with their `*_prepare` parent). `apply_workspace_edit` and
 | yaml       | yaml-language-server          | ✓ | ✓ | G | G | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | G | G |
 | zig        | zls                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G |
 
-## Symbol-layer support (ADR-026, pass 20c)
+## Symbol-layer support (ADR-026, pass 21)
 
 Four tools: `find_symbol`, `get_symbols_overview`,
 `find_referencing_symbols`, `edit_at_symbol`. `find_symbol` falls back
 to single-file drill against `scope_uri` when the LSP does not
 advertise `workspaceSymbolProvider`.
 
-| Lang | find_symbol | overview | refs | edit | fallback active? |
-|------|-------------|----------|------|------|------------------|
-| python | ✓ | ✓ | ✓ | ✓ | no |
-| rust | ✓ | ✓ | ✓ | ✓ | no |
-| typescript | ✓ | ✓ | ✓ | ✓ | no |
-| gleam | ✓ | ✓ | ✓ | ✓ | **yes** — gleam-lsp does not advertise `workspaceSymbolProvider` |
-| (others) | — | — | — | — | — (fixture probes not added yet) |
+| Lang | find_sym | overview | refs | edit | notes |
+|------|----------|----------|------|------|-------|
+| bash       | F | F | F | F | bash-language-server returns legacy `SymbolInformation[]`; decoder rejects shape (real bug) |
+| clojure    | ✓ | ✓ | ✓ | ✓ | |
+| cpp        | F | ✓ | F | F | workspace/symbol returns `/usr/include/...`; drill fails to open URI outside fixture workspace (real bug) |
+| css        | ✓-NF | ✓ | F | F | find_symbol returns `not_found`; fixture `symbol_name_path` "root" doesn't match doc-symbol naming |
+| elixir     | F | ✓ | F | F | next-ls returned `-32603 Timeout` on workspace/symbol |
+| erlang     | ✓-NF | ✓ | F | F | ELP names functions `main/1` (arity-suffixed); fixture path "main" doesn't match exact |
+| gleam      | ✓ | ✓ | ✓ | ✓ | **fallback active** — gleam-lsp doesn't advertise `workspaceSymbolProvider` |
+| go         | F | ✓ | F | F | LSP spawn flaked: "initialize handshake failed: client transport failure" (separate issue) |
+| haskell    | ✓ | ✓ | ✓ | ✓ | |
+| html       | F | F | F | F | vscode-html-language-server documentSymbol shape — decode error like bash |
+| java       | ✓-NF | ✓ | F | F | jdtls names classes with kind suffix; fixture "KafkaClient" doesn't exact-match |
+| json       | ✓ | ✓ | G | ✓ | refs GAP: vscode-json doesn't advertise `referencesProvider` |
+| lua        | F | ✓ | F | F | LSP spawn flaked |
+| markdown   | ✓-NF | ✓ | F | F | fixture path doesn't match marksman doc-symbol naming |
+| perl       | F | F | F | F | perlnavigator legacy shape (like bash) |
+| python     | ✓ | ✓ | ✓ | ✓ | |
+| ruby       | F | ✓ | F | F | LSP spawn flaked |
+| rust       | ✓ | ✓ | ✓ | ✓ | |
+| scala      | F | ✓ | F | F | metals workspace/symbol timed out |
+| terraform  | ✓-NF | ✓ | F | F | terraform-ls names blocks with type prefix |
+| typescript | ✓ | ✓ | ✓ | ✓ | |
+| yaml       | ✓ | ✓ | G | ✓ | refs GAP: yaml-language-server doesn't advertise `referencesProvider` |
+| zig        | ✓ | ✓ | ✓ | ✓ | |
+
+Legend: `✓` = OK. `✓-NF` = OK but returned `not_found` (handle empty, downstream tools skip).
+`F` = FAIL. `G` = GAP (-32601, advertised). `—` = not measured.
+
+**9/23 langs fully green.** Three layer bugs surfaced for follow-up:
+1. Cross-workspace URI drill (cpp) — find_symbol should swallow
+   per-URI session failures and continue with the other URIs.
+2. Legacy `SymbolInformation[]` shape (bash, html, perl) — decoder
+   needs to try both modern and legacy shapes.
+3. Exact-name match in drill (erlang/java/elixir/markdown/terraform)
+   — strip arity/kind decorators when comparing. Alternative: tune
+   per-lang `symbol_name_path` fixtures.
+
+LSP-side flakes (go/lua/ruby spawn handshake) are not symbol-layer
+issues but worth tracking separately.
 
 ## Per-LSP notes
 
@@ -127,3 +160,4 @@ After a `bin/dogfood-23lang.py` run:
 | pass 18 | 2026-05 | 413/524 (78.8%) | Pre-ADR-026 baseline; first SASL-clean pass after handle_ensure_open containment work. |
 | pass 19 | 2026-05-15 | 435/524 (83.0%) | Compressed tool descriptions + capability gate + symbol-layer registration (no tests via the 4 symbol cells yet). +22 cells over baseline; cap gate flips several `inlay_hints`/`semantic_tokens` from F → G. |
 | pass 20c | 2026-05-15 | 108/122 (88.5%) | 4-lang stage; symbol layer all-green (incl. gleam via scope_uri fallback). Subset only — not directly comparable to 19. |
+| pass 21  | 2026-05-15 | 487/616 (79.0%) | Full 23-lang grid w/ 4 symbol cells per lang (+92 cells over pass 19). 9 langs symbol-layer green; surfaced 3 layer bugs (cross-workspace URI, legacy SymbolInformation, exact-name drill) and 3 LSP spawn flakes. |
