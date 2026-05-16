@@ -320,6 +320,11 @@ pub type ToolCategory {
   /// the LLM cannot self-service the very escape hatch we tell it
   /// about.
   CatDefault
+  /// Project-local memory tools (ADR-027): cross-MCP-client
+  /// knowledge store under `.pharos/memories/` and `~/.pharos/memories/`.
+  /// Ships in the default profile; opt out via explicit category
+  /// list (`tools = ["read", "write"]`).
+  CatMemory
 }
 
 /// True iff `name` (with its known category) is exposed under the
@@ -360,6 +365,7 @@ fn category_alias(category: ToolCategory) -> String {
     CatDebug -> "debug"
     CatRaw -> "raw"
     CatDefault -> "default"
+    CatMemory -> "memory"
   }
 }
 
@@ -369,7 +375,7 @@ fn category_alias(category: ToolCategory) -> String {
 /// hatch for runtime knobs.
 fn is_in_default_profile(category: ToolCategory) -> Bool {
   case category {
-    CatRead | CatWrite | CatDefault -> True
+    CatRead | CatWrite | CatDefault | CatMemory -> True
     CatDebug | CatRaw -> False
   }
 }

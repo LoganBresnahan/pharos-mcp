@@ -9,7 +9,7 @@
 %% Returns Gleam-friendly tagged tuples shaped as Result(t, e).
 
 -module(pharos_fs_ffi).
--export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, dir_size_bytes/1, which_executable/1]).
+-export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, dir_size_bytes/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0]).
 
 is_regular_file(Path) ->
     filelib:is_regular(binary_to_list(Path)).
@@ -138,3 +138,74 @@ which_executable(Cmd) when is_binary(Cmd) ->
                 Path -> {ok, list_to_binary(Path)}
             end
     end.
+
+%% Memory-system filesystem helpers (ADR-027). All accept and return
+%% binaries to match the Gleam String calling convention.
+
+%% Create `Path` and all missing parent directories. Returns
+%% {ok, nil} or {error, BinaryReason}.
+mkdir_p(Path) when is_binary(Path) ->
+    case filelib:ensure_dir(binary_to_list(Path) ++ "/.placeholder") of
+        ok -> {ok, nil};
+        {error, Reason} -> {error, format_reason(Reason)}
+    end.
+
+%% List the immediate (non-recursive) regular-file entries under
+%% `Path`. Returns {ok, [Binary]} or {error, BinaryReason}. Entries
+%% are the basename only (not full paths).
+list_dir(Path) when is_binary(Path) ->
+    case file:list_dir(binary_to_list(Path)) of
+        {ok, Names} ->
+            Filtered = [list_to_binary(N) || N <- Names],
+            {ok, Filtered};
+        {error, Reason} -> {error, format_reason(Reason)}
+    end.
+
+%% Delete a regular file at `Path`. Returns {ok, nil} on success,
+%% {error, BinaryReason} otherwise. {error, enoent} (file already
+%% gone) collapses into {ok, nil} — idempotent prune.
+delete_file(Path) when is_binary(Path) ->
+    case file:delete(binary_to_list(Path)) of
+        ok -> {ok, nil};
+        {error, enoent} -> {ok, nil};
+        {error, Reason} -> {error, format_reason(Reason)}
+    end.
+
+%% Atomic create-or-fail write. Uses {exclusive, write} so a concurrent
+%% second call to the same path returns {error, eexist} rather than
+%% silently overwriting. ADR-027 §6.a relies on this for no-overwrite
+%% save semantics.
+write_excl(Path, Text) when is_binary(Path), is_binary(Text) ->
+    PathStr = binary_to_list(Path),
+    case file:open(PathStr, [exclusive, write, binary]) of
+        {ok, Fd} ->
+            case file:write(Fd, Text) of
+                ok ->
+                    file:close(Fd),
+                    {ok, nil};
+                {error, Reason} ->
+                    file:close(Fd),
+                    file:delete(PathStr),
+                    {error, format_reason(Reason)}
+            end;
+        {error, eexist} -> {error, <<"eexist">>};
+        {error, Reason} -> {error, format_reason(Reason)}
+    end.
+
+%% Resolve the current user's home directory. Returns the path as a
+%% binary; falls back to "/" if HOME is unset (rare in practice).
+home_dir() ->
+    case os:getenv("HOME") of
+        false -> <<"/">>;
+        Path -> list_to_binary(Path)
+    end.
+
+%% Wall-clock time as an ISO-8601 / RFC-3339 binary in UTC. Format:
+%% `2026-05-16T07:30:00Z`. Used by memory_save to stamp `created` and
+%% `last_accessed`. Second precision is enough — the value is read
+%% by humans and used for ordering (lex == chrono); sub-second
+%% precision would add noise without helping.
+now_iso8601() ->
+    Now = erlang:system_time(second),
+    Iso = calendar:system_time_to_rfc3339(Now, [{offset, "Z"}]),
+    list_to_binary(Iso).

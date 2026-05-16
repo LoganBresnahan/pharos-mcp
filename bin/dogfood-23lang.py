@@ -949,6 +949,113 @@ class PoolTracePoller:
 _POOL_POLLER: PoolTracePoller | None = None
 
 
+def run_memory_probe(transport: Transport,
+                     rows: list[tuple[str, str, bool, str]],
+                     rid: int) -> int:
+    """ADR-027 §10 memory-tool probe — 11 sequential cells.
+
+    The harness sets PHAROS_MEMORY_ROOT + PHAROS_USER_MEMORY_ROOT
+    before launching pharos, so each pass uses a fresh tempdir. The
+    cells exercise: empty list → save → get → list → conflict on
+    duplicate → overwrite → cross-layer save → merged list → prune
+    → not-found verification → cleanup. Records under the
+    "(memory)" lang key in rows so the report verifier can separate
+    the count from per-language tooling.
+    """
+    label = "pass-probe"
+    user_label = "pass-probe-user"
+
+    def call(tool: str, args: dict, expected_error: bool = False) -> tuple[bool, str]:
+        nonlocal rid
+        rid += 1
+        ok, summary, _ = call_one(
+            transport, rid, tool, args, timeout_s=15,
+        )
+        if expected_error:
+            ok = not ok
+        return ok, summary
+
+    print("\n=== memory tools ===", flush=True)
+
+    # 1. empty list (clean state)
+    ok, s = call("memory_list", {})
+    rows.append(("(memory)", "memory_list (empty)", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_list (empty): {s}", flush=True)
+
+    # 2. save project memory
+    ok, s = call("memory_save", {
+        "type": "project",
+        "name": label,
+        "description": "dogfood pass probe",
+        "content": "probe body content",
+    })
+    rows.append(("(memory)", "memory_save project", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_save project: {s}", flush=True)
+
+    # 3. get back
+    ok, s = call("memory_get", {"name": label})
+    rows.append(("(memory)", "memory_get", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_get: {s}", flush=True)
+
+    # 4. list (should contain the probe)
+    ok, s = call("memory_list", {"type": "project"})
+    rows.append(("(memory)", "memory_list (filtered)", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_list (filtered): {s}", flush=True)
+
+    # 5. duplicate save without overwrite → MemoryConflict expected
+    ok, s = call("memory_save", {
+        "type": "project",
+        "name": label,
+        "description": "dup probe",
+        "content": "should fail",
+    }, expected_error=True)
+    rows.append(("(memory)", "memory_save dup (expect conflict)", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_save dup (expect conflict): {s}", flush=True)
+
+    # 6. overwrite=true → succeeds
+    ok, s = call("memory_save", {
+        "type": "project",
+        "name": label,
+        "description": "overwritten",
+        "content": "new body",
+        "overwrite": True,
+    })
+    rows.append(("(memory)", "memory_save overwrite", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_save overwrite: {s}", flush=True)
+
+    # 7. cross-layer save (user type → user layer)
+    ok, s = call("memory_save", {
+        "type": "user",
+        "name": user_label,
+        "description": "user-layer probe",
+        "content": "user body",
+    })
+    rows.append(("(memory)", "memory_save user-layer", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_save user-layer: {s}", flush=True)
+
+    # 8. merged list spans both layers
+    ok, s = call("memory_list", {})
+    rows.append(("(memory)", "memory_list (cross-layer)", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_list (cross-layer): {s}", flush=True)
+
+    # 9. prune project entry
+    ok, s = call("memory_prune", {"name": label})
+    rows.append(("(memory)", "memory_prune project", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_prune project: {s}", flush=True)
+
+    # 10. confirm pruned (expect NotFound)
+    ok, s = call("memory_get", {"name": label}, expected_error=True)
+    rows.append(("(memory)", "memory_get after prune (expect not_found)", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_get after prune: {s}", flush=True)
+
+    # 11. cleanup user-layer entry
+    ok, s = call("memory_prune", {"name": user_label})
+    rows.append(("(memory)", "memory_prune user-layer", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_prune user-layer: {s}", flush=True)
+
+    return rid
+
+
 def run_pass(transport: Transport, filter_langs: list[str] | None,
              skip: set[str], profile: str
              ) -> list[tuple[str, str, bool, str]]:
@@ -959,6 +1066,13 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
 
     rows: list[tuple[str, str, bool, str]] = []
     rid = 100
+
+    # ADR-027 memory tools: sequential chain run once at the start of
+    # the pass (not per-language). Skipped when filter_langs is set —
+    # the language filter implies the operator wants per-lang focus,
+    # not the global memory probe.
+    if not filter_langs:
+        rid = run_memory_probe(transport, rows, rid)
 
     targets = TARGETS
     if filter_langs:
@@ -1274,7 +1388,7 @@ def write_report(rows, out_path: str, label: str, transport_name: str,
     passed = sum(1 for _, _, ok, _ in rows if ok)
 
     lines = [
-        f"# Dogfood pass — 23 languages × 43 tools",
+        f"# Dogfood pass — 23 languages × 43 tools + memory probe",
         "",
         f"**Label:** {label}",
         f"**Binary:** `{pharos_bin}`",
@@ -1365,6 +1479,15 @@ def main():
 
     env = os.environ.copy()
     env["PHAROS_TOOLS"] = args.profile  # `all` or `default`
+
+    # ADR-027 memory-tool isolation. Each pass gets its own tempdir
+    # so the dev's real `.pharos/memories/` and `~/.pharos/memories/`
+    # never get polluted by probe runs. The dirs are auto-cleaned at
+    # interpreter exit.
+    mem_project_root = tempfile.mkdtemp(prefix="pharos-dogfood-mem-project-")
+    mem_user_root = tempfile.mkdtemp(prefix="pharos-dogfood-mem-user-")
+    env["PHAROS_MEMORY_ROOT"] = mem_project_root
+    env["PHAROS_USER_MEMORY_ROOT"] = mem_user_root
 
     effective_profile = args.profile
     if args.pool_trace_path:

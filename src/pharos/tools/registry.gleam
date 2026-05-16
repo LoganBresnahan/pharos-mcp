@@ -35,7 +35,7 @@
 //// so it ships alongside read/write.
 
 import pharos/config.{
-  type ToolCategory, CatDebug, CatDefault, CatRaw, CatRead, CatWrite,
+  type ToolCategory, CatDebug, CatDefault, CatMemory, CatRaw, CatRead, CatWrite,
 }
 
 /// Canonical category for `name`. Unknown tools default to `CatRaw`
@@ -86,6 +86,12 @@ pub fn category_for(name: String) -> ToolCategory {
     | "runtime_set_tool_timeout"
     | "runtime_effective_tool_config"
     | "runtime_language_config" -> CatDefault
+
+    // -- ADR-027 memory tools --
+    "memory_save"
+    | "memory_get"
+    | "memory_list"
+    | "memory_prune" -> CatMemory
 
     // -- debug (pharos runtime introspection + sanity; opt-in
     //    via `tools = ["default", "debug"]` or explicit names) --

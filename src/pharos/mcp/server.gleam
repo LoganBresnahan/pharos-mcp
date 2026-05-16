@@ -46,6 +46,7 @@ import pharos/tools/debug
 import pharos/tools/rename_preview
 import pharos/tools/semantic_tokens
 import pharos/tools/signature_help
+import pharos/tools/memory
 import pharos/tools/symbols
 import pharos/tools/type_hierarchy
 
@@ -327,6 +328,11 @@ fn allowed_tool_definitions() -> List(Json) {
       find_referencing_symbols_tool_definition,
     ),
     #("edit_at_symbol", edit_at_symbol_tool_definition),
+    // -- ADR-027 memory tools --
+    #("memory_save", memory_save_tool_definition),
+    #("memory_get", memory_get_tool_definition),
+    #("memory_list", memory_list_tool_definition),
+    #("memory_prune", memory_prune_tool_definition),
   ]
   list.append(curated, debug.named_definitions())
   |> list.filter_map(fn(pair) {
@@ -872,6 +878,16 @@ fn dispatch_tool_call(
       handle_find_referencing_symbols(pool, id, arguments)
     Ok(#("edit_at_symbol", arguments)) ->
       handle_edit_at_symbol(pool, id, arguments)
+
+    // -- ADR-027 memory tools --
+    Ok(#("memory_save", arguments)) ->
+      handle_memory_save(id, arguments)
+    Ok(#("memory_get", arguments)) ->
+      handle_memory_get(id, arguments)
+    Ok(#("memory_list", arguments)) ->
+      handle_memory_list(id, arguments)
+    Ok(#("memory_prune", arguments)) ->
+      handle_memory_prune(id, arguments)
 
     Ok(#(name, arguments)) ->
       case debug.dispatch(pool, name, arguments) {
@@ -3359,3 +3375,325 @@ fn decode_edit_at_symbol_arguments(
     }
   }
 }
+
+
+// -- ADR-027 memory tool definitions + handlers -------------------------
+
+fn memory_save_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("memory_save")),
+    #(
+      "description",
+      json.string(
+        "Save a project-local memory entry. Cross-MCP-client store: "
+          <> "any client (Claude Code, Cursor, ChatGPT, agents) reads "
+          <> "the same content. `type` ∈ {user, project, feedback, "
+          <> "reference}. `user` writes to ~/.pharos/memories/user/ "
+          <> "(per-user, NOT committed). Others write to "
+          <> ".pharos/memories/<type>/ in the repo. Do save: user role, "
+          <> "project conventions, decisions+rationale, external "
+          <> "system pointers. Do NOT save: code patterns (already in "
+          <> "repo), git history (use git log), debugging solutions "
+          <> "(in commits). Refuses duplicates without overwrite=true. "
+          <> "<private>...</private> blocks are stripped before write.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #("type", json.object([
+              #("type", json.string("string")),
+              #("enum", json.array(
+                ["user", "project", "feedback", "reference"],
+                of: json.string,
+              )),
+            ])),
+            #("name", json.object([#("type", json.string("string"))])),
+            #("description", json.object([#("type", json.string("string"))])),
+            #("content", json.object([#("type", json.string("string"))])),
+            #("overwrite", json.object([#("type", json.string("boolean"))])),
+          ]),
+        ),
+        #("required", json.array(
+          ["type", "name", "description", "content"],
+          of: json.string,
+        )),
+      ]),
+    ),
+  ])
+}
+
+fn memory_get_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("memory_get")),
+    #(
+      "description",
+      json.string(
+        "Fetch a memory by name. Checks project layer first, falls "
+          <> "back to user layer. Bumps last_accessed timestamp.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #("name", json.object([#("type", json.string("string"))])),
+          ]),
+        ),
+        #("required", json.array(["name"], of: json.string)),
+      ]),
+    ),
+  ])
+}
+
+fn memory_list_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("memory_list")),
+    #(
+      "description",
+      json.string(
+        "List memories across both layers. Optional `type` filter and "
+          <> "`query` substring match (name + description). Sorted by "
+          <> "last_accessed descending — recent first.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #("type", json.object([
+              #("type", json.string("string")),
+              #("enum", json.array(
+                ["user", "project", "feedback", "reference"],
+                of: json.string,
+              )),
+            ])),
+            #("query", json.object([#("type", json.string("string"))])),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn memory_prune_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("memory_prune")),
+    #(
+      "description",
+      json.string(
+        "Delete a memory by name. One-at-a-time on purpose — no batch "
+          <> "deletes to discourage accidental wipes.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #("name", json.object([#("type", json.string("string"))])),
+          ]),
+        ),
+        #("required", json.array(["name"], of: json.string)),
+      ]),
+    ),
+  ])
+}
+
+fn handle_memory_save(id: Id, arguments: Option(Dynamic)) -> String {
+  case decode_memory_save_arguments(arguments) {
+    Error(reason) ->
+      error_response(Some(id), -32_602, "Invalid memory_save params: " <> reason)
+    Ok(#(type_, name, description, content, overwrite)) ->
+      case memory.save(name, type_, description, content, overwrite, now_iso8601_ffi()) {
+        Ok(entry) ->
+          success_response(id, fn() {
+            tool_text_result(
+              json.to_string(memory_entry_to_json(entry)),
+              False,
+            )
+          })
+        Error(err) ->
+          success_response(id, fn() {
+            tool_text_result(memory.describe_error(err), True)
+          })
+      }
+  }
+}
+
+fn handle_memory_get(id: Id, arguments: Option(Dynamic)) -> String {
+  case decode_memory_name_only(arguments, "memory_get") {
+    Error(reason) ->
+      error_response(Some(id), -32_602, "Invalid memory_get params: " <> reason)
+    Ok(name) ->
+      case memory.get(name, now_iso8601_ffi()) {
+        Ok(entry) ->
+          success_response(id, fn() {
+            tool_text_result(
+              json.to_string(memory_entry_to_json(entry)),
+              False,
+            )
+          })
+        Error(err) ->
+          success_response(id, fn() {
+            tool_text_result(memory.describe_error(err), True)
+          })
+      }
+  }
+}
+
+fn handle_memory_list(id: Id, arguments: Option(Dynamic)) -> String {
+  let #(type_filter, query) = decode_memory_list_arguments(arguments)
+  case memory.list_entries(type_filter, query) {
+    Ok(entries) ->
+      success_response(id, fn() {
+        tool_text_result(
+          json.to_string(
+            json.object([
+              #("count", json.int(list.length(entries))),
+              #(
+                "entries",
+                json.preprocessed_array(
+                  list.map(entries, memory_entry_summary_to_json),
+                ),
+              ),
+            ]),
+          ),
+          False,
+        )
+      })
+    Error(err) ->
+      success_response(id, fn() {
+        tool_text_result(memory.describe_error(err), True)
+      })
+  }
+}
+
+fn handle_memory_prune(id: Id, arguments: Option(Dynamic)) -> String {
+  case decode_memory_name_only(arguments, "memory_prune") {
+    Error(reason) ->
+      error_response(Some(id), -32_602, "Invalid memory_prune params: " <> reason)
+    Ok(name) ->
+      case memory.prune(name) {
+        Ok(_) ->
+          success_response(id, fn() {
+            tool_text_result(
+              json.to_string(
+                json.object([#("pruned", json.string(name))]),
+              ),
+              False,
+            )
+          })
+        Error(err) ->
+          success_response(id, fn() {
+            tool_text_result(memory.describe_error(err), True)
+          })
+      }
+  }
+}
+
+fn memory_entry_to_json(e: memory.MemoryEntry) -> Json {
+  json.object([
+    #("name", json.string(e.name)),
+    #("type", json.string(e.type_)),
+    #("description", json.string(e.description)),
+    #("created", json.string(e.created)),
+    #("last_accessed", json.string(e.last_accessed)),
+    #("body", json.string(e.body)),
+    #("layer", json.string(e.layer)),
+  ])
+}
+
+fn memory_entry_summary_to_json(e: memory.MemoryEntry) -> Json {
+  json.object([
+    #("name", json.string(e.name)),
+    #("type", json.string(e.type_)),
+    #("description", json.string(e.description)),
+    #("last_accessed", json.string(e.last_accessed)),
+    #("layer", json.string(e.layer)),
+  ])
+}
+
+fn decode_memory_save_arguments(
+  arguments: Option(Dynamic),
+) -> Result(#(String, String, String, String, Bool), String) {
+  case arguments {
+    None -> Error("missing arguments")
+    Some(args) -> {
+      let decoder = {
+        use type_ <- decode.field("type", decode.string)
+        use name <- decode.field("name", decode.string)
+        use description <- decode.field("description", decode.string)
+        use content <- decode.field("content", decode.string)
+        use overwrite <- decode.optional_field("overwrite", False, decode.bool)
+        decode.success(#(type_, name, description, content, overwrite))
+      }
+      case decode.run(args, decoder) {
+        Ok(v) -> Ok(v)
+        Error(_) -> Error("type + name + description + content required")
+      }
+    }
+  }
+}
+
+fn decode_memory_name_only(
+  arguments: Option(Dynamic),
+  tool_name: String,
+) -> Result(String, String) {
+  case arguments {
+    None -> Error("missing arguments for " <> tool_name)
+    Some(args) -> {
+      let decoder = {
+        use name <- decode.field("name", decode.string)
+        decode.success(name)
+      }
+      case decode.run(args, decoder) {
+        Ok(name) -> Ok(name)
+        Error(_) -> Error("name required")
+      }
+    }
+  }
+}
+
+fn decode_memory_list_arguments(
+  arguments: Option(Dynamic),
+) -> #(Option(String), Option(String)) {
+  case arguments {
+    None -> #(None, None)
+    Some(args) -> {
+      let decoder = {
+        use type_filter <- decode.optional_field(
+          "type",
+          None,
+          decode.optional(decode.string),
+        )
+        use query <- decode.optional_field(
+          "query",
+          None,
+          decode.optional(decode.string),
+        )
+        decode.success(#(type_filter, query))
+      }
+      case decode.run(args, decoder) {
+        Ok(pair) -> pair
+        Error(_) -> #(None, None)
+      }
+    }
+  }
+}
+
+@external(erlang, "pharos_fs_ffi", "now_iso8601")
+fn now_iso8601_ffi() -> String
+
