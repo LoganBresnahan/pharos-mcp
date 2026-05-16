@@ -13,8 +13,6 @@
 ////   PHAROS_USER_MEMORY_ROOT  — user layer override
 
 import gleam/bit_array
-import gleam/dynamic.{type Dynamic}
-import gleam/dynamic/decode
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -493,12 +491,8 @@ fn update_index(layer: String) -> Result(Nil, MemoryError) {
 // -- env ----------------------------------------------------------------
 
 fn getenv(key: String) -> Option(String) {
-  case decode.run(os_getenv(key), decode.string) {
-    Ok(v) ->
-      case v {
-        "" -> None
-        _ -> Some(v)
-      }
+  case getenv_ffi(key) {
+    Ok(v) -> Some(v)
     Error(_) -> None
   }
 }
@@ -529,5 +523,5 @@ fn is_regular_file_ffi(path: String) -> Bool
 @external(erlang, "pharos_fs_ffi", "home_dir")
 fn home_dir_ffi() -> String
 
-@external(erlang, "os", "getenv")
-fn os_getenv(key: String) -> Dynamic
+@external(erlang, "pharos_fs_ffi", "getenv")
+fn getenv_ffi(key: String) -> Result(String, Nil)

@@ -9,7 +9,7 @@
 %% Returns Gleam-friendly tagged tuples shaped as Result(t, e).
 
 -module(pharos_fs_ffi).
--export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, dir_size_bytes/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0]).
+-export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, dir_size_bytes/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1]).
 
 is_regular_file(Path) ->
     filelib:is_regular(binary_to_list(Path)).
@@ -198,6 +198,16 @@ home_dir() ->
     case os:getenv("HOME") of
         false -> <<"/">>;
         Path -> list_to_binary(Path)
+    end.
+
+%% Read an environment variable. Gleam Strings are binaries; Erlang's
+%% os:getenv/1 expects a list — wrap the conversion here. Returns
+%% {ok, Binary} when set + non-empty, {error, nil} when unset or "".
+getenv(Key) when is_binary(Key) ->
+    case os:getenv(binary_to_list(Key)) of
+        false -> {error, nil};
+        "" -> {error, nil};
+        Value -> {ok, list_to_binary(Value)}
     end.
 
 %% Wall-clock time as an ISO-8601 / RFC-3339 binary in UTC. Format:
