@@ -3208,17 +3208,7 @@ fn handle_find_referencing_symbols(
         Ok(matches) ->
           success_response(id, fn() {
             tool_text_result(
-              json.to_string(
-                json.object([
-                  #("count", json.int(list.length(matches))),
-                  #(
-                    "owners",
-                    json.preprocessed_array(
-                      list.map(matches, symbols.symbol_match_to_json),
-                    ),
-                  ),
-                ]),
-              ),
+              json.to_string(symbols.referencing_symbols_to_json(matches)),
               False,
             )
           })

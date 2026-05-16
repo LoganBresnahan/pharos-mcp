@@ -22,6 +22,7 @@ import gleam/dynamic/decode
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import pharos/log
 import pharos/lsp/client.{type Client}
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/port
@@ -649,15 +650,59 @@ type Classified {
 
 fn classify(body: BitArray) -> Classified {
   case bit_array.to_string(body) {
-    Error(Nil) -> DecodeFailure("body is not valid UTF-8")
-
-    Ok(text) ->
-      case json.parse(text, decode.dynamic) {
-        Error(_) -> DecodeFailure("body is not valid JSON")
-        Ok(value) -> classify_dynamic(value)
+    Ok(text) -> classify_text(text)
+    // JSON-RPC mandates UTF-8 but some real-world LSP servers
+    // (lua-language-server when filesystem paths include Latin-1
+    // bytes; older PLS builds) emit responses with stray non-UTF-8
+    // bytes inside JSON string fields. Strict rejection costs more
+    // than spec compliance gains — fall back to a Latin-1
+    // interpretation (always succeeds, every byte is a valid
+    // codepoint) and retry the JSON parse. The first time this
+    // fires for a given LSP, a warning is logged so the operator
+    // knows their server is non-compliant.
+    Error(Nil) ->
+      case latin1_to_utf8(body) {
+        Ok(text) -> {
+          log_latin1_fallback_once()
+          classify_text(text)
+        }
+        Error(_) -> DecodeFailure("body is not valid UTF-8 or Latin-1")
       }
   }
 }
+
+fn classify_text(text: String) -> Classified {
+  case json.parse(text, decode.dynamic) {
+    Error(_) -> DecodeFailure("body is not valid JSON")
+    Ok(value) -> classify_dynamic(value)
+  }
+}
+
+fn log_latin1_fallback_once() -> Nil {
+  // Single-shot warning per BEAM lifetime (good enough — operators
+  // see the gist; we don't spam logs on every response from a
+  // chatty non-compliant LSP). Tracking per-LSP would require
+  // threading proc identity through classify, which is invasive.
+  case latin1_warned() {
+    True -> Nil
+    False -> {
+      mark_latin1_warned()
+      log.warn_at(
+        "pharos/lsp/lifecycle",
+        "LSP emitted non-UTF-8 response; falling back to Latin-1 (subsequent occurrences silenced)",
+      )
+    }
+  }
+}
+
+@external(erlang, "pharos_runtime_ffi", "latin1_to_utf8")
+fn latin1_to_utf8(body: BitArray) -> Result(String, Nil)
+
+@external(erlang, "pharos_runtime_ffi", "latin1_warned_p")
+fn latin1_warned() -> Bool
+
+@external(erlang, "pharos_runtime_ffi", "mark_latin1_warned")
+fn mark_latin1_warned() -> Nil
 
 fn classify_dynamic(value: Dynamic) -> Classified {
   case decode.run(value, message_decoder()) {

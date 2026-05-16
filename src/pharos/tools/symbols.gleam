@@ -38,6 +38,13 @@ import pharos/tools/tool_helpers
 
 pub const default_timeout_ms: Int = 30_000
 
+/// Cap on Multiple result size when tier-2 fuzzy fires. Tight enough
+/// to keep response payloads bounded (substring matches against a
+/// 5000-symbol tree could otherwise return hundreds); loose enough
+/// that an LLM can still browse the candidates. Beyond this, callers
+/// should narrow the `name_path` with a container segment.
+pub const fuzzy_match_cap: Int = 20
+
 // -- Types ---------------------------------------------------------------
 
 /// `name_path` — a slash-delimited path through the symbol tree.
@@ -115,6 +122,12 @@ pub type SymbolMatch {
     /// Optional human-readable detail from the LSP — signature
     /// string, return type, etc. Server-supplied; may be empty.
     detail: Option(String),
+    /// Which name_matches/2 strategy admitted this candidate.
+    /// `"exact"` is the high-confidence baseline; anything else is a
+    /// heuristic that widened the net to surface a Multiple instead
+    /// of dead-ending in NotFound. LLM uses this to weight its
+    /// disambiguation picks.
+    matched_via: String,
   )
 }
 
@@ -266,16 +279,50 @@ pub fn find_symbol(
       // per URI rather than failing the whole resolution; other
       // candidates still get drilled. Decode / request errors still
       // propagate so we don't mask LSP bugs.
-      use matches <- result.try(
+      //
+      // Two-tier match: drill first with the strict strategy. If
+      // every URI yields zero candidates, retry once with the
+      // fuzzy-fallback strategy. Resolution.Multiple absorbs the
+      // wider net safely (LLM disambiguates via `matched_via`);
+      // results are capped at `fuzzy_match_cap` to keep payloads
+      // bounded.
+      use trees <- result.try(
         list.try_map(unique_uris, fn(uri) {
           case document_symbol_query(pool, uri, default_timeout_ms) {
-            Ok(tree) -> Ok(drill(tree, [head, ..rest], [], uri))
-            Error(SessionFailed(_)) -> Ok([])
+            Ok(tree) -> Ok(Some(#(uri, tree)))
+            Error(SessionFailed(_)) -> Ok(None)
             Error(other) -> Error(other)
           }
         })
-        |> result.map(list.flatten),
+        |> result.map(list.filter_map(_, fn(o) {
+          case o {
+            Some(pair) -> Ok(pair)
+            None -> Error(Nil)
+          }
+        })),
       )
+      let strict =
+        list.flat_map(trees, fn(pair) {
+          let #(uri, tree) = pair
+          drill(tree, [head, ..rest], [], uri, name_match_strategy)
+        })
+      let matches = case strict {
+        [] -> {
+          let fuzzy =
+            list.flat_map(trees, fn(pair) {
+              let #(uri, tree) = pair
+              drill(
+                tree,
+                [head, ..rest],
+                [],
+                uri,
+                name_match_strategy_with_fuzzy,
+              )
+            })
+          list.take(fuzzy, fuzzy_match_cap)
+        }
+        _ -> strict
+      }
       Ok(apply_policy(matches, policy))
     }
   }
@@ -324,69 +371,126 @@ fn drill(
   remaining_path: List(String),
   path_so_far: List(String),
   uri: String,
+  strategy: fn(String, String) -> Option(String),
 ) -> List(SymbolMatch) {
   case remaining_path {
     [] -> []
     [last] -> {
       let matches_here =
         symbols
-        |> list.filter(fn(s) { name_matches(s.name, last) })
-        |> list.map(fn(s) {
-          SymbolMatch(
-            name: s.name,
-            kind: s.kind,
-            uri: uri,
-            range: s.range,
-            selection_range: s.selection_range,
-            full_path: list.reverse([s.name, ..path_so_far]),
-            detail: s.detail,
-          )
+        |> list.filter_map(fn(s) {
+          case strategy(s.name, last) {
+            Some(via) ->
+              Ok(SymbolMatch(
+                name: s.name,
+                kind: s.kind,
+                uri: uri,
+                range: s.range,
+                selection_range: s.selection_range,
+                full_path: list.reverse([s.name, ..path_so_far]),
+                detail: s.detail,
+                matched_via: via,
+              ))
+            None -> Error(Nil)
+          }
         })
       // Even at the leaf, descend into children — a deeply-nested
       // namesake can shadow a top-level one and the LLM may have
       // meant either.
       let nested =
         list.flat_map(symbols, fn(s) {
-          drill(s.children, [last], [s.name, ..path_so_far], uri)
+          drill(s.children, [last], [s.name, ..path_so_far], uri, strategy)
         })
       list.append(matches_here, nested)
     }
     [head, ..rest] -> {
       let exact =
         symbols
-        |> list.filter(fn(s) { name_matches(s.name, head) })
+        |> list.filter(fn(s) { strategy(s.name, head) != None })
         |> list.flat_map(fn(s) {
-          drill(s.children, rest, [s.name, ..path_so_far], uri)
+          drill(s.children, rest, [s.name, ..path_so_far], uri, strategy)
         })
       let shadowed =
         list.flat_map(symbols, fn(s) {
-          drill(s.children, remaining_path, [s.name, ..path_so_far], uri)
+          drill(
+            s.children,
+            remaining_path,
+            [s.name, ..path_so_far],
+            uri,
+            strategy,
+          )
         })
       list.append(exact, shadowed)
     }
   }
 }
 
+/// Tier-1 + tier-2 chained. Tier 2 fires only on tier-1 None.
+fn name_match_strategy_with_fuzzy(
+  symbol_name: String,
+  query: String,
+) -> Option(String) {
+  case name_match_strategy(symbol_name, query) {
+    Some(s) -> Some(s)
+    None -> name_match_strategy_fuzzy(symbol_name, query)
+  }
+}
+
 /// Compare a documentSymbol name against a name_path segment with
-/// LSP-server-quirk tolerance:
+/// LSP-server-quirk tolerance. Two-tier:
 ///
-///   - Exact match wins. Always tried first.
-///   - Strip `/<digits>` arity suffix (Erlang/Elixir/HLS function
-///     conventions: `main/1` matches `main`).
-///   - Strip whitespace-suffix decorators (jdtls / metals sometimes
-///     return `KafkaClient class` or `Foo trait` as the symbol name).
-///   - Strip leading `block-type.` or `kind.` namespacing
-///     (terraform-ls names resources `resource.vpc`).
+/// **Tier 1 (high confidence, returns specific strategy):**
+///   - `"exact"` — string equality. Always tried first.
+///   - `"arity_strip"` — `main/1` matches `main` (Erlang/Elixir
+///     function conventions).
+///   - `"kind_strip"` — `KafkaClient class` matches `KafkaClient`
+///     (jdtls / metals sometimes append kind words).
+///   - `"trailing_segment"` — `resource.vpc` matches `vpc`
+///     (terraform-ls block-type prefix).
 ///
-/// All comparisons are case-sensitive — case-insensitive matching
-/// would over-collide on languages with case-meaningful identifiers
-/// (Go's exported-vs-package distinction, Haskell's
-/// constructor-vs-variable rule).
-fn name_matches(symbol_name: String, query: String) -> Bool {
-  symbol_name == query
-  || strip_arity_suffix(symbol_name) == query
-  || strip_kind_suffix(symbol_name) == query
-  || trailing_segment(symbol_name) == query
+/// **Tier 2 (lower confidence, only when tier 1 yields zero results):**
+///   - `"case_insensitive"` — `User` matches `user`. Useful for
+///     case-meaningful languages when the LLM didn't capitalize. May
+///     over-collide; SymbolMatch carries `matched_via` so the LLM
+///     can weight accordingly.
+///   - `"substring"` — `KafkaClientImpl` matches `KafkaClient`.
+///     Widens to surface plausible Multiple candidates instead of
+///     dead-ending in NotFound. Capped (see `find_symbol`) to keep
+///     response sizes bounded.
+///
+/// Returns `Some(strategy)` on a hit, `None` otherwise. Drill's
+/// caller treats `None` as "no match, do not include this candidate."
+fn name_match_strategy(
+  symbol_name: String,
+  query: String,
+) -> Option(String) {
+  let is_exact = symbol_name == query
+  let is_arity = strip_arity_suffix(symbol_name) == query
+  let is_kind = strip_kind_suffix(symbol_name) == query
+  let is_trailing = trailing_segment(symbol_name) == query
+  case is_exact, is_arity, is_kind, is_trailing {
+    True, _, _, _ -> Some("exact")
+    _, True, _, _ -> Some("arity_strip")
+    _, _, True, _ -> Some("kind_strip")
+    _, _, _, True -> Some("trailing_segment")
+    _, _, _, _ -> None
+  }
+}
+
+/// Tier 2 fuzzy: only fires when tier 1 returned zero matches across
+/// the whole drill walk. Surfaced via `matched_via` so the LLM knows
+/// these are heuristic candidates, not exact resolutions.
+fn name_match_strategy_fuzzy(
+  symbol_name: String,
+  query: String,
+) -> Option(String) {
+  let is_ci = string.lowercase(symbol_name) == string.lowercase(query)
+  let is_substring = string.contains(symbol_name, query)
+  case is_ci, is_substring {
+    True, _ -> Some("case_insensitive")
+    _, True -> Some("substring")
+    _, _ -> None
+  }
 }
 
 fn strip_arity_suffix(name: String) -> String {
@@ -524,19 +628,30 @@ pub fn find_referencing_symbols(
   // For each reference location, fetch the documentSymbol tree of
   // its file and find the smallest symbol whose `range` contains the
   // reference position. That symbol is the "owner" of the reference.
+  //
+  // Mirrors find_symbol's fix-A behaviour: references can include
+  // cross-workspace URIs (rust-analyzer surfacing stdlib refs at
+  // ~/.rustup/...; clangd's system header includes) that the LSP
+  // session can't open. Drop them per-URI rather than failing the
+  // whole call.
   let unique_uris =
     locations
     |> list.map(fn(loc) { loc.uri })
     |> list.unique
   use trees_by_uri <- result.try(
     list.try_map(unique_uris, fn(uri) {
-      use tree <- result.try(document_symbol_query(
-        pool,
-        uri,
-        default_timeout_ms,
-      ))
-      Ok(#(uri, tree))
-    }),
+      case document_symbol_query(pool, uri, default_timeout_ms) {
+        Ok(tree) -> Ok(Some(#(uri, tree)))
+        Error(SessionFailed(_)) -> Ok(None)
+        Error(other) -> Error(other)
+      }
+    })
+    |> result.map(list.filter_map(_, fn(o) {
+      case o {
+        Some(pair) -> Ok(pair)
+        None -> Error(Nil)
+      }
+    })),
   )
   let tree_map: Dict(String, List(DocumentSymbolDecoded)) =
     dict.from_list(trees_by_uri)
@@ -574,6 +689,7 @@ fn smallest_containing(
             selection_range: sym.selection_range,
             full_path: list.reverse([sym.name, ..path_so_far]),
             detail: sym.detail,
+            matched_via: "containing_range",
           ))
         let nested =
           smallest_containing(
@@ -1022,6 +1138,30 @@ pub fn describe_symbols_error(err: SymbolsError) -> String {
 
 // -- JSON serializers (for MCP tool replies) ----------------------------
 
+/// Wrap find_referencing_symbols's owner list in a Resolution-shaped
+/// envelope so the LLM gets the same `{status, count, ...}` shape it
+/// already knows from find_symbol. `status: "owners"` distinguishes
+/// this from the Single/Multiple/NotFound trichotomy on find_symbol —
+/// these are reference owners, not name resolutions.
+pub fn referencing_symbols_to_json(owners: List(SymbolMatch)) -> json.Json {
+  case owners {
+    [] ->
+      json.object([
+        #("status", json.string("no_references")),
+        #("count", json.int(0)),
+      ])
+    _ ->
+      json.object([
+        #("status", json.string("owners")),
+        #("count", json.int(list.length(owners))),
+        #(
+          "owners",
+          json.preprocessed_array(list.map(owners, symbol_match_to_json)),
+        ),
+      ])
+  }
+}
+
 pub fn resolution_to_json(res: Resolution) -> json.Json {
   case res {
     Single(m) ->
@@ -1068,6 +1208,7 @@ pub fn symbol_match_to_json(m: SymbolMatch) -> json.Json {
         None -> json.null()
       },
     ),
+    #("matched_via", json.string(m.matched_via)),
     #("handle", symbol_handle_to_json(symbol_handle_of_match(m))),
   ])
 }

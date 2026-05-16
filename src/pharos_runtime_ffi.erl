@@ -72,7 +72,10 @@
     format/2,
     lsp_capabilities_init/0,
     lsp_capabilities_store/2,
-    lsp_capabilities_lookup/1
+    lsp_capabilities_lookup/1,
+    latin1_to_utf8/1,
+    latin1_warned_p/0,
+    mark_latin1_warned/0
 ]).
 
 %% ETS-backed LSP capabilities store (8A capability detection).
@@ -1066,3 +1069,31 @@ find_spawner_traces() ->
 %% best-effort but cheap.
 is_spawner_initial_call({pharos@lsp@pool, _, _}) -> true;
 is_spawner_initial_call(_) -> false.
+
+%% Universal Latin-1 fallback for non-UTF-8 LSP responses.
+%% JSON-RPC mandates UTF-8 but real-world LSPs (lua-language-server
+%% under non-UTF-8 locales; older PLS builds) occasionally emit
+%% bytes outside the UTF-8 range inside JSON string fields. Latin-1
+%% always succeeds — every byte maps to a Unicode codepoint in the
+%% 0..255 range. The resulting string may have a slightly garbled
+%% non-ASCII path but JSON parsing still works and the response
+%% reaches the LLM. Returns {ok, Binary} on success, {error, nil}
+%% if even the latin1 conversion fails (shouldn't happen for any
+%% real byte sequence, but kept for completeness).
+latin1_to_utf8(Body) ->
+    case unicode:characters_to_binary(Body, latin1, utf8) of
+        Binary when is_binary(Binary) -> {ok, Binary};
+        _ -> {error, nil}
+    end.
+
+%% Single-shot warning latch. Stored as a persistent_term so it
+%% survives process death and is shared across all classifiers.
+%% Pharos boots clean every BEAM start, so a fresh key works.
+-define(LATIN1_WARN_KEY, pharos_latin1_fallback_warned).
+
+latin1_warned_p() ->
+    persistent_term:get(?LATIN1_WARN_KEY, false).
+
+mark_latin1_warned() ->
+    persistent_term:put(?LATIN1_WARN_KEY, true),
+    nil.

@@ -153,6 +153,7 @@ pub fn resolution_single_json_includes_status_test() {
       ),
       full_path: ["User", "authenticate"],
       detail: Some("(self, password)"),
+      matched_via: "exact",
     )
   // Wrap into Single and convert.
   let json_text =
@@ -226,6 +227,7 @@ fn sym_match(
     ),
     full_path: full_path,
     detail: None,
+    matched_via: "exact",
   )
 }
 
