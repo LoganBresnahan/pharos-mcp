@@ -9,7 +9,7 @@
 %% Returns Gleam-friendly tagged tuples shaped as Result(t, e).
 
 -module(pharos_fs_ffi).
--export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, dir_size_bytes/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1]).
+-export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, dir_size_bytes/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1, days_since_iso8601/1, setenv/2]).
 
 is_regular_file(Path) ->
     filelib:is_regular(binary_to_list(Path)).
@@ -210,6 +210,13 @@ getenv(Key) when is_binary(Key) ->
         Value -> {ok, list_to_binary(Value)}
     end.
 
+%% Set an environment variable. Used by tests to redirect memory roots
+%% to scratch dirs without polluting the user's real ~/.pharos. Always
+%% returns nil.
+setenv(Key, Value) when is_binary(Key), is_binary(Value) ->
+    os:putenv(binary_to_list(Key), binary_to_list(Value)),
+    nil.
+
 %% Wall-clock time as an ISO-8601 / RFC-3339 binary in UTC. Format:
 %% `2026-05-16T07:30:00Z`. Used by memory_save to stamp `created` and
 %% `last_accessed`. Second precision is enough — the value is read
@@ -219,3 +226,15 @@ now_iso8601() ->
     Now = erlang:system_time(second),
     Iso = calendar:system_time_to_rfc3339(Now, [{offset, "Z"}]),
     list_to_binary(Iso).
+
+%% Days between `Iso` (binary RFC-3339, UTC) and now. Negative if `Iso`
+%% lies in the future. Returns 0 on parse failure (best-effort: a
+%% malformed timestamp should not crash audit; treat as "fresh").
+days_since_iso8601(Iso) when is_binary(Iso) ->
+    try
+        Then = calendar:rfc3339_to_system_time(binary_to_list(Iso)),
+        Now = erlang:system_time(second),
+        (Now - Then) div 86400
+    catch
+        _:_ -> 0
+    end.

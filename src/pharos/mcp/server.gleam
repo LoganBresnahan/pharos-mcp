@@ -333,6 +333,7 @@ fn allowed_tool_definitions() -> List(Json) {
     #("memory_get", memory_get_tool_definition),
     #("memory_list", memory_list_tool_definition),
     #("memory_prune", memory_prune_tool_definition),
+    #("memory_audit", memory_audit_tool_definition),
   ]
   list.append(curated, debug.named_definitions())
   |> list.filter_map(fn(pair) {
@@ -888,6 +889,8 @@ fn dispatch_tool_call(
       handle_memory_list(id, arguments)
     Ok(#("memory_prune", arguments)) ->
       handle_memory_prune(id, arguments)
+    Ok(#("memory_audit", arguments)) ->
+      handle_memory_audit(id, arguments)
 
     Ok(#(name, arguments)) ->
       case debug.dispatch(pool, name, arguments) {
@@ -3512,6 +3515,58 @@ fn memory_prune_tool_definition() -> Json {
   ])
 }
 
+fn memory_audit_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("memory_audit")),
+    #(
+      "description",
+      json.string(
+        "Report dumping-ground signals across both memory layers: stale "
+          <> "entries (last_accessed older than stale_threshold_days, default "
+          <> "30) and high-similarity duplicate candidates (Jaccard >= 0.5 on "
+          <> "name-tokens or description-tokens). Use before hitting quotas to "
+          <> "decide what to prune/merge.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "stale_threshold_days",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Days since last_accessed at which an entry counts as "
+                      <> "stale. Default 30.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "include_duplicates",
+              json.object([
+                #("type", json.string("boolean")),
+                #(
+                  "description",
+                  json.string(
+                    "Run the O(N²) duplicate-candidate scan. Default true.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+  ])
+}
+
 fn handle_memory_save(id: Id, arguments: Option(Dynamic)) -> String {
   case decode_memory_save_arguments(arguments) {
     Error(reason) ->
@@ -3601,6 +3656,83 @@ fn handle_memory_prune(id: Id, arguments: Option(Dynamic)) -> String {
             tool_text_result(memory.describe_error(err), True)
           })
       }
+  }
+}
+
+fn handle_memory_audit(id: Id, arguments: Option(Dynamic)) -> String {
+  let #(threshold, include_dupes) = decode_memory_audit_arguments(arguments)
+  case memory.audit(threshold, include_dupes) {
+    Ok(report) ->
+      success_response(id, fn() {
+        tool_text_result(
+          json.to_string(audit_report_to_json(report)),
+          False,
+        )
+      })
+    Error(err) ->
+      success_response(id, fn() {
+        tool_text_result(memory.describe_error(err), True)
+      })
+  }
+}
+
+fn audit_report_to_json(r: memory.AuditReport) -> Json {
+  json.object([
+    #(
+      "stale",
+      json.preprocessed_array(list.map(r.stale, stale_entry_to_json)),
+    ),
+    #(
+      "duplicate_candidates",
+      json.preprocessed_array(list.map(r.duplicates, duplicate_pair_to_json)),
+    ),
+    #("stale_count", json.int(list.length(r.stale))),
+    #("duplicate_count", json.int(list.length(r.duplicates))),
+  ])
+}
+
+fn stale_entry_to_json(s: memory.StaleEntry) -> Json {
+  json.object([
+    #("name", json.string(s.name)),
+    #("type", json.string(s.type_)),
+    #("layer", json.string(s.layer)),
+    #("last_accessed", json.string(s.last_accessed)),
+    #("days_since_access", json.int(s.days_since_access)),
+  ])
+}
+
+fn duplicate_pair_to_json(d: memory.DuplicatePair) -> Json {
+  json.object([
+    #("a", json.string(d.a)),
+    #("b", json.string(d.b)),
+    #("similarity", json.float(d.similarity)),
+  ])
+}
+
+fn decode_memory_audit_arguments(
+  arguments: Option(Dynamic),
+) -> #(Int, Bool) {
+  case arguments {
+    None -> #(30, True)
+    Some(args) -> {
+      let decoder = {
+        use threshold <- decode.optional_field(
+          "stale_threshold_days",
+          30,
+          decode.int,
+        )
+        use include_dupes <- decode.optional_field(
+          "include_duplicates",
+          True,
+          decode.bool,
+        )
+        decode.success(#(threshold, include_dupes))
+      }
+      case decode.run(args, decoder) {
+        Ok(pair) -> pair
+        Error(_) -> #(30, True)
+      }
+    }
   }
 }
 

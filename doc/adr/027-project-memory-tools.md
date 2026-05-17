@@ -154,7 +154,7 @@ Strictness is the feature. `memory_save` is the canonical writer
 way to produce non-conforming files is out-of-band hand-edits.
 Those fail loudly at read time, easy to fix.
 
-### 5. Tool surface (four)
+### 5. Tool surface (five)
 
 **`memory_save(type, name, description, content)`**
 - Validates type ∈ {user, project, feedback, reference}
@@ -179,6 +179,20 @@ Those fail loudly at read time, easy to fix.
 - Explicit delete. No batch deletes — one-at-a-time discourages
   accidental bulk wipes.
 - Removes file + updates `MEMORY.md`.
+
+**`memory_audit(stale_threshold_days?: int=30, include_duplicates?: bool=true)`**
+- Walks both layers and reports dumping-ground signals before
+  quotas hard-fire. Surfaces:
+  - `stale` — entries whose `last_accessed` is older than
+    `stale_threshold_days`. Returns `{name, type, layer,
+    last_accessed, days_since_access}` sorted by
+    `days_since_access` descending.
+  - `duplicate_candidates` — pairs whose name-tokens (split on
+    `-`) or description-tokens (split on non-alphanumeric) hit
+    Jaccard ≥ 0.5. Returns `{a, b, similarity}` with names in
+    alphabetic order, sorted by similarity descending.
+- `include_duplicates=false` skips the O(N²) dup scan.
+- LLM decides keep / merge / prune from the report.
 
 ### 6. Anti-dumping discipline
 
@@ -467,17 +481,34 @@ Rejected because:
 - Cross-client portability is the explicit reason for this layer;
   reusing a single-client format defeats it.
 
+## Shipped in v1 (originally listed as future ideas)
+
+### `memory_audit` — shipped
+
+Reports stale memories (`last_accessed` older than N days, default
+30) and duplicate candidates (Jaccard ≥ 0.5 on name-tokens or
+description-tokens). LLM decides keep / merge / prune. Surfaces
+the dumping-ground problem before quota hard-caps fire.
+
+Schema:
+`memory_audit(stale_threshold_days?: int=30, include_duplicates?: bool=true)`
+→ `{stale: [{name, type, layer, last_accessed, days_since_access}],
+duplicate_candidates: [{a, b, similarity}], stale_count,
+duplicate_count}`. Sorted deterministically: stale by
+`days_since_access` desc; duplicates by similarity desc then
+alphabetic.
+
+### Per-user vs per-project scoping — shipped
+
+Two-layer routing baked into v1 storage to avoid a breaking
+migration later. `user`-type memories live at
+`~/.pharos/memories/user/`, project / feedback / reference at
+`.pharos/memories/` under the project root. `memory_get` checks
+the project layer first, falls back to user. Both honour
+`PHAROS_MEMORY_ROOT` / `PHAROS_USER_MEMORY_ROOT` env overrides for
+test/dogfood isolation.
+
 ## Future ideas (deferred for v1, kept for the roadmap)
-
-### `memory_audit`
-
-Report stale memories (`last_accessed` > N days ago) or duplicate
-candidates (high name similarity, overlapping descriptions). LLM
-decides keep / merge / prune. Surfaces the dumping-ground problem
-before quota hard-caps fire.
-
-Schema: `memory_audit(stale_threshold_days?, include_duplicates?)`
-returns `{stale: [...], duplicate_candidates: [[a, b, similarity], ...]}`.
 
 ### `memory_repair`
 
@@ -522,15 +553,6 @@ prune the least-recently-used memory of that type, surface the
 deletion in the response, let the LLM decide whether to restore.
 Trades discipline for ergonomics — only worth if quota friction
 becomes a real complaint.
-
-### Per-user vs per-project scoping
-
-Today every memory is project-local (lives in the repo). Some
-content (user role, preferred languages) is more naturally
-per-user. Future: `~/.pharos/memories/user/*.md` global layer
-alongside the `.pharos/memories/` project layer. `memory_get`
-checks project layer first, falls back to user layer. Lets
-team-shared and personal preferences coexist without mixing.
 
 ## References
 

@@ -91,7 +91,8 @@ pub fn category_for(name: String) -> ToolCategory {
     "memory_save"
     | "memory_get"
     | "memory_list"
-    | "memory_prune" -> CatMemory
+    | "memory_prune"
+    | "memory_audit" -> CatMemory
 
     // -- debug (pharos runtime introspection + sanity; opt-in
     //    via `tools = ["default", "debug"]` or explicit names) --

@@ -13,10 +13,13 @@
 ////   PHAROS_USER_MEMORY_ROOT  — user layer override
 
 import gleam/bit_array
+import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/result
+import gleam/set
 import gleam/string
 import pharos/tools/memory_frontmatter.{type Frontmatter, Frontmatter}
 
@@ -42,6 +45,37 @@ pub type MemoryError {
   StorageError(reason: String)
   FrontmatterError(reason: String)
 }
+
+/// One stale memory entry — `last_accessed` lies beyond the audit
+/// threshold. `days_since_access` is computed at audit time.
+pub type StaleEntry {
+  StaleEntry(
+    name: String,
+    type_: String,
+    layer: String,
+    last_accessed: String,
+    days_since_access: Int,
+  )
+}
+
+/// One candidate duplicate pair. `similarity` is `max(name_jaccard,
+/// description_jaccard)` in `[0.0, 1.0]`. Pairs are emitted with
+/// `a.name < b.name` (alphabetic) so the same pair never appears
+/// twice.
+pub type DuplicatePair {
+  DuplicatePair(a: String, b: String, similarity: Float)
+}
+
+pub type AuditReport {
+  AuditReport(stale: List(StaleEntry), duplicates: List(DuplicatePair))
+}
+
+/// Similarity threshold for `audit`'s duplicate detection. Pairs at or
+/// above this overlap on either name-tokens or description-tokens are
+/// flagged. 0.5 empirically catches obvious near-dupes
+/// (`user-role`/`user-roles`, descriptions sharing half their words)
+/// without drowning the LLM in false positives.
+const duplicate_similarity_threshold: Float = 0.5
 
 const known_types = ["user", "project", "feedback", "reference"]
 
@@ -177,6 +211,43 @@ pub fn list_entries(
       string.compare(b.last_accessed, a.last_accessed)
     })
   Ok(sorted)
+}
+
+/// Walk both layers and report dumping-ground signals before quotas
+/// hard-fire. `stale_threshold_days` flags entries whose
+/// `last_accessed` lies further in the past than the threshold;
+/// `include_duplicates` toggles the O(N²) name+description similarity
+/// pass. Both lists are sorted deterministically (stale by
+/// `days_since_access` descending; duplicates by similarity
+/// descending, then by `a.name` ascending).
+pub fn audit(
+  stale_threshold_days: Int,
+  include_duplicates: Bool,
+) -> Result(AuditReport, MemoryError) {
+  let entries =
+    list.append(collect_layer("project"), collect_layer("user"))
+  let stale =
+    entries
+    |> list.filter_map(fn(e) {
+      let days = days_since_iso8601_ffi(e.last_accessed)
+      case days >= stale_threshold_days {
+        False -> Error(Nil)
+        True ->
+          Ok(StaleEntry(
+            name: e.name,
+            type_: e.type_,
+            layer: e.layer,
+            last_accessed: e.last_accessed,
+            days_since_access: days,
+          ))
+      }
+    })
+    |> list.sort(fn(a, b) { int.compare(b.days_since_access, a.days_since_access) })
+  let duplicates = case include_duplicates {
+    False -> []
+    True -> compute_duplicates(entries)
+  }
+  Ok(AuditReport(stale: stale, duplicates: duplicates))
 }
 
 /// Delete a memory by name.
@@ -488,6 +559,99 @@ fn update_index(layer: String) -> Result(Nil, MemoryError) {
   }
 }
 
+// -- Audit similarity --------------------------------------------------
+
+/// All-pairs (i<j) similarity scan over `entries`. Tokenises name and
+/// description, computes Jaccard on each, keeps `max(name_j,
+/// desc_j)`. Pairs at or above `duplicate_similarity_threshold` are
+/// emitted with names in alphabetical order. The result is sorted by
+/// similarity descending, then alphabetic name pair ascending.
+fn compute_duplicates(entries: List(MemoryEntry)) -> List(DuplicatePair) {
+  let indexed = list.index_map(entries, fn(e, i) { #(i, e) })
+  list.flat_map(indexed, fn(pair) {
+    let #(i, a) = pair
+    list.filter_map(indexed, fn(other) {
+      let #(j, b) = other
+      case i < j {
+        False -> Error(Nil)
+        True -> {
+          let name_sim =
+            jaccard(tokenize_name(a.name), tokenize_name(b.name))
+          let desc_sim =
+            jaccard(tokenize_text(a.description), tokenize_text(b.description))
+          let sim = float.max(name_sim, desc_sim)
+          case sim >=. duplicate_similarity_threshold {
+            False -> Error(Nil)
+            True -> {
+              let #(lo, hi) = case string.compare(a.name, b.name) {
+                order.Lt -> #(a.name, b.name)
+                _ -> #(b.name, a.name)
+              }
+              Ok(DuplicatePair(a: lo, b: hi, similarity: sim))
+            }
+          }
+        }
+      }
+    })
+  })
+  |> list.sort(fn(a, b) {
+    case float.compare(b.similarity, a.similarity) {
+      order.Eq -> string.compare(a.a, b.a)
+      other -> other
+    }
+  })
+}
+
+fn jaccard(a: List(String), b: List(String)) -> Float {
+  let sa = set.from_list(a)
+  let sb = set.from_list(b)
+  let union = set.size(set.union(sa, sb))
+  case union {
+    0 -> 0.0
+    _ -> {
+      let inter = set.size(set.intersection(sa, sb))
+      int.to_float(inter) /. int.to_float(union)
+    }
+  }
+}
+
+fn tokenize_name(name: String) -> List(String) {
+  name
+  |> string.lowercase
+  |> string.split("-")
+  |> list.filter(fn(t) { t != "" })
+}
+
+fn tokenize_text(text: String) -> List(String) {
+  text
+  |> string.lowercase
+  |> string.to_graphemes
+  |> list.map(fn(g) {
+    case is_alnum(g) {
+      True -> g
+      False -> " "
+    }
+  })
+  |> string.concat
+  |> string.split(" ")
+  |> list.filter(fn(t) { string.length(t) > 1 })
+}
+
+fn is_alnum(g: String) -> Bool {
+  case string.length(g) == 1 {
+    False -> False
+    True -> {
+      let is_letter =
+        string.lowercase(g) != string.uppercase(g)
+      let is_digit = case int.parse(g) {
+        Ok(_) -> True
+        Error(_) -> False
+      }
+      is_letter || is_digit
+    }
+  }
+}
+
 // -- env ----------------------------------------------------------------
 
 fn getenv(key: String) -> Option(String) {
@@ -525,3 +689,6 @@ fn home_dir_ffi() -> String
 
 @external(erlang, "pharos_fs_ffi", "getenv")
 fn getenv_ffi(key: String) -> Result(String, Nil)
+
+@external(erlang, "pharos_fs_ffi", "days_since_iso8601")
+fn days_since_iso8601_ffi(iso: String) -> Int

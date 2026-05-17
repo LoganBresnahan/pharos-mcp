@@ -962,8 +962,12 @@ def run_memory_probe(transport: Transport,
     "(memory)" lang key in rows so the report verifier can separate
     the count from per-language tooling.
     """
-    label = "pass-probe"
-    user_label = "pass-probe-user"
+    # Labels chosen so the audit cells start from a clean state — name
+    # tokens are disjoint across the three so the dup scan reports 0
+    # before we seed an intentional near-duplicate at cell 8b.
+    label = "dogfood-pass-probe"
+    user_label = "cross-user-entry"
+    dup_label = "another-test-entry"
 
     def call(tool: str, args: dict, expected_error: bool = False) -> tuple[bool, str]:
         nonlocal rid
@@ -974,6 +978,28 @@ def run_memory_probe(transport: Transport,
         if expected_error:
             ok = not ok
         return ok, summary
+
+    def call_with_payload(tool: str, args: dict) -> tuple[bool, str, dict | None]:
+        """Run a tool call and parse its text body as JSON. Returns
+        (ok_from_classify, summary, parsed_body | None). Body is None
+        if the response isn't a JSON-document or the call failed."""
+        nonlocal rid
+        rid += 1
+        ok, summary, result = call_one(
+            transport, rid, tool, args, timeout_s=15,
+        )
+        body = None
+        if ok and result is not None:
+            try:
+                text = "".join(
+                    c.get("text", "")
+                    for c in result.get("content", [])
+                    if c.get("type") == "text"
+                )
+                body = json.loads(text)
+            except (ValueError, TypeError):
+                body = None
+        return ok, summary, body
 
     print("\n=== memory tools ===", flush=True)
 
@@ -1038,6 +1064,79 @@ def run_memory_probe(transport: Transport,
     rows.append(("(memory)", "memory_list (cross-layer)", ok, s))
     print(f"  {'PASS' if ok else 'FAIL'} memory_list (cross-layer): {s}", flush=True)
 
+    # 8a. audit on fresh saves — every entry's last_accessed is < 30 days
+    # old, descriptions are distinct → expect stale=0 and duplicates=0.
+    ok, s, body = call_with_payload("memory_audit", {})
+    ok_audit_clean = (
+        ok and body is not None
+        and body.get("stale_count") == 0
+        and body.get("duplicate_count") == 0
+    )
+    rows.append(("(memory)", "memory_audit (clean)", ok_audit_clean,
+                 s if ok_audit_clean else f"{s} body={body}"))
+    print(
+        f"  {'PASS' if ok_audit_clean else 'FAIL'} memory_audit (clean): "
+        f"{body if body is not None else s}", flush=True,
+    )
+
+    # 8b. seed a near-duplicate description so the dup scan has something
+    # to flag on the next call.
+    ok, s = call("memory_save", {
+        "type": "project",
+        "name": dup_label,
+        "description": "overwritten",
+        "content": "near-dup body",
+    })
+    rows.append(("(memory)", "memory_save dup-seed", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_save dup-seed: {s}", flush=True)
+
+    # 8c. audit again — Jaccard on description tokens should now hit the
+    # 0.5 threshold for (pass-probe, pass-probe-dup).
+    ok, s, body = call_with_payload("memory_audit", {})
+    ok_audit_dup = (
+        ok and body is not None
+        and (body.get("duplicate_count") or 0) >= 1
+    )
+    rows.append(("(memory)", "memory_audit (dup detected)", ok_audit_dup,
+                 s if ok_audit_dup else f"{s} body={body}"))
+    print(
+        f"  {'PASS' if ok_audit_dup else 'FAIL'} memory_audit (dup detected): "
+        f"{body if body is not None else s}", flush=True,
+    )
+
+    # 8d. include_duplicates=false skips the O(N²) pass — dup count must
+    # be 0 regardless of state.
+    ok, s, body = call_with_payload("memory_audit", {"include_duplicates": False})
+    ok_audit_skip = (
+        ok and body is not None
+        and body.get("duplicate_count") == 0
+    )
+    rows.append(("(memory)", "memory_audit (no dup scan)", ok_audit_skip,
+                 s if ok_audit_skip else f"{s} body={body}"))
+    print(
+        f"  {'PASS' if ok_audit_skip else 'FAIL'} memory_audit (no dup scan): "
+        f"{body if body is not None else s}", flush=True,
+    )
+
+    # 8e. stale_threshold_days=0 flags everything — confirms threshold
+    # plumbing reaches the FFI.
+    ok, s, body = call_with_payload("memory_audit", {"stale_threshold_days": 0})
+    ok_audit_stale = (
+        ok and body is not None
+        and (body.get("stale_count") or 0) >= 1
+    )
+    rows.append(("(memory)", "memory_audit (threshold=0)", ok_audit_stale,
+                 s if ok_audit_stale else f"{s} body={body}"))
+    print(
+        f"  {'PASS' if ok_audit_stale else 'FAIL'} memory_audit (threshold=0): "
+        f"{body if body is not None else s}", flush=True,
+    )
+
+    # 8f. clean up the dup-seed before resuming the original cell ordering.
+    ok, s = call("memory_prune", {"name": dup_label})
+    rows.append(("(memory)", "memory_prune dup-seed", ok, s))
+    print(f"  {'PASS' if ok else 'FAIL'} memory_prune dup-seed: {s}", flush=True)
+
     # 9. prune project entry
     ok, s = call("memory_prune", {"name": label})
     rows.append(("(memory)", "memory_prune project", ok, s))
@@ -1057,7 +1156,7 @@ def run_memory_probe(transport: Transport,
 
 
 def run_pass(transport: Transport, filter_langs: list[str] | None,
-             skip: set[str], profile: str
+             skip: set[str], profile: str, memory_only: bool = False
              ) -> list[tuple[str, str, bool, str]]:
     """Returns [(lang, tool, pass, summary), ...]."""
     if not transport.initialize():
@@ -1070,9 +1169,13 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
     # ADR-027 memory tools: sequential chain run once at the start of
     # the pass (not per-language). Skipped when filter_langs is set —
     # the language filter implies the operator wants per-lang focus,
-    # not the global memory probe.
-    if not filter_langs:
+    # not the global memory probe. `--memory-only` runs just the probe
+    # and exits before the per-language loop.
+    if not filter_langs or memory_only:
         rid = run_memory_probe(transport, rows, rid)
+    if memory_only:
+        transport.close()
+        return rows
 
     targets = TARGETS
     if filter_langs:
@@ -1449,6 +1552,10 @@ def main():
     ap.add_argument("--skip", default="",
                     help="comma-separated langs to skip. Useful for slow LSPs "
                          "(e.g. `--skip perl,ruby`). Recorded as 'skipped' in report.")
+    ap.add_argument("--memory-only", action="store_true",
+                    help="run only the ADR-027 memory probe; skip every "
+                         "per-language fixture. Useful for verifying memory "
+                         "tool changes without 20+ minute LSP setup cost.")
     ap.add_argument("--label", default="pharos-dev",
                     help="pass label written into the report header")
     ap.add_argument("--out", default=DEFAULT_REPORT,
@@ -1520,7 +1627,8 @@ def main():
               f"(every {args.pool_trace_every}s)", flush=True)
 
     try:
-        rows = run_pass(transport, args.languages or None, skip, effective_profile)
+        rows = run_pass(transport, args.languages or None, skip,
+                        effective_profile, memory_only=args.memory_only)
     except SystemExit:
         raise
     except BaseException:
