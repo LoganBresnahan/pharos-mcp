@@ -366,9 +366,10 @@ fn timeout_ms_property() -> #(String, Json) {
       #(
         "description",
         json.string(
-          "Per-call timeout in ms. Falls back to per-tool default "
-            <> "(overridable in pharos.toml). Raise when LSP is "
-            <> "cold-indexing or workspace is large.",
+          "Per-call timeout in milliseconds. Falls back to the "
+            <> "per-tool default (overridable in pharos.toml). Pass "
+            <> "a larger value when the LSP is still cold-indexing "
+            <> "or the workspace is unusually large.",
         ),
       ),
     ]),
@@ -387,8 +388,8 @@ fn position_arg_schema() -> Json {
             #(
               "description",
               json.string(
-                "file:// URI of source file (e.g. "
-                  <> "file:///home/user/project/src/main.rs).",
+                "file:// URI of the source file. "
+                  <> "Example: file:///home/user/project/src/main.rs",
               ),
             ),
           ]),
@@ -400,7 +401,8 @@ fn position_arg_schema() -> Json {
             #(
               "description",
               json.string(
-                "Line, 0-based (editors show 1-based; subtract 1).",
+                "Zero-based line number. Editor UIs show lines as "
+                  <> "1-based; subtract 1 when passing here.",
               ),
             ),
           ]),
@@ -411,7 +413,9 @@ fn position_arg_schema() -> Json {
             #("type", json.string("integer")),
             #(
               "description",
-              json.string("UTF-16 code-unit offset on line, 0-based."),
+              json.string(
+                "Zero-based UTF-16 code-unit offset within the line.",
+              ),
             ),
           ]),
         ),
@@ -432,10 +436,11 @@ fn hover_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Hover info at cursor (docs, signature, type). Returns Hover "
-          <> "or null. Use to read doc strings or check a type without "
-          <> "loading the source file. Position: line 0-based, "
-          <> "character UTF-16. (LSP: textDocument/hover)",
+        "Returns hover information (docs, signature, type) at the "
+          <> "cursor as Hover or null. Use this to read a doc string "
+          <> "or check a type without loading the whole source file. "
+          <> "Position: line 0-based, character UTF-16. "
+          <> "(LSP: textDocument/hover)",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -448,12 +453,13 @@ fn goto_definition_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Symbol definition lookup at cursor. Returns Location, "
-          <> "Location[], LocationLink[], or null. Use when name "
-          <> "may appear in multiple files — respects scope/shadowing. "
-          <> "Grep returns text matches; this returns the language-"
-          <> "aware definition. Position: line 0-based, character "
-          <> "UTF-16. (LSP: textDocument/definition)",
+        "Returns the location where a symbol is defined as Location, "
+          <> "Location[], LocationLink[], or null. Use this when a "
+          <> "name might appear in multiple files — it respects "
+          <> "scope and shadowing. Grep returns text matches; this "
+          <> "returns the language-aware definition for the symbol "
+          <> "at the cursor. Position: line 0-based, character UTF-16. "
+          <> "(LSP: textDocument/definition)",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -466,13 +472,13 @@ fn find_references_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "All references to symbol at cursor. Returns Location[]. "
-          <> "Use to count call sites or list callers across files. "
-          <> "Beats grep when refs span files or when same name "
-          <> "appears in unrelated scopes. `include_declaration` "
-          <> "(default true) includes the definition site. Position: "
-          <> "line 0-based, character UTF-16. "
-          <> "(LSP: textDocument/references)",
+        "Returns every reference to the symbol at the cursor as a "
+          <> "Location[]. Use this to count call sites or list callers "
+          <> "across files. It beats grep when references span files "
+          <> "or when the same name appears in unrelated scopes. "
+          <> "`include_declaration` (default true) includes the "
+          <> "definition site. Position: line 0-based, character "
+          <> "UTF-16. (LSP: textDocument/references)",
       ),
     ),
     #(
@@ -501,7 +507,8 @@ fn find_references_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "Include declaration site in results. Default true.",
+                    "Whether to include the definition site in the "
+                      <> "results. Defaults to true.",
                   ),
                 ),
               ]),
@@ -512,7 +519,9 @@ fn find_references_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Per-call timeout in ms. Default 60000."),
+                  json.string(
+                    "Per-call timeout in milliseconds. Default 60000.",
+                  ),
                 ),
               ]),
             ),
@@ -533,10 +542,11 @@ fn document_symbols_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Raw documentSymbol tree. Returns DocumentSymbol[] "
-          <> "(hierarchical) or SymbolInformation[] (flat) — depends "
-          <> "on server. For LLM navigation prefer "
-          <> "get_symbols_overview (curated, smaller). "
+        "Returns the raw document-symbol tree as DocumentSymbol[] "
+          <> "(hierarchical) or SymbolInformation[] (flat), depending "
+          <> "on the server. For LLM-facing navigation, prefer "
+          <> "`get_symbols_overview` — it returns the same data "
+          <> "curated and smaller. "
           <> "(LSP: textDocument/documentSymbol)",
       ),
     ),
@@ -566,12 +576,13 @@ fn workspace_symbols_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Search workspace for symbols matching `query`. Returns "
-          <> "SymbolInformation[] or WorkspaceSymbol[] up to `limit` "
-          <> "(default 20). Use when you know the name but not the "
-          <> "file. `workspace_uri_hint` = any file in workspace or "
-          <> "the root URI; pass `language` when hint is a directory. "
-          <> "(LSP: workspace/symbol)",
+        "Searches the workspace for symbols whose names match "
+          <> "`query`. Returns SymbolInformation[] or "
+          <> "WorkspaceSymbol[] up to `limit` (default 20). Use this "
+          <> "when you know the name but not the file. "
+          <> "`workspace_uri_hint` can be any file in the workspace "
+          <> "or the workspace root URI; pass `language` when the "
+          <> "hint is a directory. (LSP: workspace/symbol)",
       ),
     ),
     #(
@@ -600,8 +611,8 @@ fn workspace_symbols_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "Substring match on symbol names. Empty = all "
-                      <> "symbols (potentially many).",
+                    "Substring to match against symbol names. Empty "
+                      <> "string returns all symbols (potentially many).",
                   ),
                 ),
               ]),
@@ -612,7 +623,7 @@ fn workspace_symbols_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Max symbols. Default 20."),
+                  json.string("Maximum symbols to return. Default 20."),
                 ),
               ]),
             ),
@@ -623,9 +634,11 @@ fn workspace_symbols_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "Language id (e.g. rust, go, typescript, python). "
-                      <> "Required when hint is a directory URI; else "
-                      <> "inferred from extension.",
+                    "Optional language id (e.g. `rust`, `go`, "
+                      <> "`typescript`, `python`). Required when "
+                      <> "`workspace_uri_hint` is a directory URI; "
+                      <> "otherwise inferred from the URI's file "
+                      <> "extension.",
                   ),
                 ),
               ]),
@@ -648,10 +661,11 @@ fn get_diagnostics_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Diagnostics (errors/warnings) for a file. Returns "
-          <> "Diagnostic[]. Use to count issues, read first error, "
-          <> "or surface compiler warnings. Some servers are "
-          <> "pull-mode-only and return NoDiagnosticsObserved. "
+        "Returns diagnostics (errors, warnings, hints) for a file "
+          <> "as Diagnostic[]. Use this to count issues, read the "
+          <> "first error, or surface compiler warnings. Some "
+          <> "servers are pull-mode-only and may return "
+          <> "NoDiagnosticsObserved when nothing has been published. "
           <> "(LSP: textDocument/publishDiagnostics drain)",
       ),
     ),
@@ -668,7 +682,9 @@ fn get_diagnostics_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string("file:// URI of source file to inspect."),
+                  json.string(
+                    "file:// URI of the source file to inspect.",
+                  ),
                 ),
               ]),
             ),
@@ -679,9 +695,11 @@ fn get_diagnostics_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "Wait for diagnostics after LSP handshake. Default "
-                      <> "20000ms (gopls/rust-analyzer take 10-15s "
-                      <> "cold-indexing).",
+                    "How long to wait for diagnostics after the "
+                      <> "LSP initialize handshake. Defaults to "
+                      <> "20000ms — gopls and rust-analyzer commonly "
+                      <> "take 10–15s on cold workspaces before "
+                      <> "emitting the first publishDiagnostics.",
                   ),
                 ),
               ]),
@@ -700,8 +718,9 @@ fn echo_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Echo message back as text content. Smoke-test for MCP "
-          <> "plumbing. No LSP involved.",
+        "Echoes the supplied message back as a text content block. "
+          <> "Smoke-test tool for verifying MCP plumbing; no LSP "
+          <> "involved.",
       ),
     ),
     #(
@@ -717,7 +736,7 @@ fn echo_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string("Message to echo verbatim."),
+                  json.string("The message to echo back verbatim."),
                 ),
               ]),
             ),
@@ -1600,10 +1619,10 @@ fn goto_type_definition_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Type definition for symbol at cursor. Returns Location of "
-          <> "the *type* (not the symbol). Same shape as "
-          <> "goto_definition. Use to navigate from a variable to "
-          <> "its type declaration. Position: line 0-based, "
+        "Returns the location of the *type* of the symbol at the "
+          <> "cursor (not the symbol itself). Same shape as "
+          <> "`goto_definition`. Use this to navigate from a variable "
+          <> "to its type declaration. Position: line 0-based, "
           <> "character UTF-16. (LSP: textDocument/typeDefinition)",
       ),
     ),
@@ -1617,11 +1636,12 @@ fn goto_implementation_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Implementations of trait/interface/method at cursor. "
-          <> "Returns up to `limit` (default 50) Location[]. Use to "
-          <> "count or list impls — beats grep when trait method "
-          <> "names collide with unrelated symbols. Position: line "
-          <> "0-based, character UTF-16. "
+        "Returns up to `limit` (default 50) implementation sites "
+          <> "for the trait or interface method at the cursor as a "
+          <> "Location[]. Use this to count or list implementations "
+          <> "— it beats grep when trait method names collide with "
+          <> "unrelated symbols elsewhere in the workspace. Position: "
+          <> "line 0-based, character UTF-16. "
           <> "(LSP: textDocument/implementation)",
       ),
     ),
@@ -1638,7 +1658,7 @@ fn goto_implementation_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string("file:// URI of source file."),
+                  json.string("file:// URI of the source file."),
                 ),
               ]),
             ),
@@ -1648,7 +1668,7 @@ fn goto_implementation_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Line, 0-based."),
+                  json.string("Zero-based line number."),
                 ),
               ]),
             ),
@@ -1658,7 +1678,9 @@ fn goto_implementation_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("UTF-16 character offset on line, 0-based."),
+                  json.string(
+                    "Zero-based UTF-16 character offset on the line.",
+                  ),
                 ),
               ]),
             ),
@@ -1668,7 +1690,10 @@ fn goto_implementation_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Max sites. Default 50."),
+                  json.string(
+                    "Maximum number of implementation sites to "
+                      <> "return. Default 50.",
+                  ),
                 ),
               ]),
             ),
@@ -1694,10 +1719,10 @@ fn signature_help_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Signature info while typing inside call parens. Returns "
-          <> "SignatureHelp or null. Position: cursor inside the "
-          <> "arg list, line 0-based, character UTF-16. "
-          <> "(LSP: textDocument/signatureHelp)",
+        "Returns signature information for a function being typed, "
+          <> "as SignatureHelp or null. Place the cursor inside the "
+          <> "call's argument list. Position: line 0-based, character "
+          <> "UTF-16. (LSP: textDocument/signatureHelp)",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1710,11 +1735,12 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Prepare call-hierarchy at cursor. Returns "
-          <> "CallHierarchyItem[]. Pass items into "
-          <> "call_hierarchy_incoming_calls / outgoing_calls. "
-          <> "Position: line 0-based, character UTF-16. -32601 if "
-          <> "server lacks callHierarchyProvider. "
+        "Prepares the call-hierarchy at the cursor. Returns "
+          <> "CallHierarchyItem[] to feed into "
+          <> "`call_hierarchy_incoming_calls` or "
+          <> "`call_hierarchy_outgoing_calls`. Returns -32601 if the "
+          <> "server does not advertise callHierarchyProvider. "
+          <> "Position: line 0-based, character UTF-16. "
           <> "(LSP: textDocument/prepareCallHierarchy)",
       ),
     ),
@@ -1725,9 +1751,10 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
 fn call_hierarchy_incoming_calls_tool_definition() -> Json {
   call_hierarchy_calls_tool_definition(
     "call_hierarchy_incoming_calls",
-    "Who calls into the given function. Takes a CallHierarchyItem "
-      <> "from call_hierarchy_prepare. Returns CallHierarchyIncomingCall[]. "
-      <> "Use to count or list callers as named units. "
+    "Returns the functions that call into the given item as "
+      <> "CallHierarchyIncomingCall[]. Takes a CallHierarchyItem from "
+      <> "a prior `call_hierarchy_prepare` call. Use this to count "
+      <> "or list callers as named units rather than bare locations. "
       <> "(LSP: callHierarchy/incomingCalls)",
   )
 }
@@ -1735,9 +1762,10 @@ fn call_hierarchy_incoming_calls_tool_definition() -> Json {
 fn call_hierarchy_outgoing_calls_tool_definition() -> Json {
   call_hierarchy_calls_tool_definition(
     "call_hierarchy_outgoing_calls",
-    "What the given function calls. Takes a CallHierarchyItem "
-      <> "from call_hierarchy_prepare. Returns CallHierarchyOutgoingCall[]. "
-      <> "Use to map a function's outbound dependencies. "
+    "Returns the functions that the given item calls as "
+      <> "CallHierarchyOutgoingCall[]. Takes a CallHierarchyItem "
+      <> "from a prior `call_hierarchy_prepare` call. Use this to "
+      <> "map a function's outbound dependencies. "
       <> "(LSP: callHierarchy/outgoingCalls)",
   )
 }
@@ -1767,8 +1795,10 @@ fn call_hierarchy_calls_tool_definition(
                 #(
                   "description",
                   json.string(
-                    "CallHierarchyItem from call_hierarchy_prepare. "
-                    <> "Round-trip verbatim — pharos does not re-derive.",
+                    "A CallHierarchyItem previously returned by "
+                    <> "`call_hierarchy_prepare`. Round-trip the "
+                    <> "object verbatim — pharos does not re-derive "
+                    <> "it from positional arguments.",
                   ),
                 ),
               ]),
@@ -1788,11 +1818,12 @@ fn rename_preview_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Rename preview — never writes. Returns WorkspaceEdit "
-          <> "summary (which files + how many edits). Apply via "
-          <> "apply_workspace_edit. Use to count or inspect a "
-          <> "rename's blast radius. Position: line 0-based, "
-          <> "character UTF-16. (LSP: textDocument/rename)",
+        "Returns a preview of a rename as a WorkspaceEdit summary "
+          <> "(which files would change, how many edits per file). "
+          <> "Never writes — apply via `apply_workspace_edit`. Use "
+          <> "this to count or inspect a rename's blast radius "
+          <> "before committing. Position: line 0-based, character "
+          <> "UTF-16. (LSP: textDocument/rename)",
       ),
     ),
     #(
@@ -1821,7 +1852,7 @@ fn rename_preview_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Line, 0-based."),
+                  json.string("Zero-based line number."),
                 ),
               ]),
             ),
@@ -1831,7 +1862,9 @@ fn rename_preview_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("UTF-16 character offset on line, 0-based."),
+                  json.string(
+                    "Zero-based UTF-16 character offset on the line.",
+                  ),
                 ),
               ]),
             ),
@@ -1841,7 +1874,7 @@ fn rename_preview_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string("New name to substitute everywhere."),
+                  json.string("New name to substitute at every site."),
                 ),
               ]),
             ),
@@ -1868,10 +1901,10 @@ fn format_document_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Format-document preview. Returns TextEdit[] summary. "
+        "Returns the formatter's proposed TextEdit[] summary for "
+          <> "a file. Never writes — apply via `apply_workspace_edit`. "
           <> "Options use LSP defaults (tabSize=4, "
-          <> "insertSpaces=true). Apply via apply_workspace_edit. "
-          <> "(LSP: textDocument/formatting)",
+          <> "insertSpaces=true). (LSP: textDocument/formatting)",
       ),
     ),
     #(
@@ -1887,7 +1920,9 @@ fn format_document_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string("file:// URI of source file to format."),
+                  json.string(
+                    "file:// URI of the source file to format.",
+                  ),
                 ),
               ]),
             ),
@@ -1897,7 +1932,9 @@ fn format_document_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Per-call timeout in ms. Default 30000."),
+                  json.string(
+                    "Per-call timeout in milliseconds. Default 30000.",
+                  ),
                 ),
               ]),
             ),
@@ -1915,11 +1952,13 @@ fn type_hierarchy_prepare_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Prepare type-hierarchy at cursor. Returns "
-          <> "TypeHierarchyItem[]. Pass items to "
-          <> "type_hierarchy_supertypes / subtypes. Position: line "
-          <> "0-based, character UTF-16. Many servers return -32601 "
-          <> "(sparse support). (LSP: textDocument/prepareTypeHierarchy)",
+        "Prepares the type-hierarchy at the cursor. Returns "
+          <> "TypeHierarchyItem[] to feed into "
+          <> "`type_hierarchy_supertypes` or "
+          <> "`type_hierarchy_subtypes`. Many servers return -32601 "
+          <> "(type-hierarchy support is sparse). Position: line "
+          <> "0-based, character UTF-16. "
+          <> "(LSP: textDocument/prepareTypeHierarchy)",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1929,18 +1968,20 @@ fn type_hierarchy_prepare_tool_definition() -> Json {
 fn type_hierarchy_supertypes_tool_definition() -> Json {
   type_hierarchy_calls_tool_definition(
     "type_hierarchy_supertypes",
-    "Parent types (bases, traits implemented) of the type. Takes "
-      <> "a TypeHierarchyItem from type_hierarchy_prepare. Returns "
-      <> "TypeHierarchyItem[]. (LSP: typeHierarchy/supertypes)",
+    "Returns the parent types (bases, traits implemented) of the "
+      <> "given type as TypeHierarchyItem[]. Takes a "
+      <> "TypeHierarchyItem from a prior `type_hierarchy_prepare` "
+      <> "call. (LSP: typeHierarchy/supertypes)",
   )
 }
 
 fn type_hierarchy_subtypes_tool_definition() -> Json {
   type_hierarchy_calls_tool_definition(
     "type_hierarchy_subtypes",
-    "Child types (subclasses, implementors) of the type. Takes a "
-      <> "TypeHierarchyItem from type_hierarchy_prepare. Returns "
-      <> "TypeHierarchyItem[]. (LSP: typeHierarchy/subtypes)",
+    "Returns the child types (subclasses, implementors) of the "
+      <> "given type as TypeHierarchyItem[]. Takes a "
+      <> "TypeHierarchyItem from a prior `type_hierarchy_prepare` "
+      <> "call. (LSP: typeHierarchy/subtypes)",
   )
 }
 
@@ -1965,7 +2006,8 @@ fn type_hierarchy_calls_tool_definition(
                 #(
                   "description",
                   json.string(
-                    "TypeHierarchyItem from type_hierarchy_prepare.",
+                    "A TypeHierarchyItem returned by "
+                    <> "`type_hierarchy_prepare`.",
                   ),
                 ),
               ]),
@@ -1985,10 +2027,12 @@ fn semantic_tokens_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Semantic token classification (syntax highlight + role). "
-          <> "Whole doc when all range ints are 0; else range-scoped. "
-          <> "Returns SemanticTokens; `data` is 5-int-per-token LSP "
-          <> "encoding. Legend in server's initialize capabilities. "
+        "Returns semantic token classifications (syntax highlight + "
+          <> "role) for a file. Returns SemanticTokens; `data` is the "
+          <> "LSP-spec 5-int-per-token encoding. Whole-document mode "
+          <> "when all range ints are 0; otherwise range-scoped. The "
+          <> "legend lives in the server's initialize capabilities; "
+          <> "pharos does not stash it. "
           <> "(LSP: textDocument/semanticTokens/{full,range})",
       ),
     ),
@@ -2005,7 +2049,9 @@ fn semantic_tokens_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string("file:// URI of source file to tokenize."),
+                  json.string(
+                    "file:// URI of the source file to tokenize.",
+                  ),
                 ),
               ]),
             ),
@@ -2016,7 +2062,8 @@ fn semantic_tokens_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "Start line, 0-based. Omit all range fields for "
+                    "Zero-based start line of the range. Omit (along "
+                    <> "with the other range fields) to request "
                     <> "/full instead of /range.",
                   ),
                 ),
@@ -2026,21 +2073,30 @@ fn semantic_tokens_tool_definition() -> Json {
               "start_character",
               json.object([
                 #("type", json.string("integer")),
-                #("description", json.string("UTF-16 start offset, 0-based.")),
+                #(
+                  "description",
+                  json.string("Zero-based UTF-16 start offset."),
+                ),
               ]),
             ),
             #(
               "end_line",
               json.object([
                 #("type", json.string("integer")),
-                #("description", json.string("End line, 0-based.")),
+                #(
+                  "description",
+                  json.string("Zero-based end line of the range."),
+                ),
               ]),
             ),
             #(
               "end_character",
               json.object([
                 #("type", json.string("integer")),
-                #("description", json.string("UTF-16 end offset, 0-based.")),
+                #(
+                  "description",
+                  json.string("Zero-based UTF-16 end offset."),
+                ),
               ]),
             ),
             #(
@@ -2049,7 +2105,9 @@ fn semantic_tokens_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Per-call timeout in ms. Default 15000."),
+                  json.string(
+                    "Per-call timeout in milliseconds. Default 15000.",
+                  ),
                 ),
               ]),
             ),
@@ -2070,10 +2128,11 @@ fn inlay_hints_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Inferred-type and parameter-name hints in a range. "
-          <> "Returns InlayHint[] or null. Use to read inferred "
-          <> "types without writing them out. Returns -32601 if "
-          <> "server lacks inlayHintProvider. Positions: 0-based, "
+        "Returns inferred-type and parameter-name hints for a "
+          <> "range as InlayHint[] or null. Use this to read "
+          <> "inferred types or argument names without committing "
+          <> "them to source. Returns -32601 if the server does not "
+          <> "advertise inlayHintProvider. Positions: 0-based, "
           <> "character UTF-16. (LSP: textDocument/inlayHint)",
       ),
     ),
@@ -2090,7 +2149,7 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string("file:// URI of source file."),
+                  json.string("file:// URI of the source file."),
                 ),
               ]),
             ),
@@ -2100,7 +2159,7 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Range start line, 0-based."),
+                  json.string("Zero-based start line of the range."),
                 ),
               ]),
             ),
@@ -2110,7 +2169,9 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("UTF-16 start offset on start_line, 0-based."),
+                  json.string(
+                    "Zero-based UTF-16 start offset on `start_line`.",
+                  ),
                 ),
               ]),
             ),
@@ -2120,7 +2181,7 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Range end line, 0-based."),
+                  json.string("Zero-based end line of the range."),
                 ),
               ]),
             ),
@@ -2130,7 +2191,9 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("UTF-16 end offset on end_line, 0-based."),
+                  json.string(
+                    "Zero-based UTF-16 end offset on `end_line`.",
+                  ),
                 ),
               ]),
             ),
@@ -2140,7 +2203,9 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string("Per-call timeout in ms. Default 10000."),
+                  json.string(
+                    "Per-call timeout in milliseconds. Default 10000.",
+                  ),
                 ),
               ]),
             ),
@@ -2167,11 +2232,13 @@ fn apply_workspace_edit_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Apply LSP WorkspaceEdit to disk. `dry_run=true` (default) "
-          <> "validates + reports per-file byte delta, no write. "
-          <> "`dry_run=false` commits via atomic rename. Overlapping "
-          <> "edits abort. Character units are UTF-16 codepoints "
-          <> "(BMP-exact; off-by-one on surrogate pairs).",
+        "Applies an LSP WorkspaceEdit to disk. With `dry_run=true` "
+          <> "(default), it validates the edit and reports the "
+          <> "per-file byte delta but writes nothing; with "
+          <> "`dry_run=false`, it commits each file via atomic "
+          <> "rename. Overlapping edits abort the run. Character "
+          <> "units are approximated as Unicode codepoints "
+          <> "(BMP-exact, off-by-one on surrogate pairs).",
       ),
     ),
     #(
@@ -2188,9 +2255,10 @@ fn apply_workspace_edit_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "LSP WorkspaceEdit. Must have `changes` (URI → "
-                    <> "TextEdit[]) or `documentChanges` "
-                    <> "(TextDocumentEdit[]). Plain text only.",
+                    "LSP `WorkspaceEdit` object. Must contain "
+                    <> "`changes` (a map of URI → TextEdit[]) or "
+                    <> "`documentChanges` (TextDocumentEdit[]). "
+                    <> "Plain text edits only.",
                   ),
                 ),
               ]),
@@ -2202,7 +2270,9 @@ fn apply_workspace_edit_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "True (default) validates only; false commits.",
+                    "When true (default), validate but do not "
+                    <> "write. Set to false to actually apply the "
+                    <> "edit.",
                   ),
                 ),
               ]),
@@ -2221,10 +2291,12 @@ fn lsp_request_raw_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Escape hatch — send any (method, params) to LSP picked by "
-          <> "`uri` extension. Returns verbatim JSON. Use for server "
-          <> "extensions or methods pharos doesn't wrap. Position "
-          <> "fields: line 0-based, character UTF-16 code units.",
+        "Escape hatch: sends any (method, params) pair to the LSP "
+          <> "selected by `uri`'s extension and returns the response "
+          <> "as verbatim JSON. Use this for server-specific "
+          <> "extensions or for LSP methods that pharos does not "
+          <> "wrap. When constructing position fields in `params`: "
+          <> "line is 0-based, character is UTF-16 code units.",
       ),
     ),
     #(
@@ -2241,8 +2313,9 @@ fn lsp_request_raw_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "file:// URI inside workspace. Picks LSP by "
-                    <> "extension; file need not be relevant to request.",
+                    "file:// URI of any file in the workspace. "
+                    <> "Used to pick the LSP by extension; the file "
+                    <> "does not have to be relevant to the request.",
                   ),
                 ),
               ]),
@@ -2253,7 +2326,9 @@ fn lsp_request_raw_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string("LSP method (e.g. textDocument/inlayHint)."),
+                  json.string(
+                    "LSP method name, e.g. `textDocument/inlayHint`.",
+                  ),
                 ),
               ]),
             ),
@@ -2266,7 +2341,9 @@ fn lsp_request_raw_tool_definition() -> Json {
                 #("type", json.string("object")),
                 #(
                   "description",
-                  json.string("Method params, sent verbatim."),
+                  json.string(
+                    "Method-specific params object, sent verbatim.",
+                  ),
                 ),
               ]),
             ),
@@ -2292,12 +2369,14 @@ fn code_actions_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Code actions in range (quick fixes, refactors, source "
-          <> "actions). Returns (Command | CodeAction)[]. Use to see "
-          <> "what fixes the LSP suggests for a diagnostic or to "
-          <> "find available refactors. Pharos never auto-executes; "
-          <> "apply via apply_workspace_edit. Positions: 0-based, "
-          <> "character UTF-16. (LSP: textDocument/codeAction)",
+        "Returns the code actions available in a range as a "
+          <> "(Command | CodeAction)[] — quick fixes, refactors, "
+          <> "source actions. Use this to see what fixes the LSP "
+          <> "suggests for a diagnostic or to discover available "
+          <> "refactors. Pharos never auto-executes commands or "
+          <> "auto-applies edits; commit explicit edits via "
+          <> "`apply_workspace_edit`. Positions: 0-based, character "
+          <> "UTF-16. (LSP: textDocument/codeAction)",
       ),
     ),
     #(
@@ -2956,18 +3035,19 @@ fn find_symbol_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Locate symbol by name_path (slash-delimited, e.g. "
-          <> "\"User/authenticate\"). Returns Resolution = "
-          <> "Single(match) | Multiple(matches) | "
-          <> "NotFound(near_misses). Use when you know the name but "
-          <> "not the file, or when grep would find multiple "
-          <> "files with the same identifier and you need scope-"
-          <> "aware disambiguation. Each match carries a SymbolHandle "
-          <> "for chaining into find_referencing_symbols / "
-          <> "edit_at_symbol without a second lookup. `policy` "
-          <> "overrides default AllMatches with: first_match, "
-          <> "closest_scope, strict_single. Beats grep for "
-          <> "kebab/camelCase symbol resolution across files.",
+        "Locates a symbol by `name_path` (slash-delimited, e.g. "
+          <> "\"User/authenticate\"). Returns a Resolution: "
+          <> "`Single(match)` when the name resolves cleanly, "
+          <> "`Multiple(matches)` when several candidates exist for "
+          <> "the caller to pick from, or `NotFound(near_misses)` "
+          <> "with suggestions when the name is unknown. Use this "
+          <> "when you know the name but not the file, or when grep "
+          <> "would surface multiple identifiers and you need "
+          <> "scope-aware disambiguation. Each match carries a "
+          <> "`SymbolHandle` that chains directly into "
+          <> "`find_referencing_symbols` and `edit_at_symbol`. The "
+          <> "`policy` field overrides the default `AllMatches` with "
+          <> "`first_match`, `closest_scope`, or `strict_single`.",
       ),
     ),
     #(
@@ -3018,12 +3098,16 @@ fn get_symbols_overview_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "File outline. Returns (name, kind, line, character, end_line, "
-          <> "end_character, detail, children). Drops locals + lambdas. "
-          <> "Use first for navigation; (line, character) anchors "
-          <> "positional tools (find_references, goto_definition) "
-          <> "directly. Drill with find_symbol when you need a "
-          <> "SymbolHandle for symbol-layer tools.",
+        "Returns a filtered outline of a file as a list of "
+          <> "`(name, kind, line, character, end_line, end_character, "
+          <> "detail, children)` nodes. Block-scope locals and inline "
+          <> "lambdas are dropped. Use this first for navigation: "
+          <> "`(line, character)` anchors positional tools like "
+          <> "`find_references` and `goto_definition` without an extra "
+          <> "`find_symbol` round-trip, and `(end_line, end_character)` "
+          <> "lets you slice the file instead of reading the whole "
+          <> "document. Drill with `find_symbol` when you need a "
+          <> "`SymbolHandle` for symbol-layer tools.",
       ),
     ),
     #(
@@ -3051,11 +3135,15 @@ fn find_referencing_symbols_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Symbols that reference the handle. Projects each call-site "
-          <> "back through documentSymbol so result is the OWNER "
-          <> "(function/class containing the reference), not a bare "
-          <> "location. Handle from prior find_symbol. Use when you "
-          <> "need callers as named units, not coordinates.",
+        "Returns the symbols that reference the given handle as "
+          <> "SymbolMatch[]. Each result is the OWNER symbol (the "
+          <> "function or class containing the reference) rather "
+          <> "than a bare location — pharos projects each "
+          <> "`textDocument/references` location back through "
+          <> "`documentSymbol` to find its containing scope. Takes a "
+          <> "SymbolHandle from a prior `find_symbol` call. Use this "
+          <> "when you need callers as named units, not raw "
+          <> "coordinates.",
       ),
     ),
     #(
@@ -3083,12 +3171,15 @@ fn edit_at_symbol_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "WorkspaceEdit preview targeting symbol from `symbol_handle` "
-          <> "(prior find_symbol). Never writes — returns range + "
-          <> "new_text + diff. Commit via apply_workspace_edit. "
-          <> "`mode`: replace_body (rewrite body, keep signature), "
-          <> "insert_before (prepend above symbol), insert_after "
-          <> "(append below symbol).",
+        "Composes a WorkspaceEdit preview that targets the symbol "
+          <> "identified by `symbol_handle` (returned by a prior "
+          <> "`find_symbol` call). Never writes — returns the "
+          <> "proposed range, new text, and a rendered diff. Commit "
+          <> "via `apply_workspace_edit`. `mode` selects the edit "
+          <> "boundary: `replace_body` rewrites the body while "
+          <> "keeping the signature, `insert_before` prepends "
+          <> "content above the whole symbol, `insert_after` appends "
+          <> "content below.",
       ),
     ),
     #(
@@ -3365,15 +3456,18 @@ fn memory_save_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Save curated memory entry. Cross-client store (any MCP "
-          <> "client reads same files). `type` ∈ {user, project, "
-          <> "feedback, reference}: user → ~/.pharos/memories/user/ "
-          <> "(per-user, not committed); others → .pharos/memories/"
-          <> "<type>/ (in repo). Save: roles, conventions, decisions+"
-          <> "rationale, external pointers. Skip: code patterns, git "
-          <> "history, debug fixes (live in repo/commits). "
-          <> "<private>...</private> blocks stripped. Refuses dup "
-          <> "without overwrite=true.",
+        "Saves a curated memory entry that any MCP client (Claude "
+          <> "Code, Cursor, ChatGPT) can later read. `type` is one of "
+          <> "`user`, `project`, `feedback`, `reference`: `user` "
+          <> "writes to ~/.pharos/memories/user/ (per-user, not "
+          <> "committed); the others write to .pharos/memories/"
+          <> "<type>/ inside the repo. Save things like user roles, "
+          <> "project conventions, decisions with rationale, or "
+          <> "external system pointers. Skip code patterns, git "
+          <> "history, or debugging fixes — those already live in "
+          <> "the repo and commits. `<private>...</private>` blocks "
+          <> "are stripped before write. Refuses duplicates unless "
+          <> "`overwrite=true`.",
       ),
     ),
     #(
@@ -3411,9 +3505,10 @@ fn memory_get_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Fetch memory by name. Project layer first, user fallback. "
-          <> "Bumps last_accessed. Returns NotFound with near-misses "
-          <> "when name absent.",
+        "Fetches a memory entry by name. Checks the project layer "
+          <> "first, then falls back to the user layer. Bumps "
+          <> "`last_accessed`. Returns NotFound with near-miss "
+          <> "suggestions when the name is absent.",
       ),
     ),
     #(
@@ -3438,9 +3533,10 @@ fn memory_list_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "List memories from both layers. Optional `type` filter, "
-          <> "`query` substring (name + description). Sorted "
-          <> "last_accessed desc.",
+        "Lists memory entries across both the project and user "
+          <> "layers. Supports an optional `type` filter and a "
+          <> "`query` substring match against name and description. "
+          <> "Sorted by `last_accessed` descending — most recent first.",
       ),
     ),
     #(
@@ -3471,8 +3567,8 @@ fn memory_prune_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Delete memory by name. One-at-a-time (no batch) to "
-          <> "prevent accidental wipes.",
+        "Deletes a memory entry by name. One at a time on purpose "
+          <> "— no batch deletes, to discourage accidental wipes.",
       ),
     ),
     #(
@@ -3497,10 +3593,13 @@ fn memory_audit_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Audit memory: stale entries (last_accessed > "
-          <> "stale_threshold_days, default 30) + duplicate "
-          <> "candidates (Jaccard ≥ 0.5 on name or description). "
-          <> "Run before quota hits to decide prune/merge.",
+        "Reports dumping-ground signals across both memory layers: "
+          <> "stale entries (where `last_accessed` is older than "
+          <> "`stale_threshold_days`, default 30) and "
+          <> "high-similarity duplicate candidates (Jaccard ≥ 0.5 on "
+          <> "name-tokens or description-tokens). Use this before "
+          <> "hitting per-type quotas to decide which entries to "
+          <> "prune or merge.",
       ),
     ),
     #(
@@ -3517,8 +3616,8 @@ fn memory_audit_tool_definition() -> Json {
                 #(
                   "description",
                   json.string(
-                    "Days since last_accessed to count as stale. "
-                      <> "Default 30.",
+                    "Days since `last_accessed` at which an entry "
+                      <> "counts as stale. Default 30.",
                   ),
                 ),
               ]),
@@ -3529,7 +3628,10 @@ fn memory_audit_tool_definition() -> Json {
                 #("type", json.string("boolean")),
                 #(
                   "description",
-                  json.string("Run O(N²) dup-candidate scan. Default true."),
+                  json.string(
+                    "Whether to run the O(N²) duplicate-candidate "
+                      <> "scan. Default true.",
+                  ),
                 ),
               ]),
             ),
