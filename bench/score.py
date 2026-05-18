@@ -45,21 +45,36 @@ def extract_int(text: str) -> int | None:
         return None
 
 
-def score_one(row: dict[str, Any]) -> bool:
-    """True iff the agent's raw answer matches ground truth."""
+def score_one(row: dict[str, Any], fallback: bool = True) -> bool:
+    """True iff the agent's answer matches ground truth.
+
+    When `fallback=True` and `answer_raw` is missing but
+    `final_text_tail` is populated, attempt a heuristic extraction.
+    Weak models (DeepSeek flash) frequently emit the right answer
+    in prose but forget the `<answer>...</answer>` tags. Strict
+    scoring punishes tag adherence; lenient scoring measures
+    underlying capability. The harness records both."""
     if row.get("error"):
         return False
     answer = row.get("answer_raw")
-    if answer is None:
-        return False
     truth = row.get("ground_truth")
     kind = row.get("kind", "")
+    if answer is None and fallback:
+        tail = row.get("final_text_tail") or ""
+        answer = tail
+    if not answer:
+        return False
     if kind == "references_count":
         a = extract_int(answer)
         return a is not None and a == int(truth)
     if kind == "definition_path":
-        return normalize_path(answer) == normalize_path(str(truth))
-    # Unknown kind: exact string match fallback.
+        # Fallback case: tail may contain the path as a fragment.
+        if normalize_path(answer) == normalize_path(str(truth)):
+            return True
+        # Path may be substring of a longer tail string.
+        if str(truth) in answer:
+            return True
+        return False
     return str(answer).strip() == str(truth).strip()
 
 
