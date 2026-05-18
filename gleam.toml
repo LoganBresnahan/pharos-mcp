@@ -19,6 +19,7 @@ gleam_http = ">= 4.0.0 and < 5.0.0"
 mist = ">= 6.0.0 and < 7.0.0"
 pollux = ">= 1.0.0 and < 2.0.0"
 tomerl = ">= 0.5.0 and < 1.0.0"
+gleam_crypto = ">= 1.6.0 and < 2.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.10.0 and < 2.0.0"

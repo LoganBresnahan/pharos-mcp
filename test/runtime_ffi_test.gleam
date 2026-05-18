@@ -166,15 +166,31 @@ fn pool_diag(top_n: Int) -> PoolDiag
 
 pub fn pool_diag_shape_test() {
   // No pool registered in test context — pool_diag should still
-  // return a well-typed PoolDiag with sentinel pool row.
+  // return a well-typed PoolDiag with sentinel pool row. The
+  // nested patterns below pull each inner record apart so the
+  // shape contract is enforced one level deeper than the outer
+  // PoolDiag destructure: any drift in the Erlang-side tuple
+  // shape for `pool_info_row`, `top_proc`, or `spawner_trace`
+  // shows up as a pattern-match failure here rather than as a
+  // surprise at the call site of `runtime_lsp_state`.
   let d = pool_diag(5)
-  let PoolDiag(pool: p, top_mailboxes: top, pool_state_dump: dump, spawners: spawners) =
-    d
-  let _ = p
+  let PoolDiag(
+    pool: PoolInfoRow(pid: _, ..),
+    top_mailboxes: top,
+    pool_state_dump: dump,
+    spawners: spawners,
+  ) = d
   let _ = dump
-  // List fields must be lists (length 0 acceptable).
-  should.equal(list.length(top) >= 0, True)
-  should.equal(list.length(spawners) >= 0, True)
+  let _ =
+    list.map(top, fn(t) {
+      let TopProc(pid: _, ..) = t
+      Nil
+    })
+  let _ =
+    list.map(spawners, fn(s) {
+      let SpawnerTrace(pid: _, ..) = s
+      Nil
+    })
 }
 
 // -- pharos_runtime_ffi: beam_version_info -------------------------------
@@ -204,7 +220,7 @@ fn memory_breakdown() -> List(#(String, Int))
 
 pub fn memory_breakdown_shape_test() {
   let entries = memory_breakdown()
-  should.equal(list.length(entries) > 0, True)
+  should.equal(entries != [], True)
   // First entry must be a 2-tuple of (binary, integer).
   case entries {
     [#(key, value), ..] -> {

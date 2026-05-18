@@ -19,12 +19,10 @@
 //// : ... }`-style declarations — they all mean "I implement this
 //// method". `False` and missing key both mean unsupported.
 
-import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Pid}
 import gleam/option.{type Option}
-import gleam/result
 import pharos/lsp/proc.{type Proc}
 
 /// Decision result for `supports/2`.
