@@ -3039,10 +3039,16 @@ fn get_symbols_overview_tool_definition() -> Json {
       json.string(
         "LLM-friendly outline of a single source file. Reshapes LSP "
           <> "documentSymbol output to drop block-scope variable noise "
-          <> "and surface only `(name, kind, line, detail, children)`. "
-          <> "Cheaper than document_symbols for navigation; use this "
-          <> "first, then drill with find_symbol when you know what "
-          <> "you want to operate on.",
+          <> "and surface only `(name, kind, line, character, end_line, "
+          <> "end_character, detail, children)`. `line`/`character` "
+          <> "anchor the symbol's identifier (pipe straight into "
+          <> "find_references / goto_definition without a find_symbol "
+          <> "round-trip); `end_line`/`end_character` carry the full "
+          <> "body span so the agent can slice the file rather than "
+          <> "loading the whole document. Cheaper than document_symbols "
+          <> "for navigation; use this first, then drill with find_symbol "
+          <> "when you need a SymbolHandle for symbol-layer tools "
+          <> "(find_referencing_symbols, edit_at_symbol).",
       ),
     ),
     #(

@@ -196,7 +196,22 @@ pub type SymbolTreeNode {
   SymbolTreeNode(
     name: String,
     kind: Int,
+    /// `selection_range.start.line` — line of the identifier.
     line: Int,
+    /// `selection_range.start.character` — column of the identifier.
+    /// Lets an LLM pipe an outline entry straight into a positional
+    /// call (`find_references` / `goto_definition`) without a second
+    /// `find_symbol` round-trip to resolve the cursor.
+    character: Int,
+    /// `range.end.line` — last line of the symbol's full body.
+    /// Together with `line` it lets the agent slice the file
+    /// (`Read(uri, offset=line, limit=end_line-line+1)`) instead of
+    /// loading the whole document just to inspect one function.
+    end_line: Int,
+    /// `range.end.character` — column where the body closes. Same
+    /// slice-extraction use case as `end_line`, kept for symmetry
+    /// with positional LSP requests that need a full Range.
+    end_character: Int,
     detail: Option(String),
     children: List(SymbolTreeNode),
   )
@@ -627,6 +642,9 @@ fn render_node(s: DocumentSymbolDecoded) -> SymbolTreeNode {
     name: s.name,
     kind: s.kind,
     line: s.selection_range.start.line,
+    character: s.selection_range.start.character,
+    end_line: s.range.end.line,
+    end_character: s.range.end.character,
     detail: s.detail,
     children: s.children
       |> list.map(render_node)
@@ -1465,6 +1483,9 @@ fn symbol_tree_node_to_json(n: SymbolTreeNode) -> json.Json {
     #("kind", json.int(n.kind)),
     #("kind_name", json.string(kind_name(n.kind))),
     #("line", json.int(n.line)),
+    #("character", json.int(n.character)),
+    #("end_line", json.int(n.end_line)),
+    #("end_character", json.int(n.end_character)),
     #(
       "detail",
       case n.detail {
