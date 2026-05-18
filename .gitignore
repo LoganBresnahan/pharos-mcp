@@ -53,3 +53,4 @@ __pycache__/
 .claude/
 
 .private/
+bench/data/
