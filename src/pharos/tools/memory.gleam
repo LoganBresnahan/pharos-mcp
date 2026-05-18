@@ -270,12 +270,12 @@ pub fn describe_error(err: MemoryError) -> String {
       "invalid type '" <> t <> "' (must be user|project|feedback|reference)"
     InvalidDescription(r) -> "invalid description: " <> r
     Conflict(n) ->
-      "memory '" <> n <> "' already exists (pass overwrite=true to replace)"
+      "memory '" <> n <> "' exists; pass overwrite=true to replace"
     NotFound(n, []) -> "memory not found: " <> n
     NotFound(n, near) ->
       "memory not found: " <> n <> " (near misses: " <> string.join(near, ", ") <> ")"
     QuotaExceeded(t, cap) ->
-      "quota exceeded for type '" <> t <> "' (cap " <> int.to_string(cap) <> "); use memory_prune to free space"
+      "quota exceeded: type '" <> t <> "' cap=" <> int.to_string(cap) <> "; memory_prune to free"
     StorageError(r) -> "storage error: " <> r
     FrontmatterError(r) -> "frontmatter error: " <> r
   }

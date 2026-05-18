@@ -231,7 +231,7 @@ pub fn edit_mode_from_string(s: String) -> Result(EditMode, SymbolsError) {
     "insert_after" | "InsertAfter" -> Ok(InsertAfter)
     _ ->
       Error(InvalidEditMode(
-        "mode must be one of: replace_body, insert_before, insert_after",
+        "mode must be: replace_body | insert_before | insert_after",
       ))
   }
 }
@@ -890,16 +890,14 @@ fn verify_body_unchanged(
             True -> Ok(Nil)
             False ->
               Error(HandleStale(
-                "body content drift for symbol '"
+                "body drift for '"
                 <> handle.name
                 <> "' at "
                 <> handle.uri
                 <> " line "
                 <> int.to_string(handle.selection_line)
-                <> "; the file changed since find_symbol minted this "
-                <> "handle. Re-run find_symbol AND re-decide your "
-                <> "replacement content against the new body before "
-                <> "calling edit_at_symbol again.",
+                <> "; file changed since handle minted. Re-run "
+                <> "find_symbol + recheck replacement against new body.",
               ))
           }
       }
