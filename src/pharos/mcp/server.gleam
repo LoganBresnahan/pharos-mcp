@@ -332,6 +332,7 @@ fn allowed_tool_definitions() -> List(Json) {
     // -- ADR-026 symbol layer --
     #("find_symbol", find_symbol_tool_definition),
     #("get_symbols_overview", get_symbols_overview_tool_definition),
+    #("containing_symbol", containing_symbol_tool_definition),
     #(
       "find_referencing_symbols",
       find_referencing_symbols_tool_definition,
@@ -884,6 +885,8 @@ fn dispatch_tool_call(
       handle_find_symbol(pool, id, arguments)
     Ok(#("get_symbols_overview", arguments)) ->
       handle_get_symbols_overview(pool, id, arguments)
+    Ok(#("containing_symbol", arguments)) ->
+      handle_containing_symbol(pool, id, arguments)
     Ok(#("find_referencing_symbols", arguments)) ->
       handle_find_referencing_symbols(pool, id, arguments)
     Ok(#("edit_at_symbol", arguments)) ->
@@ -2992,9 +2995,15 @@ fn find_symbol_tool_definition() -> Json {
           <> "\"User/authenticate\"). Use when you know the name but "
           <> "not the file, or when grep would find multiple "
           <> "identifiers with the same name in unrelated scopes and "
-          <> "you need scope-aware disambiguation. Returns Resolution "
-          <> "= Single(match) | Multiple(matches) | "
-          <> "NotFound(near_misses); each match carries a "
+          <> "you need scope-aware disambiguation. Also use for "
+          <> "single-symbol kind queries (\"is X a function or a "
+          <> "class?\") — each match's `kind` and `kind_name` fields "
+          <> "answer that directly without dumping the whole file "
+          <> "outline via get_symbols_overview. Returns Resolution = "
+          <> "Single(match) | Multiple(matches) | NotFound(near_misses); "
+          <> "each match carries `kind` (LSP SymbolKind int), "
+          <> "`kind_name` (human label), `uri`, `range`, "
+          <> "`selection_range`, `full_path`, `detail`, and a "
           <> "SymbolHandle that chains directly into "
           <> "find_referencing_symbols and edit_at_symbol. `policy` "
           <> "overrides the default AllMatches with one of: "
@@ -3077,6 +3086,72 @@ fn get_symbols_overview_tool_definition() -> Json {
           ]),
         ),
         #("required", json.array(["uri"], of: json.string)),
+      ]),
+    ),
+  ])
+}
+
+fn containing_symbol_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("containing_symbol")),
+    #(
+      "description",
+      json.string(
+        "Map a `(uri, line)` to the innermost named symbol whose "
+          <> "range contains that line. Use for stack-trace-style "
+          <> "lookups (\"what function owns line 47 of foo.ts?\") and "
+          <> "for `containing_symbol` benchmark questions. Cheaper "
+          <> "than dumping the whole file outline via "
+          <> "get_symbols_overview when only one line's owner is "
+          <> "wanted. Returns `{match: SymbolMatch}` with name, kind, "
+          <> "kind_name, range, selection_range, full_path, "
+          <> "matched_via=\"containing_range\", and a SymbolHandle that "
+          <> "chains into find_referencing_symbols / edit_at_symbol; "
+          <> "or `{match: null}` if the line falls outside every "
+          <> "named symbol (top-of-file imports, blank lines, etc.).",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of the source file to probe.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "line",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Zero-based line number to map to its containing "
+                      <> "symbol.",
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        #(
+          "required",
+          json.preprocessed_array([
+            json.string("uri"),
+            json.string("line"),
+          ]),
+        ),
       ]),
     ),
   ])
@@ -3239,6 +3314,45 @@ fn handle_get_symbols_overview(
   }
 }
 
+fn handle_containing_symbol(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_containing_symbol_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid containing_symbol params: " <> reason,
+      )
+    Ok(#(uri, line)) ->
+      case symbols.containing_symbol(pool, uri, line) {
+        Ok(maybe_match) ->
+          success_response(id, fn() {
+            tool_text_result(
+              json.to_string(
+                json.object([
+                  #(
+                    "match",
+                    case maybe_match {
+                      Some(m) -> symbols.symbol_match_to_json(m)
+                      None -> json.null()
+                    },
+                  ),
+                ]),
+              ),
+              False,
+            )
+          })
+        Error(err) ->
+          success_response(id, fn() {
+            tool_text_result(symbols.describe_symbols_error(err), True)
+          })
+      }
+  }
+}
+
 fn handle_find_referencing_symbols(
   pool: Pool,
   id: Id,
@@ -3342,6 +3456,25 @@ fn decode_get_symbols_overview_arguments(
       case decode.run(args, decoder) {
         Error(_) -> Error("uri required")
         Ok(uri) -> Ok(uri)
+      }
+    }
+  }
+}
+
+fn decode_containing_symbol_arguments(
+  arguments: Option(Dynamic),
+) -> Result(#(String, Int), String) {
+  case arguments {
+    None -> Error("missing arguments")
+    Some(args) -> {
+      let decoder = {
+        use uri <- decode.field("uri", decode.string)
+        use line <- decode.field("line", decode.int)
+        decode.success(#(uri, line))
+      }
+      case decode.run(args, decoder) {
+        Error(_) -> Error("expected `uri: string`, `line: int`")
+        Ok(pair) -> Ok(pair)
       }
     }
   }

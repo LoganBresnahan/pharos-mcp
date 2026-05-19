@@ -792,6 +792,35 @@ fn range_size(r: Range) -> Int {
   line_span * 10_000 + char_delta
 }
 
+// -- containing_symbol --------------------------------------------------
+
+/// Resolve `(uri, line)` to the innermost named symbol whose `range`
+/// contains that line. Server-side cousin of "what function does this
+/// stack-trace line live in?" — saves the caller from fetching the
+/// whole documentSymbol tree and walking it by hand.
+///
+/// Probes the line at character 0 because the column rarely
+/// disambiguates which container owns the line — line membership is
+/// what callers actually care about. Returns `None` if the line is
+/// outside every named symbol's range (e.g. top-of-file imports).
+pub fn containing_symbol(
+  pool: Pool,
+  uri: String,
+  line: Int,
+) -> Result(Option(SymbolMatch), SymbolsError) {
+  use tree <- result.try(document_symbol_query(
+    pool,
+    uri,
+    default_timeout_ms,
+  ))
+  Ok(smallest_containing(
+    tree,
+    Position(line: line, character: 0),
+    [],
+    uri,
+  ))
+}
+
 // -- edit_at_symbol ------------------------------------------------------
 
 /// Produce an `EditPreview` for the requested mode against the

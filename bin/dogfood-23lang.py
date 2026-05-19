@@ -224,6 +224,7 @@ PER_LANG_TOOLS = [
     # chaining pattern as *_prepare → *_calls / *_types).
     "find_symbol",
     "get_symbols_overview",
+    "containing_symbol",
     "find_referencing_symbols",
     "edit_at_symbol",
     "lsp_request_raw",
@@ -395,6 +396,8 @@ def build_args(tool: str, t: Target | None, prepared_item=None,
         if t.symbol_name_path is None:
             return None
         return {"uri": t.file_uri}
+    if tool == "containing_symbol":
+        return {"uri": t.file_uri, "line": t.line}
     if tool == "find_referencing_symbols":
         # Chained: needs the SymbolHandle returned by find_symbol.
         # `prepared_item` is the handle object extracted from the
@@ -1499,12 +1502,12 @@ def write_report(rows, out_path: str, label: str, transport_name: str,
         f"**Profile:** `{profile}`",
         f"**Result:** **{passed}/{total} cells PASS** ({100 * passed // max(total,1)}%)",
         "",
-        "Per-language LSP-bound tools (26): hover, document_symbols, workspace_symbols, "
+        "Per-language LSP-bound tools (27): hover, document_symbols, workspace_symbols, "
         "get_diagnostics, goto_definition, goto_type_definition, goto_implementation, "
         "find_references, signature_help, format_document, code_actions, rename_preview, "
         "inlay_hints, semantic_tokens, call_hierarchy_prepare, call_hierarchy_incoming_calls, "
         "call_hierarchy_outgoing_calls, type_hierarchy_prepare, type_hierarchy_supertypes, "
-        "type_hierarchy_subtypes, find_symbol, get_symbols_overview, "
+        "type_hierarchy_subtypes, find_symbol, get_symbols_overview, containing_symbol, "
         "find_referencing_symbols, edit_at_symbol, lsp_request_raw, apply_workspace_edit.",
         "",
         "Global one-shot tools (17): echo, runtime_processes, runtime_supervision_tree, "

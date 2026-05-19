@@ -65,6 +65,7 @@ pub fn category_for(name: String) -> ToolCategory {
     // -- ADR-026 symbol layer (read paths) --
     | "find_symbol"
     | "get_symbols_overview"
+    | "containing_symbol"
     | "find_referencing_symbols" -> CatRead
 
     // -- write (returns WorkspaceEdit data; or applies it on demand) --
