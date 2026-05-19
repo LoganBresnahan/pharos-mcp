@@ -575,6 +575,21 @@ def main() -> int:
     if "treatment" in arms:
         mcp = McpStdio(workspace)
         mcp.initialize()
+        # Pre-warm the LSP so cold-start cost (rust-analyzer ~60s,
+        # tsserver ~10-15s) doesn't get billed to question 1's
+        # wall_time. Use the first question's anchor URI as a free
+        # target — any file under the workspace is fine.
+        if questions:
+            try:
+                warm_uri = questions[0].get("anchor", {}).get("uri")
+                if warm_uri:
+                    t_warm = time.time()
+                    mcp.call_tool("document_symbols", {"uri": warm_uri})
+                    print(f"[harness] prewarm in {time.time() - t_warm:.1f}s",
+                          file=sys.stderr)
+            except Exception as e:
+                print(f"[harness] prewarm failed (continuing): {e}",
+                      file=sys.stderr)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     out_fh = open(args.out, "w")

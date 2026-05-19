@@ -169,23 +169,30 @@ def flatten_document_symbols(nodes: Any, uri: str,
                              acc: list[dict[str, Any]]) -> None:
     """Walk an LSP DocumentSymbol tree, emitting one record per named
     symbol with its `selectionRange.start` as the anchor (which is
-    where `find_references` / `goto_definition` expect the cursor)."""
+    where `find_references` / `goto_definition` expect the cursor).
+
+    Also captures `range.start` / `range.end` — the full extent of the
+    symbol body — used by `containing_symbol` questions."""
     if not isinstance(nodes, list):
         return
     for n in nodes:
         if not isinstance(n, dict):
             continue
-        # DocumentSymbol shape (hierarchical).
         sel = n.get("selectionRange") or n.get("range") or {}
-        start = (sel.get("start") if isinstance(sel, dict) else {}) or {}
+        sel_start = (sel.get("start") if isinstance(sel, dict) else {}) or {}
+        rng = n.get("range") or {}
+        rng_start = (rng.get("start") if isinstance(rng, dict) else {}) or {}
+        rng_end = (rng.get("end") if isinstance(rng, dict) else {}) or {}
         name = n.get("name", "")
         if name:
             acc.append({
                 "uri": uri,
                 "name": name,
                 "kind": n.get("kind", 0),
-                "line": start.get("line", 0),
-                "character": start.get("character", 0),
+                "line": sel_start.get("line", 0),
+                "character": sel_start.get("character", 0),
+                "range_start_line": rng_start.get("line", 0),
+                "range_end_line": rng_end.get("line", 0),
             })
         flatten_document_symbols(n.get("children", []), uri, acc)
 
@@ -235,8 +242,8 @@ MIN_REFS_FOR_COUNT_QUESTION = 2
 
 
 def gen_references_count(mcp: McpStdio, sym: dict[str, Any],
-                         workspace_label: str, qid: str
-                         ) -> dict[str, Any] | None:
+                         workspace_label: str, qid: str,
+                         ctx: dict[str, Any]) -> dict[str, Any] | None:
     """How many references does this symbol have, counted by LSP.
 
     Requires `len(refs) >= MIN_REFS_FOR_COUNT_QUESTION` — a count of 1
@@ -277,8 +284,8 @@ def gen_references_count(mcp: McpStdio, sym: dict[str, Any],
 
 
 def gen_definition_uri(mcp: McpStdio, sym: dict[str, Any],
-                       workspace_label: str, qid: str
-                       ) -> dict[str, Any] | None:
+                       workspace_label: str, qid: str,
+                       ctx: dict[str, Any]) -> dict[str, Any] | None:
     """What file defines this symbol? Anchored at a USE site (a
     non-declaration reference), not the declaration.
 
@@ -359,10 +366,396 @@ def gen_definition_uri(mcp: McpStdio, sym: dict[str, Any],
     }
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 generators
+# ---------------------------------------------------------------------------
+
+
+# LSP SymbolKind enum → human label. Restricted to kinds where the
+# answer is unambiguous to a human reading the source. "Module" and
+# "Field" appear in gleam-stdlib but aren't asked because their human
+# label varies by lang.
+SYMBOL_KIND_LABELS: dict[int, str] = {
+    5: "class",
+    6: "method",
+    8: "field",
+    9: "constructor",
+    10: "enum",
+    11: "interface",
+    12: "function",
+    13: "variable",
+    14: "constant",
+    22: "enum member",
+    23: "struct",
+    26: "type parameter",
+}
+
+
+def precompute_collisions(
+    symbols: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Map name → list of defining symbols, restricted to names defined
+    in 2+ distinct files. Drives `gen_collision_resolve`."""
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for s in symbols:
+        by_name.setdefault(s["name"], []).append(s)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for name, defs in by_name.items():
+        uris = {d["uri"] for d in defs}
+        if len(uris) >= 2:
+            out[name] = defs
+    return out
+
+
+def precompute_diagnostics(
+    mcp: McpStdio, workspace: str, extensions: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """For every source file, ask `get_diagnostics` and record the
+    count. Drives `gen_diagnostics_count`. Files with zero diagnostics
+    are kept too — we filter at question-emit time so the test can
+    decide whether to include 0-count Qs.
+
+    Pharos's `get_diagnostics` returns either the raw LSP shape
+    `{"uri": ..., "diagnostics": [...]}` or a `Diagnostic[]` array
+    directly. Handle both."""
+    records: list[dict[str, Any]] = []
+    files = list(walk_files(workspace, extensions))
+    print(f"[oracle] diagnostics pre-pass: {len(files)} files...",
+          file=sys.stderr)
+    for path in files:
+        uri = path_to_uri(path)
+        try:
+            result = mcp.call_tool("get_diagnostics", {"uri": uri})
+        except RuntimeError:
+            continue
+        diags: Any = []
+        if isinstance(result, dict):
+            diags = result.get("diagnostics") or []
+        elif isinstance(result, list):
+            diags = result
+        if isinstance(diags, list):
+            records.append({"uri": uri, "count": len(diags)})
+    nonzero = sum(1 for r in records if r["count"] > 0)
+    print(f"[oracle]   diagnostics: {nonzero}/{len(records)} files with >=1",
+          file=sys.stderr)
+    return records
+
+
+def gen_call_hierarchy_in(mcp: McpStdio, sym: dict[str, Any],
+                          workspace_label: str, qid: str,
+                          ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """How many distinct function-callers does this symbol have, via
+    the LSP's incoming-calls graph? Filter requires >= 2 callers.
+
+    Two-step protocol: prepare (returns CallHierarchyItem[]) then
+    incomingCalls on item[0]. We count distinct `from.uri+name` keys
+    across the returned list — multiple call sites from the same caller
+    function collapse to one.
+
+    LSP servers (tsserver, observed) emit module-level top-level call
+    sites as `from.kind = File/Module` with the file's basename as the
+    "name". A reasonable agent (correctly) treats a file as not a
+    function. Mirror that by filtering to callers whose kind looks
+    like a function-ish entity: Function=12, Method=6, Constructor=9.
+    Other kinds (File=1, Module=2, Namespace=3) are dropped so the
+    ground truth matches what an agent would naturally count."""
+    CALLER_KINDS_FUNCTION_ISH = {6, 9, 12}
+    try:
+        items = mcp.call_tool("call_hierarchy_prepare", {
+            "uri": sym["uri"],
+            "line": sym["line"],
+            "character": sym["character"],
+        })
+    except RuntimeError:
+        return None
+    if not isinstance(items, list) or not items:
+        return None
+    item = items[0]
+    if not isinstance(item, dict):
+        return None
+    try:
+        calls = mcp.call_tool("call_hierarchy_incoming_calls", {"item": item})
+    except RuntimeError:
+        return None
+    if not isinstance(calls, list):
+        return None
+    callers: set[str] = set()
+    for c in calls:
+        if not isinstance(c, dict):
+            continue
+        frm = c.get("from") or {}
+        if not isinstance(frm, dict):
+            continue
+        if frm.get("kind") not in CALLER_KINDS_FUNCTION_ISH:
+            continue
+        key = f"{frm.get('uri', '')}:{frm.get('name', '')}"
+        callers.add(key)
+    if len(callers) < 2:
+        return None
+    return {
+        "id": qid,
+        "kind": "call_hierarchy_in",
+        "symbol": sym["name"],
+        "anchor": {
+            "uri": sym["uri"],
+            "line": sym["line"],
+            "character": sym["character"],
+        },
+        "q": (
+            f"In the {workspace_label} workspace, how many distinct "
+            f"function or method callers does `{sym['name']}` (defined "
+            f"at line {sym['line'] + 1} of "
+            f"{os.path.basename(uri_to_path(sym['uri']))}) have? Use "
+            f"the LSP's incoming-call hierarchy. Count each caller "
+            f"function once even if it calls `{sym['name']}` multiple "
+            f"times. Exclude file-level / module-level entries that "
+            f"are not themselves functions or methods. Exclude "
+            f"`{sym['name']}` itself if it is self-recursive."
+        ),
+        "ground_truth": len(callers),
+    }
+
+
+def gen_collision_resolve(mcp: McpStdio, sym: dict[str, Any],
+                          workspace_label: str, qid: str,
+                          ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """For a symbol whose NAME has multiple definitions across files,
+    anchor at a use-site and ask "which file defines THIS one?". Forces
+    the agent to disambiguate by scope rather than grep.
+
+    Approach:
+      1. Skip if `sym["name"]` isn't in the precomputed collisions map.
+      2. Get refs to this specific symbol via find_references.
+      3. Drop ref locations that overlap any of the colliding defs.
+      4. Pick the first remaining use site.
+      5. goto_definition from there → answer file path.
+    """
+    collisions: dict[str, list[dict[str, Any]]] = ctx.get("collisions", {})
+    if sym["name"] not in collisions:
+        return None
+    try:
+        refs = mcp.call_tool("find_references", {
+            "uri": sym["uri"],
+            "line": sym["line"],
+            "character": sym["character"],
+        })
+    except RuntimeError:
+        return None
+    if not isinstance(refs, list):
+        return None
+    def_lines = {
+        (d["uri"], d["line"]) for d in collisions[sym["name"]]
+    }
+    use_sites = []
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        ref_uri = ref.get("uri")
+        ref_range = ref.get("range") or {}
+        ref_start = ref_range.get("start") or {}
+        ref_line = ref_start.get("line")
+        ref_char = ref_start.get("character")
+        if ref_uri is None or ref_line is None or ref_char is None:
+            continue
+        if (ref_uri, ref_line) in def_lines:
+            continue
+        use_sites.append({"uri": ref_uri, "line": ref_line, "character": ref_char})
+    if not use_sites:
+        return None
+    use = use_sites[0]
+    try:
+        defn = mcp.call_tool("goto_definition", {
+            "uri": use["uri"],
+            "line": use["line"],
+            "character": use["character"],
+        })
+    except RuntimeError:
+        return None
+    if not defn:
+        return None
+    target_uri = None
+    if isinstance(defn, list) and defn:
+        target_uri = defn[0].get("uri") or defn[0].get("targetUri")
+    elif isinstance(defn, dict):
+        target_uri = defn.get("uri") or defn.get("targetUri")
+    if not target_uri:
+        return None
+    return {
+        "id": qid,
+        "kind": "collision_resolve",
+        "symbol": sym["name"],
+        "anchor": {
+            "uri": use["uri"],
+            "line": use["line"],
+            "character": use["character"],
+        },
+        "q": (
+            f"In the {workspace_label} workspace, the name `{sym['name']}` "
+            f"is defined in multiple files. At line {use['line'] + 1} of "
+            f"{os.path.basename(uri_to_path(use['uri']))}, which `{sym['name']}` "
+            f"is being used? Return the absolute path of the file that "
+            f"defines the specific `{sym['name']}` referenced at that site."
+        ),
+        "ground_truth": uri_to_path(target_uri),
+    }
+
+
+def gen_diagnostics_count(mcp: McpStdio, sym: dict[str, Any],
+                          workspace_label: str, qid: str,
+                          ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """How many diagnostics in file Z, per the LSP's published-diagnostics
+    set. Sampling burns one slot per call regardless of whether a file
+    is available — we pop a non-zero-count file from the precomputed
+    pool each call. Returns None once the pool empties."""
+    pool: list[dict[str, Any]] = ctx.setdefault("_diag_pool", [])
+    if not pool:
+        all_recs = ctx.get("diagnostics", [])
+        pool.extend(r for r in all_recs if r["count"] > 0)
+        if not pool:
+            return None
+    rec = pool.pop(0)
+    file_uri = rec["uri"]
+    count = rec["count"]
+    return {
+        "id": qid,
+        "kind": "diagnostics_count",
+        "symbol": os.path.basename(uri_to_path(file_uri)),
+        "anchor": {"uri": file_uri, "line": 0, "character": 0},
+        "q": (
+            f"In the {workspace_label} workspace, how many diagnostics "
+            f"does the LSP report for file "
+            f"{os.path.basename(uri_to_path(file_uri))}? Count every "
+            f"published diagnostic regardless of severity."
+        ),
+        "ground_truth": count,
+    }
+
+
+def gen_containing_symbol(mcp: McpStdio, sym: dict[str, Any],
+                          workspace_label: str, qid: str,
+                          ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """Pick a line inside the symbol's body (not the declaration line)
+    and ask which named symbol contains it.
+
+    The ground truth is `sym["name"]` itself — we sampled the symbol,
+    so we know it's the innermost named container for any line inside
+    its range. To avoid ambiguity from nested symbols, we pick a line
+    just past the declaration where nested children are unlikely to
+    have begun yet."""
+    rs = sym["range_start_line"]
+    re_ = sym["range_end_line"]
+    if re_ <= rs + 1:
+        return None
+    # Pick line right after the declaration (0-indexed body line 1).
+    probe_line = rs + 1
+    # Reject if any other symbol in the same file has its range start
+    # at or before probe_line and range end at or after probe_line, AND
+    # is strictly inside this symbol's range — that would be a nested
+    # symbol that's the real innermost container.
+    file_symbols: list[dict[str, Any]] = ctx.get("file_symbols", {}).get(
+        sym["uri"], []
+    )
+    for other in file_symbols:
+        if other is sym:
+            continue
+        if other["range_start_line"] <= probe_line <= other["range_end_line"]:
+            # Inner candidate exists — bail to keep ground truth clean.
+            if (other["range_start_line"] >= rs
+                    and other["range_end_line"] <= re_):
+                return None
+    return {
+        "id": qid,
+        "kind": "containing_symbol",
+        "symbol": sym["name"],
+        "anchor": {"uri": sym["uri"], "line": probe_line, "character": 0},
+        "q": (
+            f"In the {workspace_label} workspace, which named symbol "
+            f"contains line {probe_line + 1} of "
+            f"{os.path.basename(uri_to_path(sym['uri']))}? Return only "
+            f"the symbol's name."
+        ),
+        "ground_truth": sym["name"],
+    }
+
+
+def gen_implementations(mcp: McpStdio, sym: dict[str, Any],
+                        workspace_label: str, qid: str,
+                        ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """How many implementations does this trait/interface/abstract method
+    have? Filter requires >= 2 impls — single-impl is uninformative.
+
+    Sparse on gleam (no trait system); intended to fire on rust/go/python
+    corpora in Phase 3."""
+    try:
+        impls = mcp.call_tool("goto_implementation", {
+            "uri": sym["uri"],
+            "line": sym["line"],
+            "character": sym["character"],
+        })
+    except RuntimeError:
+        return None
+    if not isinstance(impls, list) or len(impls) < 2:
+        return None
+    return {
+        "id": qid,
+        "kind": "implementations",
+        "symbol": sym["name"],
+        "anchor": {
+            "uri": sym["uri"],
+            "line": sym["line"],
+            "character": sym["character"],
+        },
+        "q": (
+            f"In the {workspace_label} workspace, how many implementations "
+            f"does the LSP report for `{sym['name']}` (defined at line "
+            f"{sym['line'] + 1} of "
+            f"{os.path.basename(uri_to_path(sym['uri']))})?"
+        ),
+        "ground_truth": len(impls),
+    }
+
+
+def gen_symbol_kind(mcp: McpStdio, sym: dict[str, Any],
+                    workspace_label: str, qid: str,
+                    ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """What kind of symbol is X (function / class / variable / etc.)?
+    Only emits for kinds whose human label is unambiguous."""
+    label = SYMBOL_KIND_LABELS.get(sym["kind"])
+    if label is None:
+        return None
+    return {
+        "id": qid,
+        "kind": "symbol_kind",
+        "symbol": sym["name"],
+        "anchor": {
+            "uri": sym["uri"],
+            "line": sym["line"],
+            "character": sym["character"],
+        },
+        "q": (
+            f"In the {workspace_label} workspace, what kind of symbol is "
+            f"`{sym['name']}` (defined at line {sym['line'] + 1} of "
+            f"{os.path.basename(uri_to_path(sym['uri']))})? Answer with "
+            f"one of: function, method, class, struct, enum, interface, "
+            f"variable, constant, constructor, field, enum member, "
+            f"type parameter."
+        ),
+        "ground_truth": label,
+    }
+
+
 GENERATORS = [
     ("references_count", gen_references_count),
     ("definition_path", gen_definition_uri),
+    ("call_hierarchy_in", gen_call_hierarchy_in),
+    ("collision_resolve", gen_collision_resolve),
+    ("diagnostics_count", gen_diagnostics_count),
+    ("containing_symbol", gen_containing_symbol),
+    ("implementations", gen_implementations),
+    ("symbol_kind", gen_symbol_kind),
 ]
+
+GENERATORS_BY_NAME = dict(GENERATORS)
 
 
 # ---------------------------------------------------------------------------
@@ -377,8 +770,20 @@ def main() -> int:
     ap.add_argument("--out", required=True,
                     help="output JSONL path")
     ap.add_argument("--n", type=int, default=30,
-                    help="target number of questions (sampling is "
-                         "best-effort; some symbols yield no question)")
+                    help="target number of questions in round-robin mode "
+                         "(ignored when --per-kind is set)")
+    ap.add_argument("--per-kind", type=int, default=0,
+                    help="target questions per generator kind. When >0, "
+                         "switches to per-kind sampling — each kind gets "
+                         "its own pass over the symbol pool until N hit "
+                         "or pool exhausted. Use for balanced Phase 2 "
+                         "banks where per-kind metrics matter.")
+    ap.add_argument("--kinds", default=None,
+                    help="comma-separated subset of kinds to enable "
+                         "(default = all). Names: references_count, "
+                         "definition_path, call_hierarchy_in, "
+                         "collision_resolve, diagnostics_count, "
+                         "containing_symbol, implementations, symbol_kind.")
     ap.add_argument("--seed", type=int, default=1,
                     help="RNG seed for reproducibility")
     ap.add_argument("--label", default=None,
@@ -387,6 +792,11 @@ def main() -> int:
     ap.add_argument("--extensions", default=".gleam",
                     help="comma-separated source extensions to walk "
                          "(default `.gleam`)")
+    ap.add_argument("--prewarm", action="store_true",
+                    help="fire a throwaway document_symbols call on the "
+                         "first source file before sampling, so the LSP's "
+                         "cold-start cost doesn't contaminate generator "
+                         "timing or the downstream harness wall metric.")
     args = ap.parse_args()
 
     workspace = os.path.abspath(args.workspace)
@@ -406,6 +816,19 @@ def main() -> int:
         mcp.initialize()
         print(f"[oracle] initialized in {time.time() - t0:.1f}s",
               file=sys.stderr)
+
+        if args.prewarm:
+            files = list(walk_files(workspace, extensions))
+            if files:
+                t_warm = time.time()
+                try:
+                    mcp.call_tool("document_symbols",
+                                  {"uri": path_to_uri(files[0])})
+                    print(f"[oracle] prewarm in {time.time() - t_warm:.1f}s",
+                          file=sys.stderr)
+                except RuntimeError as e:
+                    print(f"[oracle] prewarm failed (continuing): {e}",
+                          file=sys.stderr)
 
         symbols = collect_symbols(mcp, workspace, extensions)
         if not symbols:
@@ -430,28 +853,79 @@ def main() -> int:
 
         rng.shuffle(symbols)
 
+        # Build per-kind context used by some generators.
+        collisions = precompute_collisions(symbols)
+        print(f"[oracle] {len(collisions)} colliding names "
+              f"(name in 2+ files)", file=sys.stderr)
+        file_symbols: dict[str, list[dict[str, Any]]] = {}
+        for s in symbols:
+            file_symbols.setdefault(s["uri"], []).append(s)
+        diagnostics_recs = precompute_diagnostics(mcp, workspace, extensions)
+        ctx: dict[str, Any] = {
+            "collisions": collisions,
+            "file_symbols": file_symbols,
+            "diagnostics": diagnostics_recs,
+        }
+
+        enabled_kinds = set(GENERATORS_BY_NAME.keys())
+        if args.kinds:
+            requested = {k.strip() for k in args.kinds.split(",")}
+            unknown = requested - enabled_kinds
+            if unknown:
+                sys.exit(f"unknown kinds: {sorted(unknown)}")
+            enabled_kinds = requested
+        active_gens = [(name, gen) for name, gen in GENERATORS
+                       if name in enabled_kinds]
+
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
         emitted = 0
-        attempted = 0
+        per_kind_counts: dict[str, int] = {n: 0 for n, _ in active_gens}
         with open(args.out, "w") as fh:
-            for sym in symbols:
-                if emitted >= args.n:
-                    break
-                attempted += 1
-                # Round-robin across question kinds for diversity.
-                kind_name, gen = GENERATORS[attempted % len(GENERATORS)]
-                qid = f"q{emitted + 1:04d}"
-                row = gen(mcp, sym, label, qid)
-                if row is None:
-                    continue
-                fh.write(json.dumps(row) + "\n")
-                fh.flush()
-                emitted += 1
-                if emitted % 5 == 0:
-                    print(f"[oracle] emitted {emitted}/{args.n}...",
+            if args.per_kind > 0:
+                target = args.per_kind
+                # Each kind walks the (shuffled) symbol pool independently.
+                # Diagnostics_count ignores the symbol arg and pulls from
+                # its own precomputed pool, so a single pass over `symbols`
+                # is still the right driver loop.
+                for kind_name, gen in active_gens:
+                    count = 0
+                    for sym in symbols:
+                        if count >= target:
+                            break
+                        qid = f"q{emitted + 1:04d}"
+                        row = gen(mcp, sym, label, qid, ctx)
+                        if row is None:
+                            continue
+                        fh.write(json.dumps(row) + "\n")
+                        fh.flush()
+                        emitted += 1
+                        count += 1
+                    per_kind_counts[kind_name] = count
+                    print(f"[oracle]   {kind_name}: {count}/{target}",
                           file=sys.stderr)
-        print(f"[oracle] done — {emitted} questions written to {args.out} "
-              f"(attempted {attempted})", file=sys.stderr)
+            else:
+                attempted = 0
+                for sym in symbols:
+                    if emitted >= args.n:
+                        break
+                    attempted += 1
+                    kind_name, gen = active_gens[attempted % len(active_gens)]
+                    qid = f"q{emitted + 1:04d}"
+                    row = gen(mcp, sym, label, qid, ctx)
+                    if row is None:
+                        continue
+                    fh.write(json.dumps(row) + "\n")
+                    fh.flush()
+                    emitted += 1
+                    per_kind_counts[kind_name] = (
+                        per_kind_counts.get(kind_name, 0) + 1
+                    )
+                    if emitted % 5 == 0:
+                        print(f"[oracle] emitted {emitted}/{args.n}...",
+                              file=sys.stderr)
+        print(f"[oracle] done — {emitted} questions written to {args.out}",
+              file=sys.stderr)
+        print(f"[oracle] per-kind: {per_kind_counts}", file=sys.stderr)
     finally:
         mcp.close()
     return 0
