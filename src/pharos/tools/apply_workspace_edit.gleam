@@ -43,6 +43,8 @@ import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
+import pharos/lsp/registry as lsp_registry
+import pharos/tools/session
 import pharos/tools/workspace_edit.{type FileEdits, type TextEdit}
 import pharos/workspace_root
 
@@ -103,10 +105,46 @@ fn reject_unresolvable(
     })
   case bad {
     [] -> Ok(Nil)
+    _ -> Error(InvalidUris(describe_unresolvable_uris(bad)))
+  }
+}
+
+/// ADR-029: produce a teaching error for virtual-URI edit attempts.
+/// Virtual URIs (`jdt://...`, `csharp://...`) represent read-only
+/// library code with no on-disk path to write to — even if the LSP
+/// accepted the edit, nothing would persist. The error message
+/// names the right alternative (project-local override or build
+/// configuration change) so the LLM picks a productive next action
+/// instead of retrying with different params.
+///
+/// Two cases:
+///   - Known custom scheme (declared in `custom_uri_schemes`):
+///     virtual-URI message naming the language.
+///   - Other non-`file://` URIs: generic invalid-URI message.
+fn describe_unresolvable_uris(bad: List(String)) -> String {
+  let #(virtual, other) =
+    list.partition(bad, fn(uri) {
+      session.is_custom_uri(uri)
+      && case lsp_registry.for_custom_uri(uri) {
+        Ok(_) -> True
+        Error(_) -> False
+      }
+    })
+  let virtual_msg = case virtual {
+    [] -> ""
     _ ->
-      Error(InvalidUris(
-        "non-file:// URIs cannot be applied: " <> string.join(bad, ", "),
-      ))
+      "cannot edit virtual URIs (read-only library code; modify deps via "
+      <> "project override or build configuration): "
+      <> string.join(virtual, ", ")
+  }
+  let other_msg = case other {
+    [] -> ""
+    _ -> "non-file:// URIs cannot be applied: " <> string.join(other, ", ")
+  }
+  case virtual_msg, other_msg {
+    "", o -> o
+    v, "" -> v
+    v, o -> v <> "; " <> o
   }
 }
 
