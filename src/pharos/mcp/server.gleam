@@ -574,8 +574,19 @@ fn workspace_symbols_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "LSP workspace/symbol. Returns SymbolInformation[] or "
-          <> "WorkspaceSymbol[] up to `limit` (default 20). "
+        "LSP workspace/symbol search by name. Returns an envelope "
+          <> "`{matches, truncated_by, near_misses, retried_with?}` "
+          <> "where `matches` is the SymbolInformation[] / "
+          <> "WorkspaceSymbol[] array (LSP-spec shape) capped at "
+          <> "`limit` (default 20). When `matches` is empty and the "
+          <> "query looks like it could be a case / convention "
+          <> "mismatch (snake_case typed against camelCase code or "
+          <> "vice versa), pharos retries once with the alternate "
+          <> "convention; if that retry returns hits, their names "
+          <> "appear in `near_misses` and `retried_with` carries the "
+          <> "actual variant tried. This catches the most common "
+          <> "\"LSP returned []\" failure where the agent has the "
+          <> "right symbol in mind but typed the wrong convention. "
           <> "`workspace_uri_hint` is any file inside the workspace "
           <> "or the workspace root URI; pass `language` when a "
           <> "directory is given so LSP routing skips extension "
