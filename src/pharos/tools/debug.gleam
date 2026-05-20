@@ -28,9 +28,11 @@ import gleam/result
 import gleam/string
 import pharos/config
 import pharos/tools/session_overrides
+import pharos/tools/tool_helpers
 import pharos/log
 import pharos/log/entry
 import pharos/log/trace_ring
+import pharos/lsp/capabilities as lsp_capabilities
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/registry
 import pharos/lsp/registry_toml
@@ -72,6 +74,7 @@ pub fn named_definitions() -> List(#(String, fn() -> Json)) {
     #("runtime_effective_tool_config", runtime_effective_tool_config_definition),
     #("runtime_lsp_state", runtime_lsp_state_definition),
     #("runtime_pool_recon", runtime_pool_recon_definition),
+    #("runtime_server_capabilities", runtime_server_capabilities_definition),
   ]
 }
 
@@ -103,6 +106,8 @@ pub fn dispatch(
       Some(handle_effective_tool_config(arguments))
     "runtime_lsp_state" -> Some(handle_lsp_state(pool))
     "runtime_pool_recon" -> Some(handle_pool_recon(arguments))
+    "runtime_server_capabilities" ->
+      Some(handle_server_capabilities(pool))
     _ -> None
   }
 }
@@ -1552,6 +1557,7 @@ fn lsp_state_entry_to_json(entry: pool.LspStateEntry) -> Json {
     probe_attempts: attempts,
     last_probe_error: maybe_err,
     inflight_waiters: inflight_waiters,
+    pid: maybe_pid,
   ) = entry
   let #(state_label, state_reason) = case state {
     pool.Spawning -> #("Spawning", None)
@@ -1567,6 +1573,10 @@ fn lsp_state_entry_to_json(entry: pool.LspStateEntry) -> Json {
     Some(s) -> json.string(s)
     None -> json.null()
   }
+  let pid_json = case maybe_pid {
+    Some(p) -> json.string(p)
+    None -> json.null()
+  }
   json.object([
     #("language", json.string(language)),
     #("workspace", json.string(workspace)),
@@ -1577,6 +1587,7 @@ fn lsp_state_entry_to_json(entry: pool.LspStateEntry) -> Json {
     #("probe_attempts", json.int(attempts)),
     #("last_probe_error", last_err),
     #("inflight_waiters", json.int(inflight_waiters)),
+    #("pid", pid_json),
   ])
 }
 
@@ -1741,4 +1752,69 @@ fn spawner_to_json(s: SpawnerTrace) -> Json {
     #("current_function", json.string(cur)),
     #("stack", json.string(stack)),
   ])
+}
+
+// -- runtime_server_capabilities ----------------------------------------
+
+fn runtime_server_capabilities_definition() -> Json {
+  json.object([
+    #("name", json.string("runtime_server_capabilities")),
+    #(
+      "description",
+      json.string(
+        "Snapshot the LSP `ServerCapabilities` for every Ready session "
+          <> "pharos is tracking. Per active `(language, workspace, "
+          <> "server_id)`, returns the verbatim `capabilities` object the "
+          <> "server advertised during `initialize` — the canonical record "
+          <> "of which standard LSP methods this server implements "
+          <> "(hoverProvider, callHierarchyProvider, codeActionProvider, "
+          <> "etc.). Use to discover whether a method is reachable via "
+          <> "`lsp_request_raw` before constructing the call. Server-"
+          <> "specific extension methods (e.g. `rust-analyzer/expandMacro`, "
+          <> "`java/classFileContents`) are NOT advertised here — they "
+          <> "exist outside the LSP capability schema. Read-only.",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #("properties", json.object([])),
+      ]),
+    ),
+  ])
+}
+
+fn handle_server_capabilities(pool: Pool) -> ToolResult {
+  let snap = pool.snapshot(pool)
+  let session_lines =
+    snap.entries
+    |> list.filter_map(ready_entry_to_capabilities_json)
+  let joined = string.join(session_lines, ",")
+  Ok("{\"sessions\":[" <> joined <> "]}")
+}
+
+fn ready_entry_to_capabilities_json(
+  entry: pool.LspStateEntry,
+) -> Result(String, Nil) {
+  case entry.state, entry.pid {
+    pool.Ready, Some(pid_text) -> {
+      use pid <- result.try(runtime.parse_pid(pid_text))
+      use caps <- result.try(lsp_capabilities.lookup_by_pid(pid))
+      Ok(
+        "{\"language\":"
+        <> json.to_string(json.string(entry.language))
+        <> ",\"workspace\":"
+        <> json.to_string(json.string(entry.workspace))
+        <> ",\"server_id\":"
+        <> json.to_string(json.string(entry.server_id))
+        <> ",\"pid\":"
+        <> json.to_string(json.string(pid_text))
+        <> ",\"capabilities\":"
+        <> tool_helpers.json_encode(caps)
+        <> "}",
+      )
+    }
+    _, _ -> Error(Nil)
+  }
 }

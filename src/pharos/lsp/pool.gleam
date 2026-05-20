@@ -52,6 +52,7 @@ import pharos/lsp/languages.{
 import pharos/lsp/lifecycle
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/server_request_handlers
+import pharos/runtime
 import pharos/workspace_root
 
 /// Cache key tuple. `(language, workspace, server_id)`. Stage 2 of
@@ -128,6 +129,15 @@ pub type LspStateEntry {
     /// for this key. Zero once `SpawnCompleted` fires. Used to
     /// diagnose stuck spawns where many waiters accumulated.
     inflight_waiters: Int,
+    /// Text-form pid of the cached `lsp_proc` actor when this entry
+    /// is in `Ready` state. `None` when the proc isn't cached (the
+    /// state is `Spawning` / `Probing` / `Failed`, or the cache was
+    /// evicted while the bookkeeping entry persisted). Used by
+    /// `runtime_server_capabilities` to look up the
+    /// `InitializeResult.capabilities` ETS record by pid; also
+    /// surfaces in `runtime_lsp_state` so operators can correlate
+    /// state entries with `runtime_pid_info`.
+    pid: option.Option(String),
   )
 }
 
@@ -638,10 +648,15 @@ fn handle_snapshot(
     state.lsp_state
     |> dict.to_list
     |> list.map(fn(pair) {
-      let #(#(language, workspace, server_id), bk) = pair
-      let waiters = case dict.get(state.inflight, #(language, workspace, server_id)) {
+      let #(key, bk) = pair
+      let #(language, workspace, server_id) = key
+      let waiters = case dict.get(state.inflight, key) {
         Ok(list) -> list.length(list)
         Error(_) -> 0
+      }
+      let pid_text = case dict.get(state.cache, key) {
+        Ok(p) -> option.Some(runtime.pid_to_text(proc.pid(p)))
+        Error(_) -> option.None
       }
       LspStateEntry(
         language: language,
@@ -652,6 +667,7 @@ fn handle_snapshot(
         probe_attempts: bk.probe_attempts,
         last_probe_error: bk.last_probe_error,
         inflight_waiters: waiters,
+        pid: pid_text,
       )
     })
   let inflight_waiter_total =

@@ -86,7 +86,8 @@ pub fn category_for(name: String) -> ToolCategory {
     "echo"
     | "runtime_set_tool_timeout"
     | "runtime_effective_tool_config"
-    | "runtime_language_config" -> CatDefault
+    | "runtime_language_config"
+    | "runtime_server_capabilities" -> CatDefault
 
     // -- ADR-027 memory tools --
     "memory_save"
