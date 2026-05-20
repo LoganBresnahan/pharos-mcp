@@ -25,12 +25,33 @@ from typing import Any
 
 
 INT_RE = re.compile(r"-?\d+")
+IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+HTML_ENTITIES = {
+    "&lt;": "<",
+    "&gt;": ">",
+    "&amp;": "&",
+    "&quot;": '"',
+    "&apos;": "'",
+    "&#39;": "'",
+    "&#x27;": "'",
+    "&#x2F;": "/",
+}
 
 
 def normalize_path(p: str) -> str:
     """Path comparison strips trailing slashes and resolves `..` /
     symlinks (the LSP often returns canonical paths)."""
     return os.path.normpath(p.strip())
+
+
+def normalize_html_entities(text: str) -> str:
+    """Some agents HTML-escape literal answers (e.g. `<function>` →
+    `&lt;function&gt;`). Strip common entities before comparison so
+    a correct answer in escaped form scores correct."""
+    for entity, char in HTML_ENTITIES.items():
+        text = text.replace(entity, char)
+    return text
 
 
 def extract_int(text: str) -> int | None:
@@ -45,6 +66,13 @@ def extract_int(text: str) -> int | None:
         return None
 
 
+def is_identifier(text: str) -> bool:
+    """True iff `text` looks like a single source-code identifier
+    (no spaces, no punctuation). Used by the lenient-substring
+    fallback to decide whether substring matching is safe."""
+    return bool(IDENT_RE.match(text))
+
+
 def score_one(row: dict[str, Any], fallback: bool = True) -> bool:
     """True iff the agent's answer matches ground truth.
 
@@ -53,7 +81,18 @@ def score_one(row: dict[str, Any], fallback: bool = True) -> bool:
     Weak models (DeepSeek flash) frequently emit the right answer
     in prose but forget the `<answer>...</answer>` tags. Strict
     scoring punishes tag adherence; lenient scoring measures
-    underlying capability. The harness records both."""
+    underlying capability. The harness records both.
+
+    Lenient extensions (2026-05-20, per Phase 2 mini-fixed misses):
+    - HTML entities are normalised in both answer and truth so an
+      agent that returns `"&lt;function&gt;"` matches `"<function>"`.
+    - When the ground truth is a single identifier (no spaces /
+      special chars) and the agent's answer contains the truth as a
+      whole-word substring, count it correct. Catches verbose
+      replies like `"errorMap (v3), getSizing (v4)"` when GT is
+      `"getSizing"`. The whole-word boundary check avoids false
+      positives like `"getSizingV2"` matching `"getSizing"`.
+    """
     if row.get("error"):
         return False
     answer = row.get("answer_raw")
@@ -64,18 +103,27 @@ def score_one(row: dict[str, Any], fallback: bool = True) -> bool:
         answer = tail
     if not answer:
         return False
+    answer_norm = normalize_html_entities(str(answer))
+    truth_norm = normalize_html_entities(str(truth))
     if kind == "references_count":
-        a = extract_int(answer)
+        a = extract_int(answer_norm)
         return a is not None and a == int(truth)
     if kind == "definition_path":
-        # Fallback case: tail may contain the path as a fragment.
-        if normalize_path(answer) == normalize_path(str(truth)):
+        if normalize_path(answer_norm) == normalize_path(truth_norm):
             return True
-        # Path may be substring of a longer tail string.
-        if str(truth) in answer:
+        if truth_norm in answer_norm:
             return True
         return False
-    return str(answer).strip() == str(truth).strip()
+    if answer_norm.strip() == truth_norm.strip():
+        return True
+    # Lenient substring match for single-identifier ground truths.
+    # Whole-word boundary required so that "getSizingV2" doesn't
+    # match "getSizing".
+    if is_identifier(truth_norm.strip()):
+        pattern = re.compile(r"\b" + re.escape(truth_norm.strip()) + r"\b")
+        if pattern.search(answer_norm):
+            return True
+    return False
 
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
