@@ -149,6 +149,9 @@ fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
     root_markers: option.unwrap(override.root_markers, []),
     root_promotion: NoPromotion,
     servers: final_servers,
+    // ADR-029: user-defined language entries get no custom URI
+    // schemes by default. Adding them via toml is deferred post-v1.0.
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -202,6 +205,10 @@ fn merge_one(default: LanguageConfig, override: LanguageOverride) -> LanguageCon
     },
     root_promotion: default.root_promotion,
     servers: merged_servers,
+    // ADR-029: toml overrides of `custom_uri_schemes` are deferred to
+    // post-v1.0. The merger passes the default through verbatim so
+    // the jdt:// entry on java() reaches the registry unchanged.
+    custom_uri_schemes: default.custom_uri_schemes,
   )
 }
 

@@ -256,6 +256,32 @@ pub type LanguageConfig {
     /// adds ruff alongside pyright for python. Order matters when
     /// `MethodScope` overlaps — see Stage 3 routing rules.
     servers: List(ServerConfig),
+    /// ADR-029. Custom URI schemes this language's server emits and
+    /// accepts (e.g. `jdt://` for jdtls JAR-contents). Map key is the
+    /// scheme name without `://`. Empty for languages whose deps
+    /// materialise to disk (rust, go, python, ts, etc.). Read by
+    /// session.gleam to whitelist non-`file://` URIs and route them
+    /// through this language's session; read by `fetch_uri_contents`
+    /// to dispatch the per-scheme LSP method. User-overridable from
+    /// toml is post-v1.0 — defaults baked here for now.
+    custom_uri_schemes: Dict(String, CustomUriScheme),
+  )
+}
+
+/// ADR-029. Per-scheme metadata the server needs to materialise
+/// content from a custom URI.
+pub type CustomUriScheme {
+  CustomUriScheme(
+    /// LSP method to call with `{uri: <full-uri>}` to fetch the
+    /// virtual content. For jdtls: `"java/classFileContents"`.
+    fetch_method: String,
+    /// JSON path (currently single key only) inside the LSP
+    /// response result whose value is the textual contents. For
+    /// jdtls's `java/classFileContents`, the response IS the string,
+    /// so this is empty. For servers that wrap content in
+    /// `{contents: "..."}`, this would be `"contents"`. Empty string
+    /// means "the response is the content directly."
+    fetch_response_field: String,
   )
 }
 
@@ -337,6 +363,47 @@ pub fn for_uri(
   }
 }
 
+/// ADR-029. Look up the language + scheme metadata for a custom URI.
+/// Walks `registry` and returns the first language whose
+/// `custom_uri_schemes` contains a key matching the URI's scheme
+/// (the substring before `://`). Returns `Error(Nil)` when no
+/// language claims the scheme or when the URI shape is malformed.
+///
+/// Callers in `session.gleam` use this to route a `jdt://` URI to
+/// the java language's active sessions; `fetch_uri_contents` uses it
+/// to dispatch the per-scheme LSP method.
+pub fn for_custom_uri(
+  registry: Dict(String, LanguageConfig),
+  uri: String,
+) -> Result(#(LanguageConfig, CustomUriScheme), Nil) {
+  case string.split_once(uri, "://") {
+    Error(_) -> Error(Nil)
+    Ok(#(scheme, _rest)) -> {
+      let configs = dict.values(registry)
+      list.find_map(configs, fn(config) {
+        case dict.get(config.custom_uri_schemes, scheme) {
+          Ok(meta) -> Ok(#(config, meta))
+          Error(_) -> Error(Nil)
+        }
+      })
+    }
+  }
+}
+
+/// ADR-029. Enumerate every (scheme, language_id) pair across the
+/// registry. Used by MCP server startup to generate the
+/// `instructions` string advert for custom URI schemes.
+pub fn all_custom_schemes(
+  registry: Dict(String, LanguageConfig),
+) -> List(#(String, String)) {
+  dict.values(registry)
+  |> list.flat_map(fn(config) {
+    config.custom_uri_schemes
+    |> dict.keys
+    |> list.map(fn(scheme) { #(scheme, config.id) })
+  })
+}
+
 // -- Bundled defaults ----------------------------------------------------
 
 fn rust() -> LanguageConfig {
@@ -364,6 +431,7 @@ fn rust() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -391,6 +459,7 @@ fn go() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -436,6 +505,7 @@ fn typescript() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -511,6 +581,7 @@ fn elixir() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -538,6 +609,7 @@ fn ruby() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -564,6 +636,7 @@ fn zig() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -597,6 +670,7 @@ fn cpp() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -640,6 +714,7 @@ fn scala() -> LanguageConfig {
         warmup_probe: ProbeNone,
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -669,6 +744,7 @@ fn clojure() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -699,6 +775,7 @@ fn haskell() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -733,6 +810,7 @@ fn perl() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -760,6 +838,7 @@ fn html() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -784,6 +863,7 @@ fn css() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -810,6 +890,7 @@ fn json_lang() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -836,6 +917,7 @@ fn yaml() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -862,6 +944,7 @@ fn markdown() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -890,6 +973,7 @@ fn terraform() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -927,6 +1011,7 @@ fn erlang() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -962,6 +1047,23 @@ fn java() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    // ADR-029. jdtls returns `jdt://contents/...` URIs for class files
+    // inside JARs (compiled deps, no on-disk source). The
+    // `java/classFileContents` extension method returns the
+    // decompiled source as a plain string — pharos's
+    // `fetch_uri_contents` tool routes through this entry. Pharos's
+    // session.gleam also uses this map to whitelist `jdt://` for
+    // passthrough to existing navigation tools (hover,
+    // find_references, goto_definition).
+    custom_uri_schemes: dict.from_list([
+      #(
+        "jdt",
+        CustomUriScheme(
+          fetch_method: "java/classFileContents",
+          fetch_response_field: "",
+        ),
+      ),
+    ]),
   )
 }
 
@@ -998,6 +1100,7 @@ fn gleam() -> LanguageConfig {
         warmup_probe: ProbeNone,
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -1029,6 +1132,7 @@ fn lua() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -1061,6 +1165,7 @@ fn bash() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
 
@@ -1116,5 +1221,6 @@ fn python() -> LanguageConfig {
         warmup_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    custom_uri_schemes: dict.new(),
   )
 }
