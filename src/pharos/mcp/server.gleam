@@ -270,12 +270,42 @@ fn initialize_response(id: Id) -> String {
       // adoption (−83 % grep-fishing calls in the pro-thinking
       // hybrid run). Keep terse; the per-tool prose carries the
       // rest of the surface.
-      #("instructions", json.string(server_instructions)),
+      #("instructions", json.string(build_server_instructions())),
     ])
   })
 }
 
-const server_instructions: String = "Language-aware code navigation via LSP. Tools wrap real LSP servers (rust-analyzer, gopls, jdtls, pyright, gleam-lsp, and others). Use for symbol resolution, references, definitions, refactors. Prefer LSP tools over grep when answers depend on scope, types, or cross-file symbol identity. Project memory tools (memory_*) save curated notes per project; use sparingly."
+const server_instructions_base: String = "Language-aware code navigation via LSP. Tools wrap real LSP servers (rust-analyzer, gopls, jdtls, pyright, gleam-lsp, and others). Use for symbol resolution, references, definitions, refactors. Prefer LSP tools over grep when answers depend on scope, types, or cross-file symbol identity. Project memory tools (memory_*) save curated notes per project; use sparingly."
+
+/// ADR-029. Append a custom-URI scheme advert to the base
+/// instructions when any language in the registry declares
+/// `custom_uri_schemes`. Pharos's navigation tools accept these
+/// URIs after session-gate relaxation, but the LLM has to be told
+/// they're an option — generated once per handshake from the live
+/// registry so adding a scheme via toml requires no code change.
+fn build_server_instructions() -> String {
+  let pairs = registry.all_custom_schemes()
+  case pairs {
+    [] -> server_instructions_base
+    _ -> {
+      let scheme_list =
+        pairs
+        |> list.map(fn(p) {
+          let #(scheme, language) = p
+          scheme <> ":// (" <> language <> ")"
+        })
+        |> string.join(", ")
+      server_instructions_base
+      <> " Custom URI schemes supported: "
+      <> scheme_list
+      <> ". These flow through navigation tools (hover, find_references, "
+      <> "goto_definition, etc.) transparently when one session for the "
+      <> "scheme's language is active; use `fetch_uri_contents` to read "
+      <> "raw text. Edits to virtual URIs are rejected — modify deps "
+      <> "via project overrides or build configuration."
+    }
+  }
+}
 
 fn server_capabilities() -> Json {
   json.object([
