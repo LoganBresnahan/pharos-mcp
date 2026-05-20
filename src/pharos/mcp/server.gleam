@@ -3097,18 +3097,25 @@ fn containing_symbol_tool_definition() -> Json {
     #(
       "description",
       json.string(
-        "Map a `(uri, line)` to the innermost named symbol whose "
-          <> "range contains that line. Use for stack-trace-style "
-          <> "lookups (\"what function owns line 47 of foo.ts?\") and "
-          <> "for `containing_symbol` benchmark questions. Cheaper "
-          <> "than dumping the whole file outline via "
-          <> "get_symbols_overview when only one line's owner is "
-          <> "wanted. Returns `{match: SymbolMatch}` with name, kind, "
-          <> "kind_name, range, selection_range, full_path, "
-          <> "matched_via=\"containing_range\", and a SymbolHandle that "
-          <> "chains into find_referencing_symbols / edit_at_symbol; "
-          <> "or `{match: null}` if the line falls outside every "
-          <> "named symbol (top-of-file imports, blank lines, etc.).",
+        "Map a `(uri, line)` — or `(uri, line, character)` for "
+          <> "cursor-precise lookups — to the innermost named symbol "
+          <> "whose range contains that position. Use for stack-trace-"
+          <> "style lookups (\"what function owns line 47 of "
+          <> "foo.ts?\") and cursor-driven UX (\"what does the caret "
+          <> "currently sit inside?\"). `character` defaults to 0 "
+          <> "when omitted — line membership is enough for stack-"
+          <> "trace work. Provide a column when nested same-line "
+          <> "scopes need disambiguating (e.g. arrow functions inside "
+          <> "a class body). Cheaper than dumping the whole file "
+          <> "outline via get_symbols_overview when only one "
+          <> "position's owner is wanted. Returns `{match: "
+          <> "SymbolMatch}` with name, kind, kind_name, range, "
+          <> "selection_range, full_path, "
+          <> "matched_via=\"containing_range\", and a SymbolHandle "
+          <> "that chains into find_referencing_symbols / "
+          <> "edit_at_symbol; or `{match: null}` if the position "
+          <> "falls outside every named symbol (top-of-file imports, "
+          <> "blank lines, etc.).",
       ),
     ),
     #(
@@ -3139,6 +3146,20 @@ fn containing_symbol_tool_definition() -> Json {
                   json.string(
                     "Zero-based line number to map to its containing "
                       <> "symbol.",
+                  ),
+                ),
+              ]),
+            ),
+            #(
+              "character",
+              json.object([
+                #("type", json.string("integer")),
+                #(
+                  "description",
+                  json.string(
+                    "Optional zero-based UTF-16 column. Defaults to 0 "
+                      <> "(line-membership semantics). Provide when "
+                      <> "nested same-line scopes need disambiguating.",
                   ),
                 ),
               ]),
@@ -3326,8 +3347,8 @@ fn handle_containing_symbol(
         -32_602,
         "Invalid containing_symbol params: " <> reason,
       )
-    Ok(#(uri, line)) ->
-      case symbols.containing_symbol(pool, uri, line) {
+    Ok(#(uri, line, character)) ->
+      case symbols.containing_symbol(pool, uri, line, character) {
         Ok(maybe_match) ->
           success_response(id, fn() {
             tool_text_result(
@@ -3463,18 +3484,23 @@ fn decode_get_symbols_overview_arguments(
 
 fn decode_containing_symbol_arguments(
   arguments: Option(Dynamic),
-) -> Result(#(String, Int), String) {
+) -> Result(#(String, Int, Int), String) {
   case arguments {
     None -> Error("missing arguments")
     Some(args) -> {
       let decoder = {
         use uri <- decode.field("uri", decode.string)
         use line <- decode.field("line", decode.int)
-        decode.success(#(uri, line))
+        use character <- decode.optional_field("character", 0, decode.int)
+        decode.success(#(uri, line, character))
       }
       case decode.run(args, decoder) {
-        Error(_) -> Error("expected `uri: string`, `line: int`")
-        Ok(pair) -> Ok(pair)
+        Error(_) ->
+          Error(
+            "expected `uri: string`, `line: int`, "
+              <> "optional `character: int`",
+          )
+        Ok(triple) -> Ok(triple)
       }
     }
   }

@@ -794,19 +794,25 @@ fn range_size(r: Range) -> Int {
 
 // -- containing_symbol --------------------------------------------------
 
-/// Resolve `(uri, line)` to the innermost named symbol whose `range`
-/// contains that line. Server-side cousin of "what function does this
-/// stack-trace line live in?" — saves the caller from fetching the
-/// whole documentSymbol tree and walking it by hand.
+/// Resolve `(uri, line, character)` to the innermost named symbol whose
+/// `range` contains that position. Server-side cousin of "what function
+/// does this stack-trace line live in?" — saves the caller from
+/// fetching the whole documentSymbol tree and walking it by hand.
 ///
-/// Probes the line at character 0 because the column rarely
-/// disambiguates which container owns the line — line membership is
-/// what callers actually care about. Returns `None` if the line is
-/// outside every named symbol's range (e.g. top-of-file imports).
+/// `character` defaults to 0 when the caller hasn't supplied a column.
+/// Line-only membership is the right answer for stack-trace lookups
+/// where the column doesn't disambiguate anything. Passing an explicit
+/// column matters for cursor-driven use cases (caret position inside
+/// a nested one-liner like `class A { fn b(){ fn c(){} } }` resolves
+/// to `A` / `b` / `c` depending on column).
+///
+/// Returns `None` if the position falls outside every named symbol's
+/// range (e.g. top-of-file imports, blank lines).
 pub fn containing_symbol(
   pool: Pool,
   uri: String,
   line: Int,
+  character: Int,
 ) -> Result(Option(SymbolMatch), SymbolsError) {
   use tree <- result.try(document_symbol_query(
     pool,
@@ -815,7 +821,7 @@ pub fn containing_symbol(
   ))
   Ok(smallest_containing(
     tree,
-    Position(line: line, character: 0),
+    Position(line: line, character: character),
     [],
     uri,
   ))
