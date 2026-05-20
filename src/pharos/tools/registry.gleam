@@ -66,7 +66,9 @@ pub fn category_for(name: String) -> ToolCategory {
     | "find_symbol"
     | "get_symbols_overview"
     | "containing_symbol"
-    | "find_referencing_symbols" -> CatRead
+    | "find_referencing_symbols"
+    // -- ADR-029 custom URI read --
+    | "fetch_uri_contents" -> CatRead
 
     // -- write (returns WorkspaceEdit data; or applies it on demand) --
     "rename_preview"

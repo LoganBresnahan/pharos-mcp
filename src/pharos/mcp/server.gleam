@@ -44,6 +44,7 @@ import pharos/tools/format_document
 import pharos/tools/goto_implementation
 import pharos/tools/inlay_hints
 import pharos/tools/goto_type_definition
+import pharos/tools/fetch_uri_contents
 import pharos/tools/lsp_request_raw
 import pharos/tools/registry as tool_registry
 import pharos/tools/debug
@@ -333,6 +334,8 @@ fn allowed_tool_definitions() -> List(Json) {
       type_hierarchy_subtypes_tool_definition,
     ),
     #("lsp_request_raw", lsp_request_raw_tool_definition),
+    // -- ADR-029 custom URI schemes --
+    #("fetch_uri_contents", fetch_uri_contents_tool_definition),
     // -- ADR-026 symbol layer --
     #("find_symbol", find_symbol_tool_definition),
     #("get_symbols_overview", get_symbols_overview_tool_definition),
@@ -894,6 +897,9 @@ fn dispatch_tool_call(
 
     Ok(#("lsp_request_raw", arguments)) ->
       handle_lsp_request_raw(pool, id, arguments)
+
+    Ok(#("fetch_uri_contents", arguments)) ->
+      handle_fetch_uri_contents(pool, id, arguments)
 
     // -- ADR-026 symbol layer --
     Ok(#("find_symbol", arguments)) ->
@@ -1619,6 +1625,107 @@ fn handle_lsp_request_raw(
         Error(lsp_request_raw.RequestFailed(reason)) ->
           success_response(id, fn() { tool_text_result(reason, True) })
       }
+  }
+}
+
+fn handle_fetch_uri_contents(
+  pool: Pool,
+  id: Id,
+  arguments: Option(Dynamic),
+) -> String {
+  case decode_fetch_uri_contents_arguments(arguments) {
+    Error(reason) ->
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid fetch_uri_contents params: " <> reason,
+      )
+    Ok(#(uri, timeout_ms)) ->
+      case fetch_uri_contents.handle(pool, uri, timeout_ms) {
+        Ok(json_text) ->
+          success_response(id, fn() { tool_text_result(json_text, False) })
+        Error(fetch_uri_contents.SessionFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(fetch_uri_contents.RequestFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+        Error(fetch_uri_contents.DecodeFailed(reason)) ->
+          success_response(id, fn() { tool_text_result(reason, True) })
+      }
+  }
+}
+
+fn fetch_uri_contents_tool_definition() -> Json {
+  json.object([
+    #("name", json.string("fetch_uri_contents")),
+    #(
+      "description",
+      json.string(
+        "ADR-029. Read raw text from a custom-scheme URI (e.g. "
+          <> "`jdt://contents/...` for a Java class inside a JAR) by "
+          <> "dispatching the per-scheme LSP extension method declared "
+          <> "in the language registry. Returns `{uri, content}` JSON. "
+          <> "For `file://` URIs use Claude Code's `Read` tool instead "
+          <> "— this tool only handles virtual URIs. Requires a Ready "
+          <> "LSP session for the scheme's language (open a `file://` "
+          <> "from the same workspace first if you haven't already).",
+      ),
+    ),
+    #(
+      "inputSchema",
+      json.object([
+        #("type", json.string("object")),
+        #(
+          "properties",
+          json.object([
+            #(
+              "uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "Custom-scheme URI to read (e.g. `jdt://contents/foo.jar/com/example/Bar.class`). "
+                    <> "Pharos's existing navigation tools (hover, find_references, etc.) "
+                    <> "already accept the same URIs; reach for fetch_uri_contents only "
+                    <> "when you need the full source body as text.",
+                  ),
+                ),
+              ]),
+            ),
+            timeout_ms_property(),
+          ]),
+        ),
+        #("required", json.preprocessed_array([json.string("uri")])),
+      ]),
+    ),
+  ])
+}
+
+fn decode_fetch_uri_contents_arguments(
+  args: Option(Dynamic),
+) -> Result(#(String, Int), String) {
+  use raw <- result.try(option.to_result(args, "arguments object missing"))
+  let decoder = {
+    use uri <- decode.field("uri", decode.string)
+    use timeout_arg <- decode.optional_field(
+      "timeout_ms",
+      None,
+      decode.map(decode.int, Some),
+    )
+    decode.success(#(uri, timeout_arg))
+  }
+  case decode.run(raw, decoder) {
+    Ok(#(uri, timeout_arg)) ->
+      Ok(#(
+        uri,
+        finalize_timeout_no_lang(
+          "fetch_uri_contents",
+          fetch_uri_contents.default_timeout_ms,
+          timeout_arg,
+        ),
+      ))
+    Error(_) ->
+      Error("expected `uri: string`, optional `timeout_ms: int`")
   }
 }
 
