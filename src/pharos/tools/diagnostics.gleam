@@ -59,6 +59,16 @@ pub type DiagnosticsError {
   TransportFailed(reason: String)
   /// Tool was called on a file with an unsupported extension.
   UnsupportedFileType(uri: String)
+  /// ADR-029: URI used a non-file scheme that no language declared.
+  UnknownCustomUriScheme(uri: String)
+  /// ADR-029: custom URI's language has no Ready session in the pool.
+  NoActiveSessionForLanguage(uri: String, language: String)
+  /// ADR-029: custom URI's language has multiple Ready workspaces.
+  AmbiguousSessionForLanguage(
+    uri: String,
+    language: String,
+    workspaces: List(String),
+  )
 }
 
 pub type DiagnosticsResult {
@@ -511,6 +521,11 @@ fn map_session_error(err: session.SessionError) -> DiagnosticsError {
     session.UnsupportedFileType(uri) -> UnsupportedFileType(uri)
     session.SpawnFailed(reason) -> SpawnFailed(reason)
     session.HandshakeFailed(reason) -> HandshakeFailed(reason)
+    session.UnknownCustomUriScheme(uri) -> UnknownCustomUriScheme(uri)
+    session.NoActiveSessionForLanguage(uri, language) ->
+      NoActiveSessionForLanguage(uri, language)
+    session.AmbiguousSessionForLanguage(uri, language, workspaces) ->
+      AmbiguousSessionForLanguage(uri, language, workspaces)
   }
 }
 

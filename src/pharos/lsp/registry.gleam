@@ -93,6 +93,22 @@ pub fn for_language(id: String) -> Result(LanguageConfig, LookupError) {
   }
 }
 
+/// ADR-029. Resolve a custom URI scheme (e.g. `jdt://...`) through
+/// the cached registry. Returns the language + scheme metadata for
+/// the language that claims the URI's scheme. `Error(Nil)` when the
+/// URI shape is malformed or no language claims the scheme.
+pub fn for_custom_uri(
+  uri: String,
+) -> Result(#(LanguageConfig, languages.CustomUriScheme), Nil) {
+  languages.for_custom_uri(cached(), uri)
+}
+
+/// ADR-029. All `(scheme, language_id)` pairs across the registry.
+/// Used by the MCP `instructions` advert generator.
+pub fn all_custom_schemes() -> List(#(String, String)) {
+  languages.all_custom_schemes(cached())
+}
+
 // -- Persistent-term backing ---------------------------------------------
 
 @external(erlang, "pharos_runtime_ffi", "registry_store")

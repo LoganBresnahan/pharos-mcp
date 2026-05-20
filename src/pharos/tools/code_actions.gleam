@@ -25,6 +25,7 @@ import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
 import pharos/tools/session
 import pharos/tools/tool_helpers
+import gleam/string
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -147,5 +148,20 @@ fn describe_session_error(err: session.SessionError) -> String {
     session.SpawnFailed(reason) -> "LSP spawn failed: " <> reason
     session.HandshakeFailed(reason) ->
       "LSP initialize handshake failed: " <> reason
+    session.UnknownCustomUriScheme(uri) ->
+      "custom URI scheme not registered for any language: " <> uri
+    session.NoActiveSessionForLanguage(uri, language) ->
+      "no active "
+      <> language
+      <> " session for custom URI "
+      <> uri
+      <> "; open a file:// from the same workspace first"
+    session.AmbiguousSessionForLanguage(uri, language, workspaces) ->
+      "ambiguous "
+      <> language
+      <> " session for custom URI "
+      <> uri
+      <> "; multiple workspaces active: "
+      <> string.join(workspaces, ", ")
   }
 }

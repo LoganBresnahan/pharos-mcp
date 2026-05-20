@@ -19,6 +19,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 import pharos/config
 import pharos/log
 import pharos/log/entry as log_entry
@@ -2908,6 +2909,21 @@ fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
       "LSP transport error: " <> reason
     diagnostics.UnsupportedFileType(uri) ->
       "v0.1 only supports .rs files; got: " <> uri
+    diagnostics.UnknownCustomUriScheme(uri) ->
+      "custom URI scheme not registered for any language: " <> uri
+    diagnostics.NoActiveSessionForLanguage(uri, language) ->
+      "no active "
+      <> language
+      <> " session for custom URI "
+      <> uri
+      <> "; open a file:// from the same workspace first"
+    diagnostics.AmbiguousSessionForLanguage(uri, language, workspaces) ->
+      "ambiguous "
+      <> language
+      <> " session for custom URI "
+      <> uri
+      <> "; multiple workspaces active: "
+      <> string.join(workspaces, ", ")
   }
 }
 
