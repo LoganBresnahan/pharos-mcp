@@ -42,6 +42,12 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 020 | [Hot code reload tool for dev iteration](020-hot-code-reload-dev-tool.md) | Proposed (Deferred) |
 | 021 | [Timeout resolution stack, per-tool × per-lang config, LLM-driven session overrides](021-timeout-resolution-and-autotune.md) | Accepted |
 | 022 | [Logging conventions: structured fields canonical, file rotation, ring target-prefix filter](022-logging-conventions.md) | Accepted |
+| 023 | [Compact response format](023-compact-response-format.md) | Accepted |
+| 024 | [LSP readiness gate](024-lsp-readiness-gate.md) | Accepted |
+| 025 | [Pool off-actor spawn](025-pool-off-actor-spawn.md) | Accepted |
+| 026 | [Symbol layer](026-symbol-layer.md) | Accepted |
+| 027 | [Project-local memory tools for cross-MCP-client knowledge sharing](027-project-memory-tools.md) | Proposed |
+| 028 | [Universal editor bridge: sensors and displays, never LSP host](028-universal-editor-bridge.md) | Proposed |
 
 ## Anticipated future ADRs
 
