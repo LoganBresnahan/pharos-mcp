@@ -8,7 +8,7 @@ name = "pharos"
 version = "0.0.1"
 target = "erlang"
 description = "MCP server bridging LLMs to LSP servers."
-licences = ["MIT"]
+licences = ["AGPL-3.0-only"]
 
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"

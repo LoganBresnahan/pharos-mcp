@@ -635,4 +635,20 @@ MIX_ENV=prod mix release                 # produces Burrito binaries in burrito_
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Pharos is dual-licensed.
+
+**Open-source license**: [AGPL-3.0-only](LICENSE). Use, modify,
+and self-host pharos freely under the AGPL. Network use counts
+as distribution — if you operate pharos as part of a service
+offered to others, you must offer the corresponding source under
+the same license.
+
+**Commercial license**: if the AGPL's terms don't work for your
+deployment (e.g. you ship pharos inside a closed-source product
+or operate it inside a managed-service offering where you can't
+release source), a commercial license is available. See
+[COMMERCIAL.md](COMMERCIAL.md).
+
+Contributors sign a [CLA](CONTRIBUTING.md#contributor-license-agreement)
+so the project can offer both license tracks. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full flow.
