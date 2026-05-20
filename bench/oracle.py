@@ -631,6 +631,17 @@ def gen_diagnostics_count(mcp: McpStdio, sym: dict[str, Any],
     }
 
 
+_ANON_NAME_PLACEHOLDERS = frozenset({
+    "",
+    "<function>",
+    "<anonymous>",
+    "<lambda>",
+    "<closure>",
+    "default",
+    "_",
+})
+
+
 def gen_containing_symbol(mcp: McpStdio, sym: dict[str, Any],
                           workspace_label: str, qid: str,
                           ctx: dict[str, Any]) -> dict[str, Any] | None:
@@ -641,7 +652,15 @@ def gen_containing_symbol(mcp: McpStdio, sym: dict[str, Any],
     so we know it's the innermost named container for any line inside
     its range. To avoid ambiguity from nested symbols, we pick a line
     just past the declaration where nested children are unlikely to
-    have begun yet."""
+    have begun yet.
+
+    Skip anchors where `sym["name"]` is empty or one of the
+    placeholder strings LSPs return for unnamed entities (arrow
+    functions, lambdas, unnamed default exports). Both arms see the
+    placeholder string and may answer it differently — the question
+    is uninformative."""
+    if sym["name"] in _ANON_NAME_PLACEHOLDERS:
+        return None
     rs = sym["range_start_line"]
     re_ = sym["range_end_line"]
     if re_ <= rs + 1:
@@ -841,12 +860,21 @@ def main() -> int:
         # agent navigate a real codebase." Both heuristics are coarse;
         # refine when corpus-specific conventions warrant.
         before = len(symbols)
+        # Test-file / test-symbol heuristics. Different languages
+        # follow different conventions:
+        # - Gleam / Rust: `_test` suffix on the function name
+        # - Python / generic: `test_` prefix on the function name
+        # - Most projects: `/test/` or `/tests/` directory in the path
+        # - Go: filename ends in `_test.go` (no directory marker)
+        # - Java / Kotlin / Scala: `/src/test/` directory tree
         symbols = [
             s for s in symbols
             if not s["name"].endswith("_test")
             and not s["name"].startswith("test_")
             and "/test/" not in s["uri"]
             and "/tests/" not in s["uri"]
+            and not s["uri"].endswith("_test.go")
+            and "/src/test/" not in s["uri"]
         ]
         print(f"[oracle] {before} → {len(symbols)} symbols after test-filter",
               file=sys.stderr)
