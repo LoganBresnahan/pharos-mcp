@@ -48,6 +48,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 026 | [Symbol layer](026-symbol-layer.md) | Accepted |
 | 027 | [Project-local memory tools for cross-MCP-client knowledge sharing](027-project-memory-tools.md) | Accepted |
 | 028 | [Universal editor bridge: sensors and displays, never LSP host](028-universal-editor-bridge.md) | Proposed |
+| 029 | [Custom URI schemes: relaxed gate, config-driven registry, read-only semantics](029-custom-uri-schemes.md) | Proposed |
 
 ## Anticipated future ADRs
 
