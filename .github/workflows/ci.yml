@@ -1,9 +1,19 @@
 name: ci
 
+# Automatic triggers paused while pharos-mcp is a private repo —
+# GitHub Actions on private repos bills against the account's
+# free-tier minutes, and pre-release iteration would chew through
+# them quickly. The workflow body is preserved so it runs as soon
+# as the repo flips public (per release.md Stage C-2 — when we
+# tag v1.0-rc1). Restore by replacing the `on:` block below with
+# the commented form above:
+#
+# on:
+#   push:
+#     branches: [main]
+#   pull_request:
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
