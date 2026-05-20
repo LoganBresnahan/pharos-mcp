@@ -1,6 +1,6 @@
 # 027. Project-local memory tools for cross-MCP-client knowledge sharing
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-16
 
 ## Context

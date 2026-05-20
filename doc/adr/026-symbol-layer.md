@@ -1,6 +1,6 @@
 # 026. Symbol-layer MCP tools above the raw LSP primitives
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-15
 
 ## Context

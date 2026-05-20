@@ -46,7 +46,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 024 | [LSP readiness gate](024-lsp-readiness-gate.md) | Accepted |
 | 025 | [Pool off-actor spawn](025-pool-off-actor-spawn.md) | Accepted |
 | 026 | [Symbol layer](026-symbol-layer.md) | Accepted |
-| 027 | [Project-local memory tools for cross-MCP-client knowledge sharing](027-project-memory-tools.md) | Proposed |
+| 027 | [Project-local memory tools for cross-MCP-client knowledge sharing](027-project-memory-tools.md) | Accepted |
 | 028 | [Universal editor bridge: sensors and displays, never LSP host](028-universal-editor-bridge.md) | Proposed |
 
 ## Anticipated future ADRs

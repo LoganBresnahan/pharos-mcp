@@ -1,12 +1,15 @@
 //// MCP protocol dispatch.
 ////
-//// Pure-function dispatch for the milestone-1 echo server. Takes a
-//// raw NDJSON line, decodes it, dispatches by method, returns the
-//// JSON string to write back to stdout (or `Nil` for notifications,
+//// Pure-function dispatch. Takes a raw NDJSON line, decodes it,
+//// dispatches by method to per-tool handlers, returns the JSON
+//// string to write back to stdout (or `Nil` for notifications,
 //// which produce no response).
 ////
-//// Tool registry is hardcoded inline — only `echo` exists. Real tool
-//// dispatch with a registry abstraction lands in Milestone 4.
+//// The tool surface is fully populated — see `pharos/tools/*` for
+//// implementations and `pharos/tools/registry` for the category /
+//// filter logic. The flat dispatch in this module is deliberate:
+//// every tool is one explicit case branch so the code reads as a
+//// menu the MCP host sees.
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode

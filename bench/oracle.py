@@ -789,14 +789,16 @@ def main() -> int:
     ap.add_argument("--out", required=True,
                     help="output JSONL path")
     ap.add_argument("--n", type=int, default=30,
-                    help="target number of questions in round-robin mode "
-                         "(ignored when --per-kind is set)")
+                    help="legacy round-robin mode: target total number of "
+                         "questions across all kinds (ignored when "
+                         "--per-kind is set, which is the recommended "
+                         "path for new benchmark runs)")
     ap.add_argument("--per-kind", type=int, default=0,
-                    help="target questions per generator kind. When >0, "
-                         "switches to per-kind sampling — each kind gets "
-                         "its own pass over the symbol pool until N hit "
-                         "or pool exhausted. Use for balanced Phase 2 "
-                         "banks where per-kind metrics matter.")
+                    help="recommended sampling mode. Target questions per "
+                         "generator kind; each kind walks the symbol pool "
+                         "independently until N hit or pool exhausted. "
+                         "Produces balanced banks so per-kind metrics are "
+                         "comparable across corpora.")
     ap.add_argument("--kinds", default=None,
                     help="comma-separated subset of kinds to enable "
                          "(default = all). Names: references_count, "
