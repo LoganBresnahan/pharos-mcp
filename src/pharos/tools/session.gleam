@@ -21,10 +21,11 @@ import gleam/json
 import gleam/list
 import gleam/option
 import gleam/result
+import gleam/string
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
-  type LanguageConfig, CargoWorkspacePromotion, NoPromotion,
+  type CustomUriScheme, type LanguageConfig, CargoWorkspacePromotion, NoPromotion,
 }
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
@@ -64,6 +65,28 @@ pub type SessionError {
   UnsupportedFileType(uri: String)
   SpawnFailed(reason: String)
   HandshakeFailed(reason: String)
+  /// ADR-029. URI uses a scheme other than `file://` AND no language
+  /// in the registry declares that scheme via `custom_uri_schemes`.
+  /// Surface name carries the URI verbatim so the LLM can see what
+  /// it sent.
+  UnknownCustomUriScheme(uri: String)
+  /// ADR-029. Custom URI was recognised (its scheme maps to
+  /// `language`), but no Ready session for that language exists in
+  /// the pool — `jdt://...` was passed before any Java file was
+  /// opened. Recovery: open a `file://` for the same workspace first
+  /// (any tool that takes a file URI spawns the session).
+  NoActiveSessionForLanguage(uri: String, language: String)
+  /// ADR-029. Custom URI was recognised AND multiple Ready sessions
+  /// exist for the language. Pharos can't infer which workspace the
+  /// URI belongs to. v1.0 surfaces this as a hard error — pass an
+  /// explicit `workspace_uri_hint` from the intended workspace if
+  /// the tool accepts one. The `workspaces` list shows the
+  /// candidates so the LLM can choose.
+  AmbiguousSessionForLanguage(
+    uri: String,
+    language: String,
+    workspaces: List(String),
+  )
 }
 
 pub type RetryError {
@@ -405,7 +428,22 @@ fn retry_workspace_after_evict(
 /// the cached LSP from the pool (or spawns a fresh one), and asks
 /// the pool to send `didOpen` if it has not already done so this
 /// session for this (language, workspace, uri) triple.
-pub fn prepare(pool: Pool, file_uri: String) -> Result(Proc, SessionError) {
+///
+/// ADR-029: when `uri` uses a custom scheme (e.g. `jdt://`), routes
+/// through `prepare_for_custom_uri` instead — workspace is inferred
+/// from active sessions matching the scheme's language, didOpen is
+/// skipped (the server already knows about URIs it emitted).
+pub fn prepare(pool: Pool, uri: String) -> Result(Proc, SessionError) {
+  case is_custom_uri(uri) {
+    True -> prepare_for_custom_uri(pool, uri)
+    False -> prepare_from_file_uri(pool, uri)
+  }
+}
+
+fn prepare_from_file_uri(
+  pool: Pool,
+  file_uri: String,
+) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(file_uri))
   use raw_workspace <- result.try(discover_workspace(
     file_uri,
@@ -421,7 +459,20 @@ pub fn prepare(pool: Pool, file_uri: String) -> Result(Proc, SessionError) {
 /// (`workspace_symbols`) rather than on a specific file. Looks up
 /// the language by the URI hint, discovers the workspace root,
 /// fetches the LSP. Skips didOpen since no file is being focused.
+///
+/// ADR-029: custom-scheme URIs route through `prepare_for_custom_uri`
+/// — same path as `prepare/2`.
 pub fn prepare_workspace(
+  pool: Pool,
+  workspace_uri_hint: String,
+) -> Result(Proc, SessionError) {
+  case is_custom_uri(workspace_uri_hint) {
+    True -> prepare_for_custom_uri(pool, workspace_uri_hint)
+    False -> prepare_workspace_from_file_uri(pool, workspace_uri_hint)
+  }
+}
+
+fn prepare_workspace_from_file_uri(
   pool: Pool,
   workspace_uri_hint: String,
 ) -> Result(Proc, SessionError) {
@@ -461,11 +512,121 @@ pub fn config_for_uri(uri: String) -> Result(LanguageConfig, SessionError) {
   lookup_config(uri)
 }
 
+/// ADR-029. Detect whether a URI uses a non-`file://` scheme. The
+/// substring before `://` is the scheme; an absent `://` (relative
+/// path, malformed URI) returns False so callers fall through to
+/// existing file-URI handling and surface `NotAFileUri` at a sharper
+/// boundary.
+pub fn is_custom_uri(uri: String) -> Bool {
+  case string.split_once(uri, "://") {
+    Ok(#("file", _)) -> False
+    Ok(#("", _)) -> False
+    Ok(_) -> True
+    Error(_) -> False
+  }
+}
+
+/// ADR-029. Resolve a Proc for a custom-scheme URI (e.g. `jdt://...`).
+/// Looks up the scheme in the language registry, then infers the
+/// target workspace from the pool's active Ready sessions for the
+/// matching language. didOpen is intentionally skipped — the server
+/// already knows about URIs it emitted.
+///
+/// Three failure modes the LLM can act on directly:
+///   - `UnknownCustomUriScheme` — no language declares the scheme.
+///   - `NoActiveSessionForLanguage` — scheme is known but pharos has
+///     not spawned an LSP for that language yet (open a file:// first).
+///   - `AmbiguousSessionForLanguage` — multiple Ready workspaces;
+///     v1.0 errors out so the caller can re-route with an explicit
+///     `workspace_uri_hint`.
+pub fn prepare_for_custom_uri(
+  pool: Pool,
+  uri: String,
+) -> Result(Proc, SessionError) {
+  case registry.for_custom_uri(uri) {
+    Error(_) -> Error(UnknownCustomUriScheme(uri))
+    Ok(#(config, _scheme)) -> {
+      use workspace <- result.try(infer_active_workspace_for_language(
+        pool,
+        config.id,
+        uri,
+      ))
+      get_lsp(pool, config, workspace)
+    }
+  }
+}
+
+/// ADR-029. Resolve scheme + Proc for `fetch_uri_contents`. Same
+/// inference path as `prepare_for_custom_uri/2` but returns the
+/// `CustomUriScheme` metadata alongside the Proc so the caller can
+/// dispatch the scheme-specific LSP method without a second lookup.
+pub fn prepare_for_custom_uri_with_meta(
+  pool: Pool,
+  uri: String,
+) -> Result(#(Proc, CustomUriScheme), SessionError) {
+  case registry.for_custom_uri(uri) {
+    Error(_) -> Error(UnknownCustomUriScheme(uri))
+    Ok(#(config, scheme)) -> {
+      use workspace <- result.try(infer_active_workspace_for_language(
+        pool,
+        config.id,
+        uri,
+      ))
+      use lsp <- result.try(get_lsp(pool, config, workspace))
+      Ok(#(lsp, scheme))
+    }
+  }
+}
+
+/// Walk the pool snapshot for Ready entries whose `language` matches.
+/// Distinct workspace count drives the outcome — 0 → no session,
+/// 1 → route, 2+ → ambiguous.
+fn infer_active_workspace_for_language(
+  pool: Pool,
+  language: String,
+  uri: String,
+) -> Result(String, SessionError) {
+  let snap = pool.snapshot(pool)
+  let ready_workspaces =
+    snap.entries
+    |> list.filter(fn(entry) {
+      entry.language == language
+      && case entry.state {
+        pool.Ready -> True
+        _ -> False
+      }
+    })
+    |> list.map(fn(entry) { entry.workspace })
+    |> list.unique
+  case ready_workspaces {
+    [] -> Error(NoActiveSessionForLanguage(uri, language))
+    [one] -> Ok(one)
+    multiple -> Error(AmbiguousSessionForLanguage(uri, language, multiple))
+  }
+}
+
 /// Prepare a single Proc for the server that owns `method` under
 /// the `Primary` routing strategy. Per ADR-019: Only-scope wins
 /// first, then All-scope. Used by tools that have one canonical
 /// answer (hover, goto_*, formatting, references, …).
+///
+/// ADR-029: when the URI is custom-scheme, server selection falls
+/// back to the language's primary server. Custom-URI flows targeting
+/// secondary servers (jdtls is single-server today; future
+/// multi-server languages may need adjustment) is out of scope for
+/// v1.0.
 pub fn prepare_for_method(
+  pool: Pool,
+  uri: String,
+  method: String,
+) -> Result(Proc, SessionError) {
+  case is_custom_uri(uri) {
+    True -> prepare_for_custom_uri(pool, uri)
+    False -> prepare_for_method_from_file_uri(pool, uri, method)
+  }
+}
+
+fn prepare_for_method_from_file_uri(
   pool: Pool,
   file_uri: String,
   method: String,
@@ -643,6 +804,21 @@ fn describe_session_error(err: SessionError) -> String {
     SpawnFailed(reason) -> "LSP spawn failed: " <> reason
     HandshakeFailed(reason) -> "initialize handshake failed: " <> reason
     UnsupportedFileType(uri) -> "unsupported file type: " <> uri
+    UnknownCustomUriScheme(uri) ->
+      "custom URI scheme not registered for any language: " <> uri
+    NoActiveSessionForLanguage(uri, language) ->
+      "no active "
+      <> language
+      <> " session for custom URI "
+      <> uri
+      <> "; open a file:// from the same workspace first"
+    AmbiguousSessionForLanguage(uri, language, workspaces) ->
+      "ambiguous "
+      <> language
+      <> " session for custom URI "
+      <> uri
+      <> "; multiple workspaces active: "
+      <> string.join(workspaces, ", ")
   }
 }
 

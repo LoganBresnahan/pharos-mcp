@@ -55,3 +55,20 @@ __pycache__/
 .private/
 bench/data/
 bench/results/
+
+# LSP-generated workspace state — every language server caches
+# analysis/index state inside the project root. Not source; rebuilt
+# every run. Covers jdtls (Java), clojure-lsp + clj-kondo (Clojure),
+# metals + bloop (Scala), and scala-cli's deps cache.
+bench/fixtures/**/.classpath
+bench/fixtures/**/.project
+bench/fixtures/**/.settings/
+bench/fixtures/**/target/
+bench/fixtures/**/.lsp/
+bench/fixtures/**/.clj-kondo/
+bench/fixtures/**/.cpcache/
+bench/fixtures/**/.metals/
+bench/fixtures/**/.bloop/
+bench/fixtures/**/.scala-build/
+bench/fixtures/**/project/target/
+bench/fixtures/**/project/project/

@@ -1,0 +1,6 @@
+;; Minimal deps.edn for the ADR-029 clojure-lsp dogfood fixture.
+;; Pulls clojure.core via the org.clojure/clojure jar — goto-def on
+;; any clojure.core function should return a `jar:file://...` URI
+;; representing the source inside the clojure jar.
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}}}

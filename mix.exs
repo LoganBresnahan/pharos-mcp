@@ -2,12 +2,63 @@ defmodule Pharos.MixProject do
   use Mix.Project
 
   @app :pharos
-  @version "0.0.1"
+  # SemVer base. Pre-release identifier (`-rc.1`) lifts the version
+  # above plain `0.0.1` so Burrito's cache dir name changes for every
+  # user upgrading from older dev binaries.
+  #
+  # The effective version computed by `version/0` appends a SemVer
+  # build-metadata suffix (`+<id>`) on every non-release build:
+  #   - `PHAROS_BUILD_ID=<id>` env wins (CI / release pipeline).
+  #   - Otherwise short git SHA, falling back to `local` outside git.
+  #   - Set `PHAROS_RELEASE=1` to ship the clean base version
+  #     (e.g. `1.0.0`) at tag time.
+  #
+  # Why this matters: Burrito names its extracted-runtime directory
+  # `<release>_erts-<erts>_<app_version>/` and gates re-extraction on
+  # that directory's existence (deps/burrito/src/wrapper.zig:160).
+  # If two builds share the same version string, the second build
+  # silently reuses the first build's extracted beam files — a known
+  # foot-gun that bit us once during ADR-029 dogfood. Suffixing the
+  # version per build forces a fresh extract automatically.
+  @version_base "1.0.0-rc.1"
+
+  defp version do
+    case System.get_env("PHAROS_RELEASE") do
+      "1" -> @version_base
+      _ -> "#{@version_base}+#{build_suffix()}"
+    end
+  end
+
+  defp build_suffix do
+    case System.get_env("PHAROS_BUILD_ID") do
+      nil ->
+        case System.cmd("git", ["rev-parse", "--short=8", "HEAD"],
+                        stderr_to_stdout: true) do
+          {sha, 0} -> sha |> String.trim() |> sanitize_semver_suffix()
+          _ -> "local"
+        end
+
+      build_id ->
+        sanitize_semver_suffix(build_id)
+    end
+  end
+
+  # SemVer 2.0.0 build metadata must match `[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*`.
+  # Strip anything else; substitute `-` for forbidden chars to keep a
+  # readable suffix even when callers pass tag refs or branch names.
+  defp sanitize_semver_suffix(raw) do
+    raw
+    |> String.replace(~r/[^0-9A-Za-z.-]/, "-")
+    |> case do
+      "" -> "local"
+      s -> s
+    end
+  end
 
   def project do
     [
       app: @app,
-      version: @version,
+      version: version(),
       elixir: "~> 1.19",
       archives: [mix_gleam: "~> 0.7"],
       compilers: [:gleam | Mix.compilers()],

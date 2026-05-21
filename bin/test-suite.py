@@ -25,6 +25,7 @@ CI smoke before each release.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -516,6 +517,24 @@ def check_workspace_symbols(spec: LangSpec, responses: list) -> tuple[bool, str]
     # match. Treat as PASS-with-warning.
     if text.strip() in ("null", "[]"):
         return True, "workspace_symbols ok (empty result; index may be warming)"
+    # ADR-026 Resolution envelope (B.1): workspace_symbols wraps the
+    # LSP response in `{matches, truncated_by, near_misses, retried_with?}`.
+    # An empty envelope (no matches from either the original query or
+    # the case-flipped retry) is the new "empty result" shape — same
+    # warming-index meaning as the bare `[]` / `null` case above.
+    try:
+        envelope = json.loads(text)
+        if isinstance(envelope, dict) and "matches" in envelope:
+            matches = envelope.get("matches")
+            empty_matches = matches in (None, []) or matches == "null"
+            empty_near = not envelope.get("near_misses")
+            if empty_matches and empty_near:
+                return True, (
+                    "workspace_symbols ok (empty envelope; index may be warming, "
+                    "retry exhausted)"
+                )
+    except (ValueError, TypeError):
+        pass
     # Cold-start LSPs may return `-32603 Timeout` (next-ls, jdtls,
     # ruby-lsp) when the request fires before workspace indexing
     # completes. Plumbing is fine; the server itself signals "not
