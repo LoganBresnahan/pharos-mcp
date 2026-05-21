@@ -119,11 +119,21 @@ TARGETS = [
     Target("typescript", "src/index.js",                                            42,  9,  "withPlugins",
                                                                                     symbol_name_path="withPlugins",
                                                                                     symbol_edit_body="// pharos dogfood probe\n"),
+    # Phoenix is a multi-app workspace; next-ls cold-indexes the whole
+    # umbrella on first cross-file query. Prior 60s ceiling exhausted
+    # on every position-bound tool. 300s mirrors what an LLM facing
+    # the autotune hint would pick.
     Target("elixir",     "lib/phoenix.ex",                                           0, 11,  "Phoenix",
-                                                                                    timeout_override_ms=60_000,
+                                                                                    timeout_override_ms=300_000,
                                                                                     symbol_name_path="Phoenix",
                                                                                     symbol_edit_body="# pharos dogfood probe\n"),
+    # solargraph builds its symbol index lazily on first cross-file
+    # query against sinatra. Default 25s × retry-double = 95s
+    # exhausted goto_type/goto_impl. 120s gives the index time to
+    # finish without inflating the budget for languages that don't
+    # need it.
     Target("ruby",       "lib/sinatra/base.rb",                                   2152, 11,  "Base",
+                                                                                    timeout_override_ms=120_000,
                                                                                     symbol_name_path="Base",
                                                                                     symbol_edit_body="# pharos dogfood probe\n"),
     Target("zig",        "src/main.zig",                                             3,  6,  "std",
@@ -132,8 +142,13 @@ TARGETS = [
     Target("cpp",        "src/google/protobuf/message.h",                          132,  6,  "Message",
                                                                                     symbol_name_path="Message",
                                                                                     symbol_edit_body="// pharos dogfood probe\n"),
+    # metals cold-start on the scala/scala3 stdlib repo runs Bloop's
+    # build-server + downloads dependencies + indexes — prior 300s
+    # ceiling was just below the observed cold tail (workspace_symbols,
+    # get_diagnostics, inlay_hints, semantic_tokens all hit 345s).
+    # 600s comfortably outlasts cold start; warm queries finish in <1s.
     Target("scala",      "library/src/scala/Tuple.scala",                          113,  7,  "Tuple",
-                                                                                    timeout_override_ms=300_000,
+                                                                                    timeout_override_ms=600_000,
                                                                                     symbol_name_path="Tuple",
                                                                                     symbol_edit_body="// pharos dogfood probe\n"),
     Target("clojure",    "src/clj/clojure/core.clj",                                12,  5,  "unquote",
@@ -180,8 +195,12 @@ TARGETS = [
                                                                                     timeout_override_ms=600_000,
                                                                                     symbol_name_path="KafkaClient",
                                                                                     symbol_edit_body="// pharos dogfood probe\n"),
+    # gleam-lsp's first cross-file query on the stdlib triggers a full
+    # project compile + dependency resolution. 600s exhausted on
+    # workspace_symbols / get_diagnostics / goto_implementation. 900s
+    # covers the observed cold tail on this hardware.
     Target("gleam",      "src/gleam/list.gleam",                                    52,  7,  "length",
-                                                                                    timeout_override_ms=600_000,
+                                                                                    timeout_override_ms=900_000,
                                                                                     symbol_name_path="length",
                                                                                     symbol_edit_body="// pharos dogfood probe\n"),
     Target("lua",        "kong/init.lua",                                          635, 13,  "init",
