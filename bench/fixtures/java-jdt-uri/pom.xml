@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal POM for the ADR-029 dogfood fixture. No deps — Probe.java
+  uses JDK classes only, so goto-definition into ArrayList etc.
+  returns `jdt://` URIs without needing mvn to pull anything down.
+  The POM is here purely to give jdtls a recognised workspace root
+  marker (see languages.java() in src/pharos/lsp/languages.gleam).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>probe</artifactId>
+  <version>0.0.1</version>
+  <properties>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+  </properties>
+</project>
