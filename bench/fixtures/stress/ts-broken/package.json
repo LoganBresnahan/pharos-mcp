@@ -1,0 +1,7 @@
+{
+  "name": "pharos-stress-ts-broken",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phase 4 stress fixture: one file with a syntax error + one clean file referencing a shared symbol. Validates that pharos surfaces the LSP diagnostic without hanging on the unrelated clean file.",
+  "type": "module"
+}

@@ -1,0 +1,5 @@
+[project]
+name = "pharos-stress-py-binary"
+version = "0.0.0"
+description = "Phase 4 stress fixture: python pkg with a binary blob in the scan path. Validates Latin-1 fallback for symbol-name extraction (q0020 regression class)."
+requires-python = ">=3.10"
