@@ -1,7 +1,8 @@
 # 029. Custom URI schemes: relaxed gate, config-driven registry, read-only semantics
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-20
+**Last updated:** 2026-05-20 (dogfood findings appended)
 
 ## Context
 
@@ -234,6 +235,128 @@ discoverability, but the problem axis is different: there the
 *content* is fine, the *method* is uncurated. Mixing it into this
 ADR would muddy both stories. If it ever becomes load-bearing it
 gets its own ADR.
+
+**3. Driver-axis abstraction for non-method-dispatch content reads.**
+Surfaced by the 2026-05-20 dogfood pass (see "Validation findings"
+below). Two language servers — Scala metals and clojure-lsp —
+emit virtual URIs but read content through mechanisms other than a
+single "LSP extension method returning the content string": metals
+goes through `workspace/executeCommand` with a `file-decode`
+command, clojure-lsp expects client-side zip extraction of
+`zipfile://path::inner` URIs. Pharos's v1.0 `fetch_uri_contents`
+implements only the method-dispatch driver. A `(driver: Method |
+ExecuteCommand | ClientSide)` axis on the scheme config would
+generalize cleanly, but each driver needs its own implementation,
+per-LSP dogfood, and per-LSP edge cases (e.g. clojure-lsp's URI
+escaping inside the `::` separator). v1.1 work. Until then,
+navigation through Pattern B servers still works (gate relaxation
+is universal); only `fetch_uri_contents` is unavailable for them.
+
+## Validation findings (2026-05-20 dogfood pass)
+
+End-to-end dogfood against real jdtls + metals + clojure-lsp
+clarified what the design generalizes to and what it doesn't.
+
+### Java/jdtls — 9/9 cells PASS
+
+[`bin/dogfood-adr-029.py`](../../bin/dogfood-adr-029.py) +
+[`bench/fixtures/java-jdt-uri/`](../../bench/fixtures/java-jdt-uri/)
+exercised every v1.0-blocking cell from
+[`doc/dogfood-adr-029.md`](../dogfood-adr-029.md). Three concrete
+findings that weren't visible from the design alone:
+
+1. **jdtls requires an opt-in capability flag** —
+   `extendedClientCapabilities.classFileContentsSupport: true` in
+   the initialize handshake. Without it, `textDocument/definition`
+   silently returns `[]` for any JDK class or JAR dep, even when
+   source is properly attached. vscode-java and nvim-jdtls both
+   advertise this; pharos didn't until the fix landed in
+   `languages.java()`'s `initialization_options`. This is the kind
+   of hidden contract a paper-only ADR can't predict.
+
+2. **JDK source attachment is a real prerequisite.** On Debian/Ubuntu
+   the `openjdk-N-jdk` package ships without `src.zip`; the user
+   has to install `openjdk-N-source` separately. Without it,
+   `goto_definition` into `java.util.ArrayList` returns `[]`
+   because jdtls has bytecode metadata for hover but no source to
+   navigate to. README needs to call this out explicitly so users
+   don't misread silent-empty as a pharos bug.
+
+3. **All four baked-in assumptions held empirically.** jdtls accepts
+   `jdt://` for `textDocument/*` without explicit `didOpen` (the
+   passthrough design works), single-active-session inference covers
+   the common case, the edit-reject error contains the teaching
+   phrase, and the LLM-visible discoverability through tool
+   descriptions + instructions advert is sufficient. None of these
+   were data-backed pre-dogfood; all are now.
+
+### Scala/metals + Clojure/clojure-lsp — pattern mismatch
+
+The "scheme → fetch_method → string" model in this ADR matches
+exactly one of the patterns LSPs use for virtual-URI reads:
+
+- **Pattern A: LSP extension method returning content.** jdtls's
+  `java/classFileContents` is the canonical example. Likely also
+  fits omnisharp's `o#/metadata` (C#), dart-server's
+  `dart/textDocumentContent`, and kotlin-language-server's
+  equivalents — all configurable today via the toml override path
+  with no pharos code change (though none are dogfood-validated
+  yet).
+
+- **Pattern B: something else.** metals uses
+  `workspace/executeCommand` with a `file-decode` command (its
+  experimental capabilities advertise only `rangeHoverProvider`,
+  no analog to jdtls's class-file method). clojure-lsp emits
+  `zipfile:///path::inner` URIs from goto-def, but its
+  `clojure/dependencyContents` method returns `-32603 Internal
+  error` for every plausible param shape and across direct stdio
+  + pharos paths; modern clojure-lsp clients (Calva, vim-clojure)
+  appear to read the zip archive client-side rather than relying
+  on the LSP method.
+
+This isn't a bug in pharos's design — it's a real-world finding
+about how LSPs disagree on virtual-URI semantics. The LSP spec
+has no standard for content reads; each server reinvents the
+mechanism. Java got lucky on Pattern A; Scala/Clojure are
+Pattern B and need a different driver in pharos to read their
+content. Navigation (hover, goto_definition, find_references on
+those URIs) still works today through the universal session-gate
+relaxation — only `fetch_uri_contents` is unavailable for
+Pattern B.
+
+### Toml override path promoted from "deferred" to shipped
+
+The ADR's original "Out of scope" item *"toml overrides of
+`custom_uri_schemes` are deferred to post-v1.0"* was reconsidered
+during the dogfood pass. Reasoning: shipping defaults for
+languages we can't fully validate (Scala, Clojure) would set the
+wrong expectation; shipping the toml override path lets users with
+working LSP setups self-configure their scheme + method when they
+verify the protocol locally. Implementation landed in `config.gleam`
+(`LanguageOverride.custom_uri_schemes`), `registry.gleam`
+(per-scheme merge), and `registry_toml.gleam` (round-trip
+rendering). Smoke-verified: a temp `.pharos.toml` adding a new
+scheme surfaces it in the MCP `instructions` advert.
+
+### What this means for v1.0 scope
+
+Pharos v1.0 ships:
+
+- **Universal across all 24 languages:** session gate relaxation,
+  instructions advert, edit rejection, toml override path.
+  Navigation through any LSP-emitted virtual URI works.
+- **Pattern A languages (LSP-method-dispatch read):** Java/jdtls
+  fully validated. C#, Dart, Kotlin compatible by construction
+  but not dogfooded — listed as "user-configurable via toml" in
+  the README rather than "out-of-box supported."
+- **Pattern B languages (executeCommand or client-side):** Scala
+  metals and Clojure clojure-lsp get navigation but not
+  `fetch_uri_contents`. Driver axis arrives in v1.1.
+
+This is honest scope and matches Serena's open-source positioning
+on the same problem (Serena monetizes Java through a JetBrains
+plugin that sidesteps LSP entirely; their open-source LSP backend
+has the same Pattern B gap pharos does).
 
 ## Alternatives considered
 
