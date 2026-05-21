@@ -37,8 +37,8 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 016 | [Cancel propagation](016-cancel-propagation.md) | Accepted |
 | 017 | [Supervision tree wiring](017-supervision-tree-wiring.md) | Accepted |
 | 017a | [lsp_proc under simple_one_for_one](017a-lsp-proc-simple-one-for-one.md) | Accepted |
-| 018 | [LSP binary path resolution](018-lsp-binary-path-resolution.md) | Proposed |
-| 019 | [Multi-LSP method routing per language](019-multi-lsp-method-routing.md) | Proposed |
+| 018 | [LSP binary path resolution](018-lsp-binary-path-resolution.md) | Accepted |
+| 019 | [Multi-LSP method routing per language](019-multi-lsp-method-routing.md) | Accepted |
 | 020 | [Hot code reload tool for dev iteration](020-hot-code-reload-dev-tool.md) | Proposed (Deferred) |
 | 021 | [Timeout resolution stack, per-tool × per-lang config, LLM-driven session overrides](021-timeout-resolution-and-autotune.md) | Accepted |
 | 022 | [Logging conventions: structured fields canonical, file rotation, ring target-prefix filter](022-logging-conventions.md) | Accepted |
