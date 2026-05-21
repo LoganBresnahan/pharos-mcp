@@ -52,7 +52,7 @@ run_fixture() {
   PHAROS_TEST_BIN="$BIN" \
     python3 bench/harness_deepseek.py \
       --workspace "$workspace" \
-      --bank "$bank" \
+      --questions "$bank" \
       --arms treatment \
       --variant "$VARIANT" \
       --trials 1 \
@@ -65,28 +65,11 @@ run_fixture "py-binary"   "bench/fixtures/stress/py-binary"   "bench/data/stress
 run_fixture "polyglot"    "bench/fixtures/stress/polyglot"    "bench/data/stress-polyglot.jsonl"
 
 echo ""
-echo "Phase 4 done. Aggregating..."
-python3 - <<'PY'
-import json, glob, os, collections
-results = collections.defaultdict(lambda: {"pass": 0, "fail": 0, "err": 0})
-for path in sorted(glob.glob("bench/results/v1.0-final/stress/*.jsonl")):
-    label = os.path.basename(path).removesuffix(".jsonl")
-    with open(path) as f:
-        for line in f:
-            r = json.loads(line)
-            if r.get("score") == 1:
-                results[label]["pass"] += 1
-            elif r.get("error"):
-                results[label]["err"] += 1
-            else:
-                results[label]["fail"] += 1
-print("\nPhase 4 summary:")
-print(f"{'fixture':<15} {'pass':>6} {'fail':>6} {'err':>6} {'total':>6}")
-total = {"pass": 0, "fail": 0, "err": 0}
-for label, counts in results.items():
-    t = sum(counts.values())
-    for k in counts: total[k] += counts[k]
-    print(f"{label:<15} {counts['pass']:>6} {counts['fail']:>6} {counts['err']:>6} {t:>6}")
-t = sum(total.values())
-print(f"{'TOTAL':<15} {total['pass']:>6} {total['fail']:>6} {total['err']:>6} {t:>6}")
-PY
+echo "Phase 4 done. Per-fixture scoring (via bench/score.py):"
+echo ""
+for r in "$OUT_DIR"/*.jsonl; do
+  label=$(basename "$r" .jsonl)
+  echo "================ fixture: $label ================"
+  python3 bench/score.py --results "$r" 2>&1 | sed -n '/^## Overall/,/^$/p' | head -5
+  echo ""
+done
