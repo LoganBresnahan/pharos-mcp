@@ -486,6 +486,8 @@ def classify(tool: str, obj: dict, expect_filter_reject: bool = False
             return True, "filter rejected (Tool not enabled)", result
         if "-32601" in low or "method not found" in low or "unsupported file type" in low:
             return True, "server gap (-32601 / unsupported)", result
+        if "is disabled. enable it" in low:
+            return True, "config-gated (disabled in config)", result
         return False, f"isError=true: {text[:160]}", None
     if expect_filter_reject:
         # Tool was supposed to be filtered out under default profile
