@@ -279,8 +279,8 @@ def build_requests(jdt_uri_for_downstream=None):
             name="hover",
             arguments={
                 "uri": PROBE_URI,
-                "line": 11,  # 0-based; "List<String> items = new ArrayList<>();"
-                "character": 36,  # cursor inside `ArrayList`
+                "line": 10,  # `  public static void main(String[] args) {`
+                "character": 25,  # cursor inside `main`
             },
         ),
         tool_call_request(
@@ -291,8 +291,12 @@ def build_requests(jdt_uri_for_downstream=None):
             name="goto_definition",
             arguments={
                 "uri": PROBE_URI,
-                "line": 2,  # `import java.util.ArrayList;`
-                "character": 22,  # inside `ArrayList`
+                # Line 11 is `    List<String> items = new ArrayList<>();`
+                # ArrayList sits at chars 29-37; pick 32 (middle).
+                # JDK class usage in body → goto-def hits the class
+                # file in `java.base` → `jdt://contents/...`.
+                "line": 11,
+                "character": 32,
             },
         ),
     ]
@@ -313,8 +317,8 @@ def build_requests(jdt_uri_for_downstream=None):
             name="hover",
             arguments={
                 "uri": PROBE_URI,
-                "line": 11,
-                "character": 36,
+                "line": 10,
+                "character": 25,
             },
         ),
         tool_call_request(

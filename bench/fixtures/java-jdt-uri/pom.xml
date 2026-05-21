@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Minimal POM for the ADR-029 dogfood fixture. No deps — Probe.java
-  uses JDK classes only, so goto-definition into ArrayList etc.
-  returns `jdt://` URIs without needing mvn to pull anything down.
-  The POM is here purely to give jdtls a recognised workspace root
-  marker (see languages.java() in src/pharos/lsp/languages.gleam).
+  Minimal POM for the ADR-029 dogfood fixture. JDK-only — Probe.java
+  uses java.util.ArrayList directly, so goto-def into the JDK class
+  returns `jdt://contents/java.base/java.util/ArrayList.class`. The
+  POM is here purely as a workspace root marker for jdtls (no deps
+  to resolve).
+
+  Requires openjdk-21-source on the box so jdtls can attach the JDK
+  src.zip at /usr/lib/jvm/java-21-openjdk-amd64/lib/src.zip. Without
+  src.zip jdtls returns `[]` for goto-def into JDK classes (no source
+  to point at).
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>

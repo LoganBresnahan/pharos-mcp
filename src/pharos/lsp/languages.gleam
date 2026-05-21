@@ -1030,10 +1030,26 @@ fn java() -> LanguageConfig {
         // longer on big. Install via Eclipse tarball
         // (https://download.eclipse.org/jdtls/snapshots/), the
         // `bin/jdtls` shell launcher handles JDK + classpath.
+        //
+        // ADR-029: `extendedClientCapabilities.classFileContentsSupport`
+        // is the opt-in flag that tells jdtls "this client handles
+        // `jdt://contents/...` URIs". Without it, goto-def into JDK
+        // classes / JAR deps silently returns `[]` even when source is
+        // attached (src.zip + sources jars). With it, jdtls emits
+        // `jdt://` URIs that pharos's `fetch_uri_contents` /
+        // navigation tools then resolve through the
+        // `java/classFileContents` extension method.
         id: "jdtls",
         command: "jdtls",
         args: [],
-        initialization_options: json.object([]),
+        initialization_options: json.object([
+          #(
+            "extendedClientCapabilities",
+            json.object([
+              #("classFileContentsSupport", json.bool(True)),
+            ]),
+          ),
+        ]),
         workspace_configuration: None,
         methods: All,
         diagnostics_mode: Push,
