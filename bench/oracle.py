@@ -842,14 +842,39 @@ def main() -> int:
             files = list(walk_files(workspace, extensions))
             if files:
                 t_warm = time.time()
-                try:
-                    mcp.call_tool("document_symbols",
-                                  {"uri": path_to_uri(files[0])})
-                    print(f"[oracle] prewarm in {time.time() - t_warm:.1f}s",
-                          file=sys.stderr)
-                except RuntimeError as e:
-                    print(f"[oracle] prewarm failed (continuing): {e}",
-                          file=sys.stderr)
+                # Some LSPs (jdtls in particular) return Initialize OK
+                # quickly but keep importing the project in the
+                # background. `document_symbols` answers with an empty
+                # list during that window, which silently poisons the
+                # downstream sampling. Poll the prewarm file until it
+                # yields at least one symbol or the deadline elapses,
+                # so the caller is paying the cold-start budget here
+                # rather than discovering "no symbols collected" later.
+                deadline_s = 180
+                interval_s = 5
+                probe_uri = path_to_uri(files[0])
+                last_err = None
+                while time.time() - t_warm < deadline_s:
+                    try:
+                        result = mcp.call_tool(
+                            "document_symbols", {"uri": probe_uri})
+                        if isinstance(result, list) and len(result) > 0:
+                            print(
+                                f"[oracle] prewarm in "
+                                f"{time.time() - t_warm:.1f}s "
+                                f"(symbols on probe file: {len(result)})",
+                                file=sys.stderr,
+                            )
+                            break
+                    except RuntimeError as e:
+                        last_err = e
+                    time.sleep(interval_s)
+                else:
+                    print(
+                        f"[oracle] prewarm timeout after {deadline_s}s "
+                        f"— last error: {last_err}; continuing anyway",
+                        file=sys.stderr,
+                    )
 
         symbols = collect_symbols(mcp, workspace, extensions)
         if not symbols:
