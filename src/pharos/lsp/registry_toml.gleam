@@ -51,9 +51,48 @@ pub fn render_language(config: LanguageConfig) -> String {
     |> list.map(fn(server) { render_server(config.id, server) })
     |> string.join("\n\n")
 
-  case config.servers {
+  let scheme_block = render_custom_uri_schemes(config.id, config.custom_uri_schemes)
+
+  let body = case config.servers {
     [] -> lang_block
     _ -> lang_block <> "\n\n" <> server_blocks
+  }
+  case scheme_block {
+    "" -> body
+    _ -> body <> "\n\n" <> scheme_block
+  }
+}
+
+/// ADR-029. Render per-language `custom_uri_schemes` as TOML
+/// sub-tables. Returns "" for empty dicts so languages without
+/// schemes don't get a trailing newline + dead header.
+fn render_custom_uri_schemes(
+  language_id: String,
+  schemes: Dict(String, languages.CustomUriScheme),
+) -> String {
+  schemes
+  |> dict.to_list
+  |> list.map(fn(pair) {
+    let #(scheme, meta) = pair
+    let header =
+      "[languages." <> language_id <> ".custom_uri_schemes." <> render_scheme_key(scheme) <> "]"
+    let lines = [
+      header,
+      "fetch_method = " <> render_string(meta.fetch_method),
+      "fetch_response_field = " <> render_string(meta.fetch_response_field),
+    ]
+    string.join(lines, "\n")
+  })
+  |> string.join("\n\n")
+}
+
+/// Quote scheme keys containing `-` or other non-bare-key characters
+/// so the TOML round-trips through tomerl unchanged. Simple alpha
+/// keys stay bare for readability.
+fn render_scheme_key(scheme: String) -> String {
+  case string.contains(scheme, "-") || string.contains(scheme, ".") {
+    True -> "\"" <> scheme <> "\""
+    False -> scheme
   }
 }
 

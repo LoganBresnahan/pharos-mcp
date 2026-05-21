@@ -221,11 +221,28 @@ fn merge_one(default: LanguageConfig, override: LanguageOverride) -> LanguageCon
     },
     root_promotion: default.root_promotion,
     servers: merged_servers,
-    // ADR-029: toml overrides of `custom_uri_schemes` are deferred to
-    // post-v1.0. The merger passes the default through verbatim so
-    // the jdt:// entry on java() reaches the registry unchanged.
-    custom_uri_schemes: default.custom_uri_schemes,
+    // ADR-029. Per-scheme merge: user-supplied schemes replace the
+    // default entry by key, new schemes append, unmentioned defaults
+    // stay. `None` keeps defaults unchanged so existing toml configs
+    // without the section behave exactly as before.
+    custom_uri_schemes: merge_custom_uri_schemes(
+      default.custom_uri_schemes,
+      override.custom_uri_schemes,
+    ),
   )
+}
+
+fn merge_custom_uri_schemes(
+  defaults: Dict(String, languages.CustomUriScheme),
+  override: Option(Dict(String, languages.CustomUriScheme)),
+) -> Dict(String, languages.CustomUriScheme) {
+  case override {
+    None -> defaults
+    Some(over) ->
+      dict.fold(over, defaults, fn(acc, scheme, meta) {
+        dict.insert(acc, scheme, meta)
+      })
+  }
 }
 
 /// Per-server merge step. Iterate the override array; each entry

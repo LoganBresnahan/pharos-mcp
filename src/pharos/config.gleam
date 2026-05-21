@@ -33,6 +33,7 @@ import gleam/string
 import pharos/env
 import pharos/log
 import pharos/log/entry as log_entry
+import pharos/lsp/languages.{type CustomUriScheme}
 
 // -- Types ----------------------------------------------------------------
 
@@ -167,6 +168,20 @@ pub type LanguageOverride {
     /// patches the language's PRIMARY server. See ServerOverride.
     ready_timeout_ms: Option(Int),
     initialize_timeout_ms: Option(Int),
+    /// ADR-029. User-defined custom URI schemes for this language.
+    /// Each entry merges into the bundled defaults by scheme key:
+    /// user-supplied schemes that already exist replace the default
+    /// entry, new schemes get appended. `None` keeps defaults
+    /// unchanged. TOML shape:
+    ///
+    ///     [languages.scala.custom_uri_schemes."metals-decode"]
+    ///     fetch_method = "metals/readMetalsResource"
+    ///     fetch_response_field = "value"
+    ///
+    /// The dotted scheme key form supports schemes with `-` in the
+    /// name (`metals-decode`, `vscode-userdata`). For simple alpha
+    /// names the quotes are optional (`custom_uri_schemes.jdt`).
+    custom_uri_schemes: Option(Dict(String, CustomUriScheme)),
   )
 }
 
@@ -790,7 +805,64 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     ),
     ready_timeout_ms: decode_ready_timeout_ms(value),
     initialize_timeout_ms: decode_optional_int(value, "initialize_timeout_ms"),
+    custom_uri_schemes: decode_optional_custom_uri_schemes(value),
   )
+}
+
+/// ADR-029. Decode `[languages.<id>.custom_uri_schemes.<scheme>]`
+/// sub-tables into a Dict keyed by scheme name. Missing key → None
+/// (defaults from `languages.gleam` flow through unchanged). Each
+/// sub-table requires both `fetch_method` and `fetch_response_field`
+/// — missing either skips that scheme so partial config doesn't
+/// silently land malformed entries.
+fn decode_optional_custom_uri_schemes(
+  parent: Dynamic,
+) -> Option(Dict(String, CustomUriScheme)) {
+  case decode_field(parent, "custom_uri_schemes", decode.dynamic) {
+    Error(_) -> None
+    Ok(table) ->
+      case decode.run(table, decode.dict(decode.string, decode.dynamic)) {
+        Error(_) -> None
+        Ok(entries) -> {
+          let pairs =
+            entries
+            |> dict.to_list
+            |> list.filter_map(fn(pair) {
+              let #(scheme, body) = pair
+              case decode_custom_uri_scheme_body(body) {
+                Some(meta) -> Ok(#(scheme, meta))
+                None -> Error(Nil)
+              }
+            })
+          case pairs {
+            [] -> None
+            _ -> Some(dict.from_list(pairs))
+          }
+        }
+      }
+  }
+}
+
+fn decode_custom_uri_scheme_body(value: Dynamic) -> Option(CustomUriScheme) {
+  case
+    decode_optional_string(value, "fetch_method"),
+    decode_optional_string(value, "fetch_response_field")
+  {
+    Some(method), Some(field) ->
+      Some(languages.CustomUriScheme(
+        fetch_method: method,
+        fetch_response_field: field,
+      ))
+    // `fetch_response_field` defaults to "" when omitted — useful
+    // for schemes whose LSP method returns the content string
+    // directly (jdtls's `java/classFileContents`).
+    Some(method), None ->
+      Some(languages.CustomUriScheme(
+        fetch_method: method,
+        fetch_response_field: "",
+      ))
+    None, _ -> None
+  }
 }
 
 /// ADR-024 rename: `readiness_timeout_ms` → `ready_timeout_ms`.
