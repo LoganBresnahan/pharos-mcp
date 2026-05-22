@@ -255,11 +255,19 @@ fn maybe_write_crash_dump() -> Nil {
         rows -> {
           let path = crash_dump_path()
           let lines = rows_to_binaries(rows)
+          // Also write a stable-path snapshot so users can read
+          // "the last crash" without grepping the timestamped
+          // directory. README troubleshooting points here.
+          let stable_path = last_crash_dump_path()
+          let _ = crash_dump_write(stable_path, lines)
           case crash_dump_write(path, lines) {
             Ok(written_path) ->
               direct_stderr(
                 "[pharos/log] previous writer crashed; ring tail dumped to "
-                <> written_path,
+                <> written_path
+                <> " (latest also at "
+                <> stable_path
+                <> ")",
               )
             Error(reason) ->
               direct_stderr(
@@ -551,6 +559,9 @@ fn sentinel_present() -> Bool
 
 @external(erlang, "pharos_log_ffi", "crash_dump_path")
 fn crash_dump_path() -> String
+
+@external(erlang, "pharos_log_ffi", "last_crash_dump_path")
+fn last_crash_dump_path() -> String
 
 @external(erlang, "pharos_log_ffi", "crash_dump_write")
 fn crash_dump_write(path: String, lines: List(String)) -> Result(String, String)

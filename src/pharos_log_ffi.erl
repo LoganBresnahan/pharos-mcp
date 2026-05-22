@@ -44,6 +44,7 @@
     sentinel_clear/0,
     sentinel_present/0,
     crash_dump_path/0,
+    last_crash_dump_path/0,
     crash_dump_write/2
 ]).
 
@@ -360,6 +361,17 @@ crash_dump_path() ->
         Path  -> list_to_binary(Path)
     end,
     <<Home/binary, "/.cache/pharos/log/crash-", Stamp/binary, ".log">>.
+
+%% Stable-path companion to crash_dump_path/0. Overwritten on every
+%% crash dump so users (and README troubleshooting) can grep one
+%% known location for "last words", independent of the timestamped
+%% archive next to it.
+last_crash_dump_path() ->
+    Home = case os:getenv("HOME") of
+        false -> <<"/tmp">>;
+        Path  -> list_to_binary(Path)
+    end,
+    <<Home/binary, "/.cache/pharos/log/last-crash.log">>.
 
 %% Write the supplied lines (list of binaries) to a one-shot crash
 %% dump file. Best-effort: ENOSPC, perm denied, etc. fall through

@@ -48,6 +48,14 @@ import pharos/workspace_root
 const server_version: String = "0.0.1"
 
 pub fn main() -> Nil {
+  // Set ERL_CRASH_DUMP target before anything else so a BEAM-level
+  // panic from later in boot lands in `~/.cache/pharos/log/` next to
+  // pharos's own crash-dump file rather than in the invoker's cwd
+  // (the historical default, which pollutes user project trees and
+  // hides the trace under .gitignore). No-op if BEAM has already
+  // cached the env value, but in practice this fires before any
+  // OS-level halt path runs.
+  redirect_erl_crash_dump()
   case handle_meta_flags(argv()) {
     Handled -> Nil
     Continue ->
@@ -155,6 +163,9 @@ fn find_root_supervisor() -> Result(Pid, Nil)
 
 @external(erlang, "pharos_runtime_ffi", "install_sasl_capture_handler")
 fn install_sasl_capture_handler() -> Nil
+
+@external(erlang, "pharos_runtime_ffi", "redirect_erl_crash_dump")
+fn redirect_erl_crash_dump() -> Nil
 
 @external(erlang, "pharos_runtime_ffi", "argv")
 fn argv() -> List(String)

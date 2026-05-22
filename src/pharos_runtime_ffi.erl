@@ -69,6 +69,7 @@
     trap_exits/0,
     describe_term/1,
     install_sasl_capture_handler/0,
+    redirect_erl_crash_dump/0,
     format/2,
     lsp_capabilities_init/0,
     lsp_capabilities_store/2,
@@ -154,18 +155,81 @@ install_sasl_capture_handler() ->
     %% the gleam `logging` library's filter on the DEFAULT handler
     %% does not apply here because we add a NEW handler with
     %% empty filters and filter_default=log (everything in).
-    Config = #{
-        config => #{type => standard_error, sync_mode_qlen => 0},
-        filter_default => log,
-        filters => [],
-        formatter => {?MODULE, #{}}
-    },
-    Result = logger:add_handler(pharos_sasl_capture, logger_std_h, Config),
-    io:format(standard_error,
-        "[pharos-sasl] handler install result: ~p~n", [Result]),
-    %% Emit a synthetic log event right after install so we can confirm
-    %% events flow through this handler at all.
-    logger:error("pharos-sasl handler smoke test (expect to see this line)"),
+    %%
+    %% Wrapped in try/catch because the host may have closed fd 2
+    %% (`2>/dev/null` + pipe close patterns hit by the v1.0-rc1
+    %% benchmark pre-extract: BEAM panics on boot trying to write
+    %% the install-result message to a dead `standard_error`). Any
+    %% failure leaves pharos running without the SASL capture
+    %% handler — the diagnostic value is real but pharos's core
+    %% loop doesn't depend on it.
+    try
+        Config = #{
+            config => #{type => standard_error, sync_mode_qlen => 0},
+            filter_default => log,
+            filters => [],
+            formatter => {?MODULE, #{}}
+        },
+        Result = logger:add_handler(pharos_sasl_capture, logger_std_h, Config),
+        try
+            io:format(standard_error,
+                "[pharos-sasl] handler install result: ~p~n", [Result])
+        catch
+            _:_ -> ok
+        end,
+        %% Emit a synthetic log event right after install so we can confirm
+        %% events flow through this handler at all.
+        try
+            logger:error("pharos-sasl handler smoke test (expect to see this line)")
+        catch
+            _:_ -> ok
+        end
+    catch
+        Class:Reason ->
+            %% Best-effort breadcrumb so users diagnosing a quiet
+            %% pharos can find this if stderr is reachable. If it
+            %% isn't, the cascade just falls through.
+            try
+                io:format(standard_error,
+                    "[pharos-sasl] handler install skipped: ~p:~p~n",
+                    [Class, Reason])
+            catch
+                _:_ -> ok
+            end
+    end,
+    nil.
+
+%% Set ERL_CRASH_DUMP early in pharos:main/0 so a BEAM-level halt
+%% writes its dump alongside pharos's own crash files (which live
+%% under `$HOME/.cache/pharos/log/`) instead of polluting the
+%% invoker's cwd — the historical default that surprised every
+%% benchmark + dogfood pass.
+%%
+%% Best-effort: respects an existing ERL_CRASH_DUMP if the host
+%% already pinned a location. Silent if $HOME is unset or the
+%% target dir can't be created (fall back to BEAM's default of
+%% `./erl_crash.dump`).
+redirect_erl_crash_dump() ->
+    case os:getenv("ERL_CRASH_DUMP") of
+        false ->
+            try
+                Home = case os:getenv("HOME") of
+                    false -> "/tmp";
+                    H     -> H
+                end,
+                Dir = filename:join([Home, ".cache", "pharos", "log"]),
+                ok = filelib:ensure_dir(filename:join(Dir, "x")),
+                Stamp = iolist_to_binary(
+                    io_lib:format("~B", [erlang:system_time(millisecond)])),
+                Path = filename:join(Dir,
+                    binary_to_list(<<"erl_crash-", Stamp/binary, ".dump">>)),
+                os:putenv("ERL_CRASH_DUMP", Path)
+            catch
+                _:_ -> ok
+            end;
+        _AlreadySet ->
+            ok
+    end,
     nil.
 
 %% logger formatter callback: write SASL-class reports raw to stderr.
