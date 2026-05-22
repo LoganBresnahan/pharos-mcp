@@ -10,7 +10,7 @@
 
 -module(pharos_lsp_port_ffi).
 -include_lib("kernel/include/file.hrl").
--export([spawn/3, send/2, receive_data/2, close/1, connect/2, decode_port_data/1]).
+-export([spawn/3, send/2, receive_data/2, close/1, connect/2, decode_port_data/1, decode_port_exit/1]).
 
 %% Decode a raw mailbox payload that gleam_otp's selector handed us
 %% via `process.select_other`. Returns `{ok, Bytes}` if the payload
@@ -22,6 +22,18 @@ decode_port_data(Payload) when is_tuple(Payload), tuple_size(Payload) =:= 2 ->
         _ -> {error, nil}
     end;
 decode_port_data(_) ->
+    {error, nil}.
+
+%% ADR-030 I2: surface LSP subprocess exits so the proc actor can
+%% log them instead of dropping the message as system noise. Returns
+%% `{ok, ExitStatus}` for `{Port, {exit_status, Status}}` tuples,
+%% `{error, nil}` for anything else.
+decode_port_exit(Payload) when is_tuple(Payload), tuple_size(Payload) =:= 2 ->
+    case Payload of
+        {_Port, {exit_status, Status}} when is_integer(Status) -> {ok, Status};
+        _ -> {error, nil}
+    end;
+decode_port_exit(_) ->
     {error, nil}.
 
 %% Spawn a subprocess. `Command` is either an absolute path

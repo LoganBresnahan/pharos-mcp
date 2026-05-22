@@ -28,9 +28,11 @@ import gleam/string
 import pharos/cli
 import pharos/config.{type Config}
 import pharos/env
+import pharos/heartbeat
 import pharos/log
 import pharos/log/entry
 import pharos/log/filter
+import pharos/log/rotate as log_rotate
 import pharos/log/trace_ring
 import pharos/lsp/capabilities
 import pharos/lsp/diagnostics_cache
@@ -148,6 +150,10 @@ fn do_boot() -> Result(Pid, String) {
   // spawns. Idempotent. No-op on platforms where $HOME is unset
   // (falls back to /tmp/pharos-instances/).
   instance_track.init()
+  // ADR-030 C2: migrate any legacy `erl_crash.dump` from cwd into
+  // the log cache dir and LRU-trim session logs (keep 10) and
+  // crash dumps (keep 5). Best-effort; never blocks boot.
+  log_rotate.boot_sweep()
 
   // Diagnostic logger handler: capture every SASL/supervisor/error
   // logger event by writing the raw term to stderr. Bypasses the
@@ -173,6 +179,15 @@ fn do_boot() -> Result(Pid, String) {
     Error(_) -> Error("root_supervisor.start returned an error")
     Ok(started) -> {
       register_root_supervisor(started.pid)
+      // ADR-030 I1: spawn the linked heartbeat process AFTER the
+      // root supervisor is up. Wiring it here (not in main/0) means
+      // both `mix start` and the burrito release path get the
+      // heartbeat — the release path enters via
+      // `pharos_app_ffi:start/2` → `boot/0` and bypasses `main/0`
+      // entirely. Cheap loop (`erlang:memory/1` +
+      // `erlang:system_info/1`) at `PHAROS_HEARTBEAT_INTERVAL_MS`
+      // (default 60_000) cadence.
+      let _heartbeat = heartbeat.start()
       Ok(started.pid)
     }
   }

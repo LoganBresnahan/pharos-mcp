@@ -27,6 +27,7 @@ import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
+import pharos/log
 import pharos/lsp/client.{type Client}
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/inflight
@@ -710,10 +711,6 @@ fn handle_port_message(
   payload: Dynamic,
 ) -> actor.Next(State, Msg) {
   case decode_port_data_bytes(payload) {
-    // Not a Port-data tuple (could be exit_status, system noise,
-    // etc.). Drop and continue — the actor stays alive.
-    Error(_) -> actor.continue(state)
-
     Ok(bytes) -> {
       // Append raw bytes to the Client's framing buffer, parse out
       // any complete frames, and process each.
@@ -722,15 +719,41 @@ fn handle_port_message(
         drain_buffered_frames(State(..state, client: updated))
       actor.continue(drained)
     }
+    Error(_) -> {
+      // ADR-030 I2: surface LSP subprocess exits so a future
+      // silent-death repro (failure mode 3 from ADR-030) leaves
+      // an actionable timeline in the log. Existing behaviour
+      // (drop and continue) is preserved — pool's process.monitor
+      // on the proc handles the actual cache eviction when the
+      // actor exits abnormally; this log line just records what
+      // happened.
+      case decode_port_exit(payload) {
+        Ok(status) ->
+          log.warn_at(
+            "pharos/lsp/proc",
+            "LSP subprocess exited (exit_status="
+              <> int_to_string(status)
+              <> ")",
+          )
+        Error(_) -> Nil
+      }
+      actor.continue(state)
+    }
   }
 }
 
 @external(erlang, "pharos_lsp_port_ffi", "decode_port_data")
 fn decode_port_data(payload: Dynamic) -> Result(BitArray, Nil)
 
+@external(erlang, "pharos_lsp_port_ffi", "decode_port_exit")
+fn decode_port_exit(payload: Dynamic) -> Result(Int, Nil)
+
 fn decode_port_data_bytes(payload: Dynamic) -> Result(BitArray, Nil) {
   decode_port_data(payload)
 }
+
+@external(erlang, "erlang", "integer_to_binary")
+fn int_to_string(n: Int) -> String
 
 fn drain_buffered_frames(state: State) -> State {
   // Pull frames out of the Client until none remain, classifying

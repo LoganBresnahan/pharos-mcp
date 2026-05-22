@@ -33,6 +33,7 @@ import gleam/string
 import pharos/env
 import pharos/log
 import pharos/log/entry as log_entry
+import pharos/log/rotate as log_rotate
 import pharos/lsp/languages.{type CustomUriScheme}
 
 // -- Types ----------------------------------------------------------------
@@ -1045,12 +1046,19 @@ fn env_log(config: Config) -> Config {
     None -> config.log.filter_spec
     Some(raw) -> raw
   }
+  // ADR-030 C2: when the user hasn't configured a log file via env
+  // OR TOML, default to a per-PID per-timestamp path under
+  // `$HOME/.cache/pharos/log/`. Multi-instance pharos (Phase 5 was
+  // the trigger) used to leave a single `PHAROS_LOG_FILE` path
+  // shared across instances, which clobbered. The auto-default
+  // produces one readable file per pharos PID per launch.
   let file = case env.get("PHAROS_LOG_FILE") {
-    None -> config.log.file
-    Some(raw) ->
-      case raw {
-        "" -> None
-        path -> Some(path)
+    Some("") -> None
+    Some(path) -> Some(path)
+    None ->
+      case config.log.file {
+        Some(path) -> Some(path)
+        None -> log_rotate.default_session_log_path()
       }
   }
   let ring_enabled = read_bool_env(
