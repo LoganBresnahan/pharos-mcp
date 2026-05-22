@@ -64,11 +64,28 @@ class McpStdio:
         # Quiet pharos's own logs so they don't interleave with NDJSON.
         env["PHAROS_LOG_LEVEL"] = "error"
         env["PHAROS_HTTP_ENABLED"] = "false"
+        # Capture pharos stderr to a per-session file so post-mortems
+        # have a real signal when the stdio pipe breaks. DEVNULL hid
+        # crash traces for months. MCP/stdio protocol uses only
+        # stdin/stdout for JSON-RPC framing; stderr is the
+        # conventional channel for logs + errors, so this is non-
+        # invasive and stays permanent. Override via
+        # `PHAROS_STDERR_DIR` (default = /tmp); file name carries the
+        # workspace basename + a millisecond timestamp so concurrent
+        # McpStdio sessions never clobber each other.
+        stderr_dir = os.environ.get("PHAROS_STDERR_DIR", "/tmp")
+        os.makedirs(stderr_dir, exist_ok=True)
+        ws_label = os.path.basename(os.path.abspath(workspace)) or "pharos"
+        ts_ms = int(time.time() * 1000)
+        self.stderr_path = os.path.join(
+            stderr_dir, f"pharos-stderr-{ws_label}-{ts_ms}.log"
+        )
+        self._stderr_fh = open(self.stderr_path, "w")
         self.proc = subprocess.Popen(
             [PHAROS_BIN],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=self._stderr_fh,
             cwd=workspace,
             env=env,
             text=True,
@@ -82,14 +99,27 @@ class McpStdio:
         req = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
         assert self.proc.stdin is not None
         assert self.proc.stdout is not None
-        self.proc.stdin.write(json.dumps(req) + "\n")
-        self.proc.stdin.flush()
+        try:
+            self.proc.stdin.write(json.dumps(req) + "\n")
+            self.proc.stdin.flush()
+        except BrokenPipeError as e:
+            tail = self.stderr_tail()
+            raise RuntimeError(
+                f"pharos stdin BrokenPipe on {method} (rid={rid}); "
+                f"exit_code={self.proc.poll()!r}; "
+                f"stderr tail:\n{tail}"
+            ) from e
         # Drain lines until the matching response shows up. Notifications
         # (no `id`) are discarded.
         while True:
             line = self.proc.stdout.readline()
             if not line:
-                raise RuntimeError("pharos closed stdout unexpectedly")
+                tail = self.stderr_tail()
+                raise RuntimeError(
+                    f"pharos closed stdout unexpectedly on {method} "
+                    f"(rid={rid}); exit_code={self.proc.poll()!r}; "
+                    f"stderr tail:\n{tail}"
+                )
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
@@ -139,6 +169,26 @@ class McpStdio:
             self.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+        try:
+            self._stderr_fh.close()
+        except Exception:
+            pass
+
+    def stderr_tail(self, n_lines: int = 60) -> str:
+        """Return the last N lines of pharos's captured stderr.
+
+        Surfaced in BrokenPipe / unexpected-EOF errors so the caller
+        sees pharos's last words instead of just `Errno 32`."""
+        try:
+            self._stderr_fh.flush()
+        except Exception:
+            pass
+        try:
+            with open(self.stderr_path) as f:
+                lines = f.readlines()
+            return "".join(lines[-n_lines:])
+        except Exception as e:
+            return f"(stderr unreadable: {e})"
 
 
 # ---------------------------------------------------------------------------
