@@ -15,8 +15,10 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/string
 import pharos/config
+import pharos/lsp/instance_track
 import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/registry as lsp_registry
 
@@ -226,6 +228,204 @@ fn pad_right(s: String, width: Int) -> String {
     True -> s
     False -> s <> string.repeat(" ", width - len)
   }
+}
+
+// -- cleanup (ADR-030 Layer 3) -------------------------------------------
+
+/// Reap LSP children belonging to dead pharos instances. Walks
+/// `~/.local/share/pharos/instances/`, identifies subdirs whose
+/// owner pharos PID is gone, and removes them (after killing the
+/// listed LSP children).
+///
+/// `apply` distinguishes preview from actual reap:
+///   - `False` — dry-run: print findings and exit. Default.
+///   - `True`  — invoked with `--yes`: SIGTERM each LSP, wait
+///     `grace_ms`, SIGKILL survivors, remove the instance dir.
+///
+/// Exit codes:
+///   0 — operation completed (orphans reaped or none found)
+///   2 — at least one signal call failed unexpectedly
+pub fn cleanup(apply: Bool, grace_ms: Int) -> Int {
+  let root = instance_track.instances_root()
+  io.println("pharos cleanup")
+  io.println("==============")
+  io.println("instance root: " <> root)
+  io.println("")
+
+  let dirs = instance_track.list_instance_dirs()
+  case dirs {
+    [] -> {
+      io.println("no instance directories found.")
+      0
+    }
+    _ -> {
+      let #(orphans, alive_count) =
+        list.fold(dirs, #([], 0), fn(acc, entry) {
+          let #(found_orphans, alive) = acc
+          let #(owner_pid, dir_path) = entry
+          case instance_track.is_pid_alive(owner_pid) {
+            True -> #(found_orphans, alive + 1)
+            False -> {
+              let pid_files = instance_track.list_pid_files(dir_path)
+              #(
+                [#(owner_pid, dir_path, pid_files), ..found_orphans],
+                alive,
+              )
+            }
+          }
+        })
+
+      io.println(
+        "alive pharos instances (skipped): "
+        <> int.to_string(alive_count),
+      )
+      case orphans {
+        [] -> {
+          io.println("no orphan instance directories.")
+          0
+        }
+        _ -> {
+          let n_orphans = list.length(orphans)
+          io.println(
+            "orphan instances (owner PID dead): "
+            <> int.to_string(n_orphans),
+          )
+          io.println("")
+          list.each(orphans, fn(orphan) {
+            let #(owner_pid, dir_path, pid_files) = orphan
+            io.println(
+              "  - pharos PID " <> int.to_string(owner_pid) <> " (dead)",
+            )
+            io.println("    dir: " <> dir_path)
+            case pid_files {
+              [] -> io.println("    no LSP children recorded.")
+              _ ->
+                list.each(pid_files, fn(pf) {
+                  let #(lsp_pid, file_path) = pf
+                  let meta = instance_track.read_pid_file(file_path)
+                  let binary = lookup_meta(meta, "lsp_binary")
+                  let server_id = lookup_meta(meta, "server_id")
+                  let alive_marker = case
+                    instance_track.is_pid_alive(lsp_pid)
+                  {
+                    True -> "alive"
+                    False -> "gone"
+                  }
+                  io.println(
+                    "      LSP "
+                    <> int.to_string(lsp_pid)
+                    <> " ("
+                    <> alive_marker
+                    <> ") "
+                    <> server_id
+                    <> " "
+                    <> binary,
+                  )
+                })
+            }
+          })
+          io.println("")
+          case apply {
+            False -> {
+              io.println(
+                "(dry-run) re-invoke with `--yes` to reap these orphans.",
+              )
+              0
+            }
+            True -> {
+              io.println("reaping...")
+              let failures =
+                list.fold(orphans, 0, fn(acc, orphan) {
+                  acc + reap_orphan(orphan, grace_ms)
+                })
+              case failures {
+                0 -> {
+                  io.println("done.")
+                  0
+                }
+                _ -> {
+                  io.println(
+                    "completed with "
+                    <> int.to_string(failures)
+                    <> " signal failures (see above).",
+                  )
+                  2
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn lookup_meta(meta: List(#(String, String)), key: String) -> String {
+  meta
+  |> list.find(fn(pair) { pair.0 == key })
+  |> result.map(fn(pair) { pair.1 })
+  |> result.unwrap("?")
+}
+
+/// Reap one orphan: SIGTERM each listed LSP, wait `grace_ms`,
+/// SIGKILL anyone still alive, then remove the instance directory.
+/// Returns the number of unexpected signal failures (always >= 0).
+fn reap_orphan(
+  orphan: #(Int, String, List(#(Int, String))),
+  grace_ms: Int,
+) -> Int {
+  let #(owner_pid, dir_path, pid_files) = orphan
+
+  // Phase 1: SIGTERM every LSP whose PID is still alive.
+  let alive_lsps =
+    list.filter(pid_files, fn(pf) {
+      instance_track.is_pid_alive(pf.0)
+    })
+  list.each(alive_lsps, fn(pf) {
+    let #(lsp_pid, _path) = pf
+    io.println(
+      "  SIGTERM pharos="
+      <> int.to_string(owner_pid)
+      <> " lsp="
+      <> int.to_string(lsp_pid),
+    )
+    case instance_track.signal_pid(lsp_pid, "TERM") {
+      Ok(_) -> Nil
+      Error(_) -> io.println("    (signal failed)")
+    }
+  })
+
+  // Phase 2: wait the grace period, then SIGKILL any survivors.
+  case alive_lsps {
+    [] -> Nil
+    _ -> instance_track.sleep_ms(grace_ms)
+  }
+  let kill_failures =
+    list.fold(alive_lsps, 0, fn(acc, pf) {
+      let #(lsp_pid, _path) = pf
+      case instance_track.is_pid_alive(lsp_pid) {
+        False -> acc
+        True -> {
+          io.println(
+            "  SIGKILL lsp="
+            <> int.to_string(lsp_pid)
+            <> " (survived TERM)",
+          )
+          case instance_track.signal_pid(lsp_pid, "KILL") {
+            Ok(_) -> acc
+            Error(_) -> {
+              io.println("    (signal failed)")
+              acc + 1
+            }
+          }
+        }
+      }
+    })
+
+  // Phase 3: remove the instance directory.
+  instance_track.remove_dir_recursive(dir_path)
+  io.println("  removed " <> dir_path)
+  kill_failures
 }
 
 // -- BEAM / FFI ----------------------------------------------------------

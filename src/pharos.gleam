@@ -36,6 +36,7 @@ import pharos/lsp/capabilities
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/dyn_sup
 import pharos/lsp/inflight
+import pharos/lsp/instance_track
 import pharos/lsp/languages
 import pharos/lsp/pool
 import pharos/lsp/registry
@@ -87,6 +88,23 @@ pub fn main() -> Nil {
   }
 }
 
+/// Hook called from `pharos_app_ffi:start/2` so meta-flag dispatch
+/// works in Burrito-wrapped release mode. The release entry path
+/// bypasses `main/0` entirely — it goes straight from `:elixir`'s
+/// start_cli through the OTP application controller into
+/// `pharos_app_ffi:start/2`, which means `--doctor`, `--purge-cache`,
+/// and `--cleanup` would never be checked. This function lets the
+/// app-start callback run the same dispatch.
+///
+/// Returns `True` when a meta flag fired (caller should halt) and
+/// `False` when normal boot should continue.
+pub fn dispatch_meta_or_continue() -> Bool {
+  case handle_meta_flags(argv()) {
+    Handled -> True
+    Continue -> False
+  }
+}
+
 /// Idempotent application-bootstrap entry point. Returns the root
 /// supervisor's Pid. Called both from `pharos_app_ffi:start/2` (so
 /// OTP's application_controller treats the supervisor as the
@@ -125,6 +143,11 @@ fn do_boot() -> Result(Pid, String) {
   request_workers.init()
   dyn_sup.init_subjects_bridge()
   capabilities.init()
+  // ADR-030 S3: create `~/.local/share/pharos/instances/<our-pid>/`
+  // so client.start can write tracking files for each LSP it
+  // spawns. Idempotent. No-op on platforms where $HOME is unset
+  // (falls back to /tmp/pharos-instances/).
+  instance_track.init()
 
   // Diagnostic logger handler: capture every SASL/supervisor/error
   // logger event by writing the raw term to stderr. Bypasses the
@@ -242,6 +265,10 @@ fn handle_meta_flags(args: List(String)) -> MetaOutcome {
       let _exit = cli.purge_cache()
       Handled
     }
+    Some(Cleanup(apply)) -> {
+      let _exit = cli.cleanup(apply, 5000)
+      Handled
+    }
   }
 }
 
@@ -252,6 +279,11 @@ type MetaFlag {
   PrintLanguageConfig(String)
   Doctor
   PurgeCache
+  /// ADR-030 Layer 3: scan `~/.local/share/pharos/instances/` for
+  /// subdirs whose owner pharos PID is dead, list them, and on
+  /// `--yes` reap the listed LSP children. `Bool` is `True` when
+  /// `--yes` is present (apply changes), `False` for dry-run.
+  Cleanup(Bool)
 }
 
 fn match_meta(args: List(String)) -> Option(MetaFlag) {
@@ -268,6 +300,9 @@ fn match_meta(args: List(String)) -> Option(MetaFlag) {
           "--print-default-config" -> list.Stop(Some(PrintDefaultConfig))
           "--doctor" -> list.Stop(Some(Doctor))
           "--purge-cache" -> list.Stop(Some(PurgeCache))
+          "--cleanup" ->
+            // Dry-run by default; `--cleanup --yes` applies.
+            list.Stop(Some(Cleanup(list.contains(args, "--yes"))))
           _ -> list.Continue(None)
         }
       })

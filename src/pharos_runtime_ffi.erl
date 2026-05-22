@@ -149,28 +149,44 @@ describe_term(Term) ->
 %% whose meta carries one of the SASL/crash domains. Other events
 %% pass through to the default handler unchanged.
 install_sasl_capture_handler() ->
-    %% Use the built-in logger_std_h backend, configured with
-    %% type=standard_error so writes hit fd 2 directly. The
-    %% formatter callback below selects which events to render —
-    %% the gleam `logging` library's filter on the DEFAULT handler
-    %% does not apply here because we add a NEW handler with
-    %% empty filters and filter_default=log (everything in).
+    %% Two handlers, both backed by `pharos_logger_h` (ADR-030 B1):
     %%
-    %% Wrapped in try/catch because the host may have closed fd 2
-    %% (`2>/dev/null` + pipe close patterns hit by the v1.0-rc1
-    %% benchmark pre-extract: BEAM panics on boot trying to write
-    %% the install-result message to a dead `standard_error`). Any
-    %% failure leaves pharos running without the SASL capture
-    %% handler — the diagnostic value is real but pharos's core
-    %% loop doesn't depend on it.
+    %% 1. `:default` — replaces OTP's boot-time `:simple` handler
+    %%    (`logger_simple_h`) which writes via `:user` and corrupts
+    %%    MCP JSON-RPC frames on stdout. Adding ANY handler named
+    %%    `:default` triggers OTP to auto-remove `:simple` (see
+    %%    `kernel-10.4/src/logger.erl:844`). The gleam `logging`
+    %%    library subsequently overwrites this handler's formatter
+    %%    with its own (`logging_ffi:format/2`) via
+    %%    `logger:update_handler_config/3`, so the formatter we set
+    %%    here is short-lived.
+    %% 2. `:pharos_sasl_capture` — secondary handler whose formatter
+    %%    is `pharos_runtime_ffi:format/2` (this module). It dumps
+    %%    the raw event term for SASL crash reports / supervisor
+    %%    restarts / progress reports — the gleam `logging` library
+    %%    filters those domains away from `:default`, so we add a
+    %%    second handler with empty filters to keep them on-screen
+    %%    for diagnostics.
+    %%
+    %% Both handlers write to `standard_error` via `pharos_logger_h`,
+    %% which wraps `io:put_chars/2` in try/catch. A closed fd 2 drops
+    %% the event silently instead of cascading through the BEAM
+    %% logger crash path that terminated the runtime three times on
+    %% 2026-05-22.
     try
-        Config = #{
+        DefaultConfig = #{
+            config => #{type => standard_error},
+            filter_default => log,
+            filters => []
+        },
+        _ = logger:add_handler(default, pharos_logger_h, DefaultConfig),
+        SaslConfig = #{
             config => #{type => standard_error, sync_mode_qlen => 0},
             filter_default => log,
             filters => [],
             formatter => {?MODULE, #{}}
         },
-        Result = logger:add_handler(pharos_sasl_capture, logger_std_h, Config),
+        Result = logger:add_handler(pharos_sasl_capture, pharos_logger_h, SaslConfig),
         try
             io:format(standard_error,
                 "[pharos-sasl] handler install result: ~p~n", [Result])

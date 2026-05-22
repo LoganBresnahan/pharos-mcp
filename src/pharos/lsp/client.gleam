@@ -18,6 +18,7 @@
 import gleam/bit_array
 import gleam/erlang/process.{type Pid}
 import pharos/lsp/framing
+import pharos/lsp/instance_track
 import pharos/lsp/port
 import pharos/lsp/server_request_handlers.{type Registry}
 import pharos/lsp/trace
@@ -33,6 +34,13 @@ pub opaque type Client {
     /// to key publishDiagnostics by `(uri, server_id)` so multi-LSP
     /// languages do not cross-overwrite each other in the cache.
     server_id: String,
+    /// OS PID of the spawned LSP subprocess, captured at `start/4`
+    /// via `pharos_instance_track_ffi:register_lsp/4`. Used by
+    /// `close/1` to remove the corresponding tracking file under
+    /// `~/.local/share/pharos/instances/<pharos-pid>/`. 0 indicates
+    /// the PID could not be read (port already closed or test
+    /// construction path); deregister is a no-op in that case.
+    lsp_pid: Int,
   )
 }
 
@@ -69,14 +77,23 @@ pub fn start(
   server_id: String,
 ) -> Result(Client, Error) {
   case port.spawn(command, args, cwd) {
-    Ok(p) ->
+    Ok(p) -> {
+      // ADR-030 S3: drop a tracking file under
+      // `~/.local/share/pharos/instances/<pharos-pid>/` so the
+      // `pharos cleanup` subcommand can reap this LSP if pharos
+      // exits non-gracefully. Best-effort — returns 0 if port_info
+      // cannot read the os_pid, in which case `close/1` will
+      // no-op the deregister.
+      let lsp_pid = instance_track.register_lsp(p, server_id, command, cwd)
       Ok(Client(
         port: p,
         buffer: <<>>,
         queue: [],
         handlers: server_request_handlers.defaults(),
         server_id: server_id,
+        lsp_pid: lsp_pid,
       ))
+    }
     Error(spawn_err) ->
       Error(SpawnError(spawn_err))
   }
@@ -191,8 +208,12 @@ pub fn drain_one_frame(client: Client) -> Result(#(Client, BitArray), Nil) {
   }
 }
 
-/// Tear down the subprocess. Idempotent.
+/// Tear down the subprocess. Idempotent. Also removes the
+/// `~/.local/share/pharos/instances/<pharos-pid>/<lsp-pid>.pid`
+/// tracking file written by `instance_track.register_lsp` so a
+/// subsequent `pharos cleanup` does not see this LSP as an orphan.
 pub fn close(client: Client) -> Nil {
+  instance_track.deregister_lsp(client.lsp_pid)
   port.close(client.port)
 }
 

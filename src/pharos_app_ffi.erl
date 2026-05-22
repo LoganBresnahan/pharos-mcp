@@ -29,6 +29,19 @@ start(_Type, Args) ->
             Pid = spawn_link(fun idle/0),
             {ok, Pid};
         true ->
+            %% Burrito-wrapped releases start :pharos via the OTP
+            %% application controller — `pharos:main/0` is NOT
+            %% called. Meta-flag dispatch (handle_meta_flags) lives
+            %% inside main/0, so without this hook flags like
+            %% `--doctor`, `--purge-cache`, and `--cleanup` would
+            %% silently fall through into normal boot mode. Run
+            %% the dispatcher here; on a Handled outcome we halt
+            %% with the exit code the CLI returned. On Continue we
+            %% fall through to pharos:boot/0 unchanged.
+            case 'pharos':dispatch_meta_or_continue() of
+                true -> halt(0);
+                _ -> ok
+            end,
             case 'pharos':boot() of
                 {ok, Pid} -> {ok, Pid};
                 {error, Reason} -> {error, Reason}
@@ -43,4 +56,12 @@ idle() ->
     end.
 
 stop(_State) ->
+    %% ADR-030 S3: remove this pharos instance's tracking directory
+    %% (`~/.local/share/pharos/instances/<our-pid>/`) so a subsequent
+    %% `pharos cleanup` run does not see this instance as an orphan.
+    %% Called by application_controller during graceful shutdown
+    %% (init:stop / SIGTERM → OTP default → app stop). Best-effort:
+    %% the FFI swallows all failures so a slow filesystem cannot
+    %% block BEAM teardown.
+    _ = pharos_instance_track_ffi:clear_instance_dir(),
     ok.
