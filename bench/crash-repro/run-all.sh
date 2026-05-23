@@ -235,11 +235,65 @@ test_t5_idle_smoke() {
 
 # ----------------------------------------------------------------------
 
+# ----------------------------------------------------------------------
+# T6: stdin-EOF graceful exit. When the parent closes its end of the
+#     stdio pipe (the way MCP clients and our benchmark harness end
+#     a session), pharos's stdio_worker drains in-flight requests
+#     and then init:stop()s the runtime so app stop callbacks fire.
+#     The per-PID instance dir must be gone after pharos exits, and
+#     pharos must exit with code 0.
+#
+# Tests: ADR-030 graceful-exit fix (`init_stop()` in
+#        `stdio_worker.handle_eof/1` + `step_inflight/1`). Without
+#        this fix the parent harness has to SIGKILL pharos after 5s
+#        timeout and the instance dir leaks.
+# ----------------------------------------------------------------------
+test_t6_stdin_eof_clean() {
+    rm -rf "$HOME/.local/share/pharos/instances/" 2>/dev/null
+    echo "$INIT" | "$PHAROS_BIN" 2>/dev/null > /dev/null &
+    local pharos_pid=$!
+    sleep 2
+    if [[ ! -d "$HOME/.local/share/pharos/instances/$pharos_pid" ]]; then
+        echo "    pharos did not create its instance dir"
+        kill "$pharos_pid" 2>/dev/null
+        wait "$pharos_pid" 2>/dev/null
+        return 1
+    fi
+    # `echo` finished and closed the pipe. Wait for pharos to exit
+    # naturally — bash's `wait` for a backgrounded child returns the
+    # actual exit code. If the fix is in place pharos exits within
+    # ~1s; cap at 10s.
+    local waited=0
+    while [[ $waited -lt 10 ]] && kill -0 "$pharos_pid" 2>/dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if kill -0 "$pharos_pid" 2>/dev/null; then
+        echo "    pharos did not exit within 10s of stdin EOF (fix regression)"
+        kill "$pharos_pid" 2>/dev/null
+        wait "$pharos_pid" 2>/dev/null
+        return 1
+    fi
+    local exit_code
+    wait "$pharos_pid"
+    exit_code=$?
+    if [[ "$exit_code" != "0" ]]; then
+        echo "    pharos exited with code $exit_code (expected 0)"
+        return 1
+    fi
+    if [[ -d "$HOME/.local/share/pharos/instances/$pharos_pid" ]]; then
+        echo "    instance dir remained after stdin-EOF exit (fix regression)"
+        return 1
+    fi
+    return 0
+}
+
 run_test "T1 closed-stderr"          test_t1_closed_stderr
 run_test "T2 sigterm-clean"          test_t2_sigterm_clean
 run_test "T3 cleanup-cli"            test_t3_cleanup_cli
 run_test "T4 session-log-rotation"   test_t4_session_log_rotation
 run_test "T5 idle-smoke"             test_t5_idle_smoke
+run_test "T6 stdin-eof-clean"        test_t6_stdin_eof_clean
 
 echo "=============================="
 echo "passed: $PASS_COUNT"

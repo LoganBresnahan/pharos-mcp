@@ -211,6 +211,11 @@ fn step_inflight(state: State) -> actor.Next(State, Msg) {
     True, 0 -> {
       log.info("stdio_worker drained in-flight workers; exiting")
       pool.close_all(state.pool)
+      // ADR-030 graceful-exit: trigger OTP's app-teardown so
+      // `pharos_app_ffi:stop/1` (clear_instance_dir) fires before
+      // BEAM halts. Without this the parent harness has to SIGKILL
+      // pharos after 5 s of waiting, leaking the instance dir.
+      init_stop()
       actor.stop()
     }
     _, _ -> actor.continue(next)
@@ -227,6 +232,8 @@ fn handle_eof(state: State) -> actor.Next(State, Msg) {
     0 -> {
       log.info("stdin closed; stdio_worker exiting")
       pool.close_all(state.pool)
+      // ADR-030 graceful-exit: see step_inflight above.
+      init_stop()
       actor.stop()
     }
     n -> {
@@ -240,6 +247,9 @@ fn handle_eof(state: State) -> actor.Next(State, Msg) {
     }
   }
 }
+
+@external(erlang, "pharos_runtime_ffi", "init_stop")
+fn init_stop() -> Nil
 
 /// Spawn a dispatcher process for one inbound JSON-RPC line and
 /// return immediately. The dispatcher registers its pid in the

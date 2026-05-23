@@ -70,6 +70,7 @@
     describe_term/1,
     install_sasl_capture_handler/0,
     redirect_erl_crash_dump/0,
+    init_stop/0,
     format/2,
     lsp_capabilities_init/0,
     lsp_capabilities_store/2,
@@ -225,6 +226,35 @@ install_sasl_capture_handler() ->
 %% already pinned a location. Silent if $HOME is unset or the
 %% target dir can't be created (fall back to BEAM's default of
 %% `./erl_crash.dump`).
+%% ADR-030 graceful-exit hook. Called from `stdio_worker.handle_eof/1`
+%% (and from a future SIGTERM trap if we add one) once stdin closes
+%% and the worker has drained its in-flight requests. Triggers OTP's
+%% standard shutdown sequence:
+%%
+%%   1. application_controller stops each running application in
+%%      reverse start order (pharos goes first).
+%%   2. Each app's stop/1 callback fires — for pharos this calls
+%%      `pharos_instance_track_ffi:clear_instance_dir/0`, removing
+%%      the per-PID dir under `~/.local/share/pharos/instances/`.
+%%   3. Supervisors terminate children, ports close, BEAM halts.
+%%
+%% Without this hook the stdio_worker stops itself via `actor.stop()`
+%% but `pharos:main/0`'s `process.sleep_forever/0` keeps BEAM alive
+%% until the parent harness times out (5 s in `bench/oracle.py`) and
+%% sends SIGKILL — which skips every stop/1 callback and leaks the
+%% instance directory. Observed leaking 10 dirs across Phase 5
+%% attempt 3 (2026-05-22).
+init_stop() ->
+    %% Spawn the halt so the caller's actor message handler returns
+    %% before OTP starts tearing down — otherwise the stdio_worker
+    %% would be inside its own message handler when supervisor sends
+    %% it the shutdown signal, causing a noisy "killed during
+    %% terminate" log line.
+    spawn(fun() ->
+        init:stop()
+    end),
+    nil.
+
 redirect_erl_crash_dump() ->
     case os:getenv("ERL_CRASH_DUMP") of
         false ->
