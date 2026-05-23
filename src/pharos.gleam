@@ -74,13 +74,15 @@ pub fn main() -> Nil {
               <> transport_label(cfg.transport)
               <> ")",
           )
-          // ADR-024: ops-only `PHAROS_WARMUP_LANGS` CSV pre-spawns
-          // the listed languages' LSPs against cwd before the first
-          // LLM request lands. Each warm-up blocks until pool's
-          // readiness probe succeeds; failures log + continue so a
-          // single missing binary does not break the rest of the
-          // pool.
-          warmup_from_env()
+          // ADR-024 + `pharos warm <lang>...` subcommand:
+          // `post_boot_dispatch/0` looks at argv to decide between
+          // warm-and-exit mode (`pharos warm rust typescript`) and
+          // the normal MCP-server warmup path (consults
+          // `PHAROS_WARMUP_LANGS` env var). Always runs the actual
+          // warming in a spawned process so we return here to
+          // `process.sleep_forever/0` (or the OTP app callback
+          // returns to its caller in release mode).
+          post_boot_dispatch()
           // Stdio/Both: stdio_worker drives termination via stdin
           // EOF. Http only: no stdio termination signal; sleep
           // until SIGTERM.
@@ -162,9 +164,19 @@ fn do_boot() -> Result(Pid, String) {
   // dogfood pass 11. Side-effect only; idempotent.
   install_sasl_capture_handler()
 
+  // `pharos warm <lang>...` boots the supervised tree (pool +
+  // ETS + dyn_sup) but suppresses every transport so stdin EOF
+  // does not race the warm-then-exit dispatch into a half-stopped
+  // application_controller (which would skip the stop/1 callback
+  // and leak the instance dir).
+  let resolved_transport = case parse_warm_args(argv()) {
+    Some(_) -> root_supervisor.Disabled
+    None -> map_transport(cfg.transport)
+  }
+
   let supervisor_config =
     root_supervisor.Config(
-      transport: map_transport(cfg.transport),
+      transport: resolved_transport,
       log_filter: build_log_filter(cfg),
       log_ring_enabled: cfg.log.ring_enabled,
       log_stderr_enabled: cfg.log.stderr_enabled,
@@ -373,19 +385,103 @@ fn warmup_from_env() -> Nil {
     option.Some(raw) ->
       case split_csv(raw) {
         [] -> Nil
-        langs ->
-          case pool.global() {
-            Error(_) ->
-              log.warn_at(
-                "pharos/lsp/pool",
-                "PHAROS_WARMUP_LANGS set but pool not running; skipping warmup",
-              )
-            Ok(pool_handle) ->
-              list.each(langs, fn(lang) { warmup_one(pool_handle, lang) })
-          }
+        langs -> warmup_langs(langs)
       }
   }
 }
+
+/// Pre-spawn the supplied languages' LSPs against the current working
+/// directory. Blocking — each `pool.get` call returns after the
+/// readiness probe succeeds (or fails). Used by both the
+/// `PHAROS_WARMUP_LANGS` env-var path and the `pharos warm <lang>...`
+/// subcommand. Failures (no workspace, no pool, probe budget
+/// exhausted) log a warn and continue so a missing rust toolchain
+/// does not block gopls from warming.
+pub fn warmup_langs(langs: List(String)) -> Nil {
+  case langs {
+    [] -> Nil
+    _ ->
+      case pool.global() {
+        Error(_) ->
+          log.warn_at(
+            "pharos/lsp/pool",
+            "warmup requested but pool not running; skipping",
+          )
+        Ok(pool_handle) ->
+          list.each(langs, fn(lang) { warmup_one(pool_handle, lang) })
+      }
+  }
+}
+
+/// Dispatch the action that runs *after* `pharos:boot/0` returns —
+/// either the user requested `pharos warm <lang>...` (warm and exit
+/// via init:stop), or the normal MCP-server flow (consult
+/// `PHAROS_WARMUP_LANGS` and stay alive).
+///
+/// Called by both `main/0` (mix start path) and
+/// `pharos_app_ffi:start/2` (burrito release path). Always spawns
+/// the actual work so the caller can return immediately to
+/// `process.sleep_forever/0` or the OTP application controller.
+pub fn post_boot_dispatch() -> Nil {
+  case parse_warm_args(argv()) {
+    Some(warm_langs_to_run) -> {
+      let _ =
+        process.spawn(fn() {
+          // Wait until the :pharos application is fully registered
+          // as :running with application_controller before calling
+          // init:stop(). Without this guard a fast warmup (e.g. an
+          // LSP that the pool already cached, or a no-op when the
+          // lang is unknown) can call init:stop before the start/2
+          // callback has returned, which leaves
+          // application_controller in a half-started state where
+          // the stop/1 callback never fires — leaking the instance
+          // dir.
+          wait_for_pharos_running(2000)
+          warmup_langs(warm_langs_to_run)
+          init_stop()
+          Nil
+        })
+      Nil
+    }
+    None -> {
+      let _ = process.spawn(fn() { warmup_from_env() })
+      Nil
+    }
+  }
+}
+
+@external(erlang, "pharos_runtime_ffi", "wait_for_pharos_running")
+fn wait_for_pharos_running(timeout_ms: Int) -> Nil
+
+/// Parse `pharos warm rust typescript go` style argv. Returns
+/// `Some(langs)` when the first non-flag arg is `warm`; `None`
+/// otherwise. Skips leading argv positions that are flag-like
+/// (start with `-`) in case the user passes flags before the
+/// subcommand.
+fn parse_warm_args(args: List(String)) -> Option(List(String)) {
+  case skip_flags(args) {
+    ["warm", ..rest] -> Some(list.filter(rest, fn(a) { !is_flag(a) }))
+    _ -> None
+  }
+}
+
+fn skip_flags(args: List(String)) -> List(String) {
+  case args {
+    [first, ..rest] ->
+      case is_flag(first) {
+        True -> skip_flags(rest)
+        False -> args
+      }
+    [] -> []
+  }
+}
+
+fn is_flag(arg: String) -> Bool {
+  string.starts_with(arg, "-")
+}
+
+@external(erlang, "pharos_runtime_ffi", "init_stop")
+fn init_stop() -> Nil
 
 fn warmup_one(pool_handle: pool.Pool, lang: String) -> Nil {
   case registry_for_language(lang) {

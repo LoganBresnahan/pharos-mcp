@@ -43,7 +43,14 @@ start(_Type, Args) ->
                 _ -> ok
             end,
             case 'pharos':boot() of
-                {ok, Pid} -> {ok, Pid};
+                {ok, Pid} ->
+                    %% ADR-024 + `pharos warm <lang>...`: same
+                    %% post-boot dispatch the `mix start` / main
+                    %% path runs. Either spawns a warm-and-exit
+                    %% process (subcommand mode) or a normal
+                    %% PHAROS_WARMUP_LANGS background warmup.
+                    'pharos':post_boot_dispatch(),
+                    {ok, Pid};
                 {error, Reason} -> {error, Reason}
             end
     end.

@@ -39,6 +39,12 @@ pub type Transport {
   Stdio
   Http
   Both
+  /// `pharos warm <lang>...` CLI mode. Boots the supervised tree
+  /// (pool + dyn_sup + ETS tables) but does NOT start any transport
+  /// — no stdio_worker reading fd 0, no HTTP listener accepting
+  /// connections. The warm post-boot dispatch handles the lifecycle:
+  /// runs `warmup_langs/1`, calls `init:stop/0`, BEAM halts.
+  Disabled
 }
 
 pub type StartError {
@@ -99,7 +105,7 @@ pub fn start(
   // sessions must register its global before the listener starts
   // accepting connections that reference it.
   let root_with_http = case config.transport {
-    Stdio -> root
+    Stdio | Disabled -> root
     Http | Both ->
       root
       |> supervisor.add(supervision.worker(sessions.start_supervised))
@@ -117,7 +123,7 @@ pub fn start(
   // last in the boot order so pool.global() is populated by the
   // time the worker's initialiser runs.
   let root_complete = case config.transport {
-    Http -> root_with_http
+    Http | Disabled -> root_with_http
     Stdio | Both ->
       root_with_http
       |> supervisor.add(transient_worker(stdio_worker.start_supervised))

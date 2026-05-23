@@ -71,6 +71,7 @@
     install_sasl_capture_handler/0,
     redirect_erl_crash_dump/0,
     init_stop/0,
+    wait_for_pharos_running/1,
     format/2,
     lsp_capabilities_init/0,
     lsp_capabilities_store/2,
@@ -254,6 +255,32 @@ init_stop() ->
         init:stop()
     end),
     nil.
+
+%% Poll application_controller until `:pharos` is listed in
+%% `application:which_applications/0` as fully running, or until
+%% `TimeoutMs` elapses. Used by the `pharos warm <lang>...` post-boot
+%% dispatch path: warmup runs in a process spawned from inside
+%% `pharos_app_ffi:start/2`, and we must not call `init:stop/0`
+%% before that start callback returns — otherwise
+%% `application_controller` skips the `stop/1` callback and the
+%% instance dir leaks.
+%%
+%% Polls every 25 ms. Returns nil unconditionally (best-effort: if
+%% the timeout expires we proceed anyway; the leaked dir is reapable
+%% via `pharos cleanup`).
+wait_for_pharos_running(TimeoutMs) when is_integer(TimeoutMs), TimeoutMs >= 0 ->
+    wait_for_pharos_running_loop(TimeoutMs).
+
+wait_for_pharos_running_loop(Remaining) when Remaining =< 0 ->
+    nil;
+wait_for_pharos_running_loop(Remaining) ->
+    case lists:keyfind(pharos, 1, application:which_applications()) of
+        false ->
+            timer:sleep(25),
+            wait_for_pharos_running_loop(Remaining - 25);
+        _ ->
+            nil
+    end.
 
 redirect_erl_crash_dump() ->
     case os:getenv("ERL_CRASH_DUMP") of
