@@ -47,7 +47,7 @@ import gleam/set.{type Set}
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
-  type WarmupProbe, ProbeDocumentSymbol, ProbeNone, ProbeWorkspaceSymbol,
+  type WarmProbe, ProbeDocumentSymbol, ProbeNone, ProbeWorkspaceSymbol,
 }
 import pharos/lsp/lifecycle
 import pharos/lsp/proc.{type Proc}
@@ -96,7 +96,7 @@ pub type SpawnSpec {
     /// response before marking the proc Ready. Default
     /// `ProbeWorkspaceSymbol("")` covers nearly every bundled LSP;
     /// per-server overrides land in `languages.gleam`.
-    warmup_probe: WarmupProbe,
+    warm_probe: WarmProbe,
   )
 }
 
@@ -985,7 +985,7 @@ fn advance_state(
 /// immediately. The worker performs:
 ///   1. `recover_or_spawn` — init handshake + optional `$/progress`
 ///      drain (lifecycle.wait_for_ready inside proc's initialiser).
-///   2. ADR-024 readiness probe — fires `warmup_probe` and retries
+///   2. ADR-024 readiness probe — fires `warm_probe` and retries
 ///      with exponential backoff until non-error / non-null result
 ///      OR `ready_timeout_ms` elapses.
 /// On success: posts `SpawnCompleted(key, Ok(proc))`. On
@@ -1023,7 +1023,7 @@ fn spawn_worker(
               key,
               spawned,
               workspace,
-              spec.warmup_probe,
+              spec.warm_probe,
               spec.ready_timeout_ms,
             )
           case probe_result {
@@ -1087,7 +1087,7 @@ fn run_probe_loop(
   key: ProcKey,
   spawned: Proc,
   workspace: String,
-  probe: WarmupProbe,
+  probe: WarmProbe,
   total_budget_ms: Int,
 ) -> Result(Nil, String) {
   case probe {
@@ -1101,7 +1101,7 @@ fn probe_loop_step(
   key: ProcKey,
   spawned: Proc,
   workspace: String,
-  probe: WarmupProbe,
+  probe: WarmProbe,
   attempt: Int,
   elapsed_ms: Int,
   total_budget_ms: Int,
@@ -1202,7 +1202,7 @@ fn int_max(a: Int, b: Int) -> Int {
 fn run_one_probe(
   spawned: Proc,
   workspace: String,
-  probe: WarmupProbe,
+  probe: WarmProbe,
 ) -> Result(Nil, String) {
   case probe {
     ProbeNone -> Ok(Nil)

@@ -835,7 +835,7 @@ fn get_lsp_for_server(
 
 /// Build a `pool.SpawnSpec` from the language + server registry
 /// entry. Exposed so the boot-time warmup path
-/// (`pharos.warmup_from_env`) can reuse the exact wiring tool calls
+/// (`pharos.warm_from_env`) can reuse the exact wiring tool calls
 /// use.
 pub fn build_spawn_spec(
   workspace: String,
@@ -851,7 +851,7 @@ pub fn build_spawn_spec(
     readiness_token: server.readiness_token,
     ready_timeout_ms: server_ready_timeout_ms(server),
     initialize_timeout_ms: server_initialize_timeout_ms(server),
-    warmup_probe: server.warmup_probe,
+    warm_probe: server.warm_probe,
   )
 }
 

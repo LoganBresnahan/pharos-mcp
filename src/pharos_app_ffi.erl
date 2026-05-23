@@ -48,7 +48,7 @@ start(_Type, Args) ->
                     %% post-boot dispatch the `mix start` / main
                     %% path runs. Either spawns a warm-and-exit
                     %% process (subcommand mode) or a normal
-                    %% PHAROS_WARMUP_LANGS background warmup.
+                    %% PHAROS_WARM_LANGS background warmup.
                     'pharos':post_boot_dispatch(),
                     {ok, Pid};
                 {error, Reason} -> {error, Reason}

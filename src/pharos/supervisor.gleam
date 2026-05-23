@@ -43,7 +43,7 @@ pub type Transport {
   /// (pool + dyn_sup + ETS tables) but does NOT start any transport
   /// — no stdio_worker reading fd 0, no HTTP listener accepting
   /// connections. The warm post-boot dispatch handles the lifecycle:
-  /// runs `warmup_langs/1`, calls `init:stop/0`, BEAM halts.
+  /// runs `warm_langs/1`, calls `init:stop/0`, BEAM halts.
   Disabled
 }
 

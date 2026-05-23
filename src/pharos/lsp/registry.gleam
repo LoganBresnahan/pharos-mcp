@@ -183,7 +183,7 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     readiness_token: override.readiness_token,
     ready_timeout_ms: override.ready_timeout_ms,
     initialize_timeout_ms: override.initialize_timeout_ms,
-    warmup_probe: ProbeWorkspaceSymbol(""),
+    warm_probe: ProbeWorkspaceSymbol(""),
   )
 }
 
@@ -329,7 +329,7 @@ fn merge_server(
       None -> default.initialize_timeout_ms
       Some(_) -> ovr.initialize_timeout_ms
     },
-    warmup_probe: default.warmup_probe,
+    warm_probe: default.warm_probe,
   )
 }
 
@@ -350,7 +350,7 @@ fn server_from_override(target_id: String, ovr: ServerOverride) -> ServerConfig 
     readiness_token: ovr.readiness_token,
     ready_timeout_ms: ovr.ready_timeout_ms,
     initialize_timeout_ms: ovr.initialize_timeout_ms,
-    warmup_probe: ProbeWorkspaceSymbol(""),
+    warm_probe: ProbeWorkspaceSymbol(""),
   )
 }
 
@@ -406,7 +406,7 @@ fn merge_primary(
       None -> primary.initialize_timeout_ms
       Some(_) -> override.initialize_timeout_ms
     },
-    warmup_probe: primary.warmup_probe,
+    warm_probe: primary.warm_probe,
   )
 }
 

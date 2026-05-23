@@ -78,7 +78,7 @@ pub fn main() -> Nil {
           // `post_boot_dispatch/0` looks at argv to decide between
           // warm-and-exit mode (`pharos warm rust typescript`) and
           // the normal MCP-server warmup path (consults
-          // `PHAROS_WARMUP_LANGS` env var). Always runs the actual
+          // `PHAROS_WARM_LANGS` env var). Always runs the actual
           // warming in a spawned process so we return here to
           // `process.sleep_forever/0` (or the OTP app callback
           // returns to its caller in release mode).
@@ -373,19 +373,19 @@ fn stdio_write_line(body: String) -> Nil
 
 // -- ADR-024 boot-time warmup --------------------------------------------
 
-/// Read `PHAROS_WARMUP_LANGS` (CSV of language ids) and pre-spawn
+/// Read `PHAROS_WARM_LANGS` (CSV of language ids) and pre-spawn
 /// each language's LSP against cwd. Blocking — pool.get only returns
 /// after the readiness probe succeeds. Failures (no workspace, no
 /// pool, probe budget exhausted) log warn + continue so a missing
 /// rust toolchain does not block gopls from warming. Ops-only knob;
 /// production stays cold-start-on-first-call.
-fn warmup_from_env() -> Nil {
-  case env.get("PHAROS_WARMUP_LANGS") {
+fn warm_from_env() -> Nil {
+  case env.get("PHAROS_WARM_LANGS") {
     option.None -> Nil
     option.Some(raw) ->
       case split_csv(raw) {
         [] -> Nil
-        langs -> warmup_langs(langs)
+        langs -> warm_langs(langs)
       }
   }
 }
@@ -393,11 +393,11 @@ fn warmup_from_env() -> Nil {
 /// Pre-spawn the supplied languages' LSPs against the current working
 /// directory. Blocking — each `pool.get` call returns after the
 /// readiness probe succeeds (or fails). Used by both the
-/// `PHAROS_WARMUP_LANGS` env-var path and the `pharos warm <lang>...`
+/// `PHAROS_WARM_LANGS` env-var path and the `pharos warm <lang>...`
 /// subcommand. Failures (no workspace, no pool, probe budget
 /// exhausted) log a warn and continue so a missing rust toolchain
 /// does not block gopls from warming.
-pub fn warmup_langs(langs: List(String)) -> Nil {
+pub fn warm_langs(langs: List(String)) -> Nil {
   case langs {
     [] -> Nil
     _ ->
@@ -408,7 +408,7 @@ pub fn warmup_langs(langs: List(String)) -> Nil {
             "warmup requested but pool not running; skipping",
           )
         Ok(pool_handle) ->
-          list.each(langs, fn(lang) { warmup_one(pool_handle, lang) })
+          list.each(langs, fn(lang) { warm_one(pool_handle, lang) })
       }
   }
 }
@@ -416,7 +416,7 @@ pub fn warmup_langs(langs: List(String)) -> Nil {
 /// Dispatch the action that runs *after* `pharos:boot/0` returns —
 /// either the user requested `pharos warm <lang>...` (warm and exit
 /// via init:stop), or the normal MCP-server flow (consult
-/// `PHAROS_WARMUP_LANGS` and stay alive).
+/// `PHAROS_WARM_LANGS` and stay alive).
 ///
 /// Called by both `main/0` (mix start path) and
 /// `pharos_app_ffi:start/2` (burrito release path). Always spawns
@@ -424,12 +424,12 @@ pub fn warmup_langs(langs: List(String)) -> Nil {
 /// `process.sleep_forever/0` or the OTP application controller.
 pub fn post_boot_dispatch() -> Nil {
   case parse_warm_args(argv()) {
-    Some(warm_langs_to_run) -> {
+    Some(warm_request) -> {
       let _ =
         process.spawn(fn() {
           // Wait until the :pharos application is fully registered
           // as :running with application_controller before calling
-          // init:stop(). Without this guard a fast warmup (e.g. an
+          // init:stop(). Without this guard a fast warm (e.g. an
           // LSP that the pool already cached, or a no-op when the
           // lang is unknown) can call init:stop before the start/2
           // callback has returned, which leaves
@@ -437,30 +437,58 @@ pub fn post_boot_dispatch() -> Nil {
           // the stop/1 callback never fires — leaking the instance
           // dir.
           wait_for_pharos_running(2000)
-          warmup_langs(warm_langs_to_run)
+          let langs = resolve_warm_request(warm_request)
+          warm_langs(langs)
           init_stop()
           Nil
         })
       Nil
     }
     None -> {
-      let _ = process.spawn(fn() { warmup_from_env() })
+      let _ = process.spawn(fn() { warm_from_env() })
       Nil
     }
+  }
+}
+
+/// Resolve a `WarmRequest` to a concrete list of language ids.
+/// `WarmAll` enumerates every language in the registry (warm_one's
+/// existing root-marker check skips ones whose project marker is
+/// not in cwd, with a clear log line). `WarmExplicit` returns the
+/// user's exact list unchanged.
+fn resolve_warm_request(req: WarmRequest) -> List(String) {
+  case req {
+    WarmExplicit(langs) -> langs
+    WarmAll -> dict.keys(registry.cached())
   }
 }
 
 @external(erlang, "pharos_runtime_ffi", "wait_for_pharos_running")
 fn wait_for_pharos_running(timeout_ms: Int) -> Nil
 
-/// Parse `pharos warm rust typescript go` style argv. Returns
-/// `Some(langs)` when the first non-flag arg is `warm`; `None`
-/// otherwise. Skips leading argv positions that are flag-like
-/// (start with `-`) in case the user passes flags before the
-/// subcommand.
-fn parse_warm_args(args: List(String)) -> Option(List(String)) {
+/// What `pharos warm` was asked to do.
+type WarmRequest {
+  /// `pharos warm rust typescript go` — the named languages only.
+  WarmExplicit(List(String))
+  /// `pharos warm --all` — every language in the registry. The
+  /// per-language root-marker check inside `warm_one/2` skips
+  /// languages whose project marker is not present in cwd.
+  WarmAll
+}
+
+/// Parse `pharos warm [--all | <lang>...]` style argv. Returns
+/// `Some(WarmAll)` when `--all` is present (any position),
+/// `Some(WarmExplicit(langs))` for an explicit lang list, and
+/// `None` when `warm` is not the subcommand. Skips leading
+/// argv positions that are flag-like (start with `-`) in case
+/// the user passes other flags before the subcommand.
+fn parse_warm_args(args: List(String)) -> Option(WarmRequest) {
   case skip_flags(args) {
-    ["warm", ..rest] -> Some(list.filter(rest, fn(a) { !is_flag(a) }))
+    ["warm", ..rest] ->
+      case list.contains(rest, "--all") {
+        True -> Some(WarmAll)
+        False -> Some(WarmExplicit(list.filter(rest, fn(a) { !is_flag(a) })))
+      }
     _ -> None
   }
 }
@@ -483,13 +511,13 @@ fn is_flag(arg: String) -> Bool {
 @external(erlang, "pharos_runtime_ffi", "init_stop")
 fn init_stop() -> Nil
 
-fn warmup_one(pool_handle: pool.Pool, lang: String) -> Nil {
+fn warm_one(pool_handle: pool.Pool, lang: String) -> Nil {
   case registry_for_language(lang) {
     Error(reason) -> {
       log.fields_at(
         "pharos/lsp/pool",
         entry.Warn,
-        "warmup: skipping language",
+        "warm: skipping language",
         [#("language", lang), #("reason", reason)],
       )
       Nil
@@ -500,7 +528,7 @@ fn warmup_one(pool_handle: pool.Pool, lang: String) -> Nil {
           log.fields_at(
             "pharos/lsp/pool",
             entry.Warn,
-            "warmup: language has no primary server",
+            "warm: language has no primary server",
             [#("language", lang)],
           )
           Nil
@@ -511,7 +539,7 @@ fn warmup_one(pool_handle: pool.Pool, lang: String) -> Nil {
               log.fields_at(
                 "pharos/lsp/pool",
                 entry.Warn,
-                "warmup: no workspace root marker found near cwd",
+                "warm: no workspace root marker found near cwd",
                 [#("language", lang), #("cwd", cwd_for_warmup())],
               )
               Nil
@@ -524,7 +552,7 @@ fn warmup_one(pool_handle: pool.Pool, lang: String) -> Nil {
                   log.fields_at(
                     "pharos/lsp/pool",
                     entry.Info,
-                    "warmup: spawned LSP",
+                    "warm: spawned LSP",
                     [
                       #("language", lang),
                       #("workspace", workspace),
@@ -538,7 +566,7 @@ fn warmup_one(pool_handle: pool.Pool, lang: String) -> Nil {
                   log.fields_at(
                     "pharos/lsp/pool",
                     entry.Warn,
-                    "warmup: spawn failed",
+                    "warm: spawn failed",
                     [
                       #("language", lang),
                       #("workspace", workspace),
