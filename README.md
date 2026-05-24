@@ -1,377 +1,294 @@
 # pharos
 
-MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) capabilities as MCP tools, so an LLM can ask "what's the type of this expression?", "where is this defined?", "find all references", etc., backed by real language server analysis.
+**Headless LSP-MCP bridge for AI agents.** Pharos hands the same language
+servers your IDE uses (rust-analyzer, gopls, tsserver, pyright, jdtls,
+and 18 more) to any MCP-aware agent — Claude Code, Cursor, ChatGPT
+Desktop, or your own SDK app — so the model can ask about your codebase
+with type-aware navigation instead of grepping.
 
-Distributed as a single self-contained binary via [Burrito](https://github.com/burrito-elixir/burrito), shipped through GitHub Releases and npm. Optionally augmented by a thin VSCode extension (separate repo) that exposes unsaved-buffer state.
+## At a glance — Phase 5 v1.0 final benchmark
 
-> **Status:** Pre-alpha, Milestone 13 (release-prep).
-> Full read + write + debug + raw tool surface shipped. The M13 test
-> matrix exercises every MCP tool against 22 languages on stdio + HTTP,
-> dev-runtime + burrito-runtime — currently 309/312 stdio cells PASS
-> (3 known LSP-side transients: gleam/scala workspace_symbols, perl
-> find_references). Distribution wiring (npm publish + GH release
-> matrix) is the last release blocker. See
-> [doc/m13-test-plan.md](doc/m13-test-plan.md) for the matrix and
-> [doc/init.md](doc/init.md) for the broader milestone plan.
+5 languages × 70 questions × 2 arms (grep/Read baseline vs. pharos tool
+surface) × 3 trials = **1986 cells, 8 hours wall**, run on DeepSeek-v4-pro
+with thinking enabled. Both arms see the same questions; the only
+variable is whether the agent has pharos tools available.
 
-## What pharos exposes
+| Lang | Acc grep → pharos | Δ pp | Wall Δ | Cost Δ | LSP |
+|------|------------------:|-----:|-------:|-------:|-----|
+| python | 78 % → 85 % | **+7** | -40 % | -14 % | pyright + ruff |
+| rust | 62 % → 91 % | **+29** | -45 % | 0 % | rust-analyzer |
+| typescript | 63 % → 88 % | **+25** | -46 % | -33 % | typescript-language-server |
+| go | 74 % → 90 % | **+16** | -35 % | -7 % | gopls |
+| java | 73 % → 91 % | **+18** | -40 % | -25 % | jdtls |
 
-Hand-curated MCP tools backed by real LSP analysis. Pharos drives one
-or more language servers per workspace and presents typed tools to the
-LLM. Bundled languages and the tools they back:
+**Average across the four mid-difficulty langs (excluding python, which
+sits near accuracy ceiling under both arms): +22 pp accuracy, -42 %
+wall time, -17 % cost.**
 
-| Category | Tools | LSP method backing |
-|----------|-------|---------------------|
-| **read** (17) | `hover`, `goto_definition`, `goto_type_definition`, `goto_implementation`, `find_references`, `document_symbols`, `workspace_symbols`, `signature_help`, `call_hierarchy_prepare`, `call_hierarchy_incoming_calls`, `call_hierarchy_outgoing_calls`, `get_diagnostics`, `inlay_hints`, `semantic_tokens`, `type_hierarchy_prepare`, `type_hierarchy_supertypes`, `type_hierarchy_subtypes` | `textDocument/*` queries |
-| **write** (4) | `rename_preview`, `format_document`, `code_actions`, `apply_workspace_edit` | First three wrap `textDocument/rename` / `formatting` / `codeAction` and return `WorkspaceEdit` data only. `apply_workspace_edit` writes a `WorkspaceEdit` to disk on demand (`dry_run=true` by default; per-file atomic writes) |
-| **debug** (15) | `echo` + every `runtime_*` tool: `runtime_processes`, `runtime_supervision_tree`, `runtime_ets_tables`, `runtime_memory`, `runtime_applications`, `runtime_scheduler_util`, `runtime_pid_info`, `runtime_log_tail`, `runtime_log_clear`, `runtime_log_level`, `runtime_trace_lsp`, `runtime_trace_calls`, `runtime_kill_lsp`, `runtime_language_config` | pharos's own BEAM introspection |
-| **raw** (1) | `lsp_request_raw` | any LSP method as escape hatch |
+Methodology in 30 seconds: questions and ground truth are
+*machine-generated* by querying the LSP authoritatively against random
+symbols sampled from the workspace; both arms attempt the same
+questions; scoring is mechanical (no human judgment). Full
+methodology, per-question data, and per-kind drill-downs at
+[Benchmark methodology](#benchmark-methodology).
 
-Filter the surface via `tools = [...]` in `pharos.toml` —
-[Tool filter](#tool-filter-tools--).
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Language support](#language-support)
+- [Tools](#tools)
+- [CLI reference](#cli-reference)
+- [Configuration](#configuration)
+- [Benchmark methodology](#benchmark-methodology)
+- [Tool reference](#tool-reference)
+- [More languages](#more-languages) (+ [adding your own](#adding-your-own-language))
+- [Troubleshooting](#troubleshooting)
+- [Architecture](#architecture)
+- [Development](#development)
+- [License](#license)
 
 ## Install
 
-> **Pre-distribution caveat (M10/M13).** npm publish and the GitHub
-> Releases binary matrix are scheduled for M13. The `npx` and direct-
-> download channels below describe the **target UX**; today both
-> resolve to "build from source" (option 3). Once M13 ships the
-> binaries, options 1 and 2 become live without any user-facing
-> change.
+Pharos is a single self-contained binary (Erlang runtime included via
+[Burrito](https://github.com/burrito-elixir/burrito)). Three channels —
+all produce the same binary; pick whichever fits your workflow.
 
-Three channels, in order of recommended UX. **All produce the same
-`pharos` binary**; pick whichever fits your workflow.
+### 1. npm (cross-platform — recommended for MCP clients)
 
-### 1. npm via `npx` (recommended — works on every platform)
+```bash
+npm install -g pharos-mcp
+```
 
-Add this to your MCP host's config (`.mcp.json`, `claude_desktop_config.json`,
-Cursor's per-server config, etc.):
+The post-install script copies the platform-correct binary into your
+npm prefix and prints the resolved path. Add to your MCP host's
+config:
 
 ```jsonc
 {
   "mcpServers": {
-    "pharos": {
-      "command": "npx",
-      "args": ["-y", "pharos"]
-    }
+    "pharos": { "command": "pharos" }
   }
 }
-```
-
-`npx` fetches the meta package; npm resolves only the matching
-`@pharos/<platform>-<arch>` sub-package and skips the others. Node shim
-inside spawns the binary with stdio piped. Cross-platform out of the box
-(Linux / macOS / Windows / WSL).
-
-After install, **warm the Burrito extract cache** so the first MCP host
-spawn does not pay cold-extract latency (~1–3s):
-
-```bash
-npx pharos --doctor
 ```
 
 ### 2. Direct download from GitHub Releases
 
-For users who prefer not to depend on Node. Pick the binary for your
-platform from the [latest release](https://github.com/LoganBresnahan/pharos-mcp/releases/latest)
-and place it on PATH.
+Grab the binary matching your platform from
+[github.com/LoganBresnahan/pharos-mcp/releases/latest](https://github.com/LoganBresnahan/pharos-mcp/releases/latest):
 
-| OS / arch | Recommended install path | On default PATH? |
-|-----------|---------------------------|------------------|
-| Linux x86_64 | `~/.local/bin/pharos` | yes (XDG; bash & zsh ship it) |
-| Linux aarch64 | `~/.local/bin/pharos` | yes |
-| macOS x86_64 (Intel) | `~/.local/bin/pharos` or `/usr/local/bin/pharos` | yes |
-| macOS aarch64 (Apple Silicon) | `~/.local/bin/pharos` | yes |
-| Windows x86_64 | `%LOCALAPPDATA%\Programs\pharos\pharos.exe` | needs PATH addition (see below) |
-| WSL | same as Linux (it IS Linux) | yes |
+| Asset | Platform |
+|-------|----------|
+| `pharos_linux_x64` | Linux x86-64 |
+| `pharos_linux_arm64` | Linux aarch64 |
+| `pharos_darwin_x64` | macOS Intel |
+| `pharos_darwin_arm64` | macOS Apple Silicon |
+| `pharos_win_x64.exe` | Windows x86-64 |
 
-Linux / macOS:
 ```bash
-mkdir -p ~/.local/bin
-curl -L https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/pharos-linux-x64 \
+curl -L \
+  https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/pharos_linux_x64 \
   -o ~/.local/bin/pharos
 chmod +x ~/.local/bin/pharos
-
-# Verify + warm the cache
-pharos --doctor
-```
-
-Replace `linux-x64` with your target: `linux-arm64`, `darwin-x64`,
-`darwin-arm64`. For Windows, download `pharos-win-x64.exe` to
-`%LOCALAPPDATA%\Programs\pharos\pharos.exe` and add that directory to
-your `Path` user environment variable:
-
-```powershell
-$dir = "$env:LOCALAPPDATA\Programs\pharos"
-New-Item -ItemType Directory -Force $dir | Out-Null
-Invoke-WebRequest `
-  -Uri https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/pharos-win-x64.exe `
-  -OutFile "$dir\pharos.exe"
-[Environment]::SetEnvironmentVariable(
-  "Path", "$env:Path;$dir", "User"
-)
-
-# Restart your terminal so PATH refreshes, then verify + warm:
-pharos --doctor
-```
-
-If `~/.local/bin` is not in your PATH, add it:
-
-```bash
-# bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-# zsh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-```
-
-Then point your MCP host config at the absolute path:
-
-```jsonc
-{
-  "mcpServers": {
-    "pharos": {
-      "command": "/home/<you>/.local/bin/pharos"
-    }
-  }
-}
 ```
 
 ### 3. Build from source
 
-The path most users take **today** while options 1 and 2 are unfinished.
-Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, rebar3 3.27+ (pinned
-versions in [.tool-versions](.tool-versions); `asdf install` reads them):
+Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, Zig 0.15.2.
+See [Development](#development).
+
+### First-run cold extract
+
+The first invocation extracts the Burrito payload to
+`~/.local/share/.burrito/pharos_*/` (~80 MB, ~3-5 seconds).
+Subsequent boots are <100 ms because the extract is cached. Run
+`pharos --doctor` once after install to warm both the Burrito cache
+and verify every LSP binary resolves on PATH.
+
+[↑ top](#pharos)
+
+## Quick start
+
+Two-step setup:
+
+**1. Install at least one LSP** for a language you'll use. See
+[Language support](#language-support) for the full table; the
+shortest paths:
 
 ```bash
-git clone https://github.com/LoganBresnahan/pharos-mcp.git
-cd pharos
-mix archive.install --force github LoganBresnahan/mix_gleam
-mix deps.get
-mix compile
-bin/pharos-dev --doctor       # warm + verify
+rustup component add rust-analyzer          # Rust
+go install golang.org/x/tools/gopls@latest  # Go
+npm install -g typescript-language-server typescript  # TypeScript/JS
+npm install -g pyright                      # Python
 ```
 
-Then point your MCP host config at the dev wrapper:
+**2. Point your MCP client at pharos.**
+
+Claude Code (`~/.claude.json` or per-project `.mcp.json`):
 
 ```jsonc
 {
   "mcpServers": {
     "pharos": {
-      "command": "/absolute/path/to/pharos/bin/pharos-dev"
+      "command": "pharos"
     }
   }
 }
 ```
 
-`bin/pharos-dev` runs `mix compile` (silent → stderr) and execs Erlang
-directly so stdout stays reserved for JSON-RPC frames. See
-[Development](#development) for the build-system details and the
-[hpack_erl naming workaround](#build-note-hpack_erl-naming-workaround).
+Cursor (per-server config UI): command `pharos`, args `[]`.
 
-## Language servers (install separately)
+ChatGPT Desktop / Claude Desktop: same shape via their JSON config.
 
-pharos does not bundle language servers. Install whichever you need;
-pharos resolves them via PATH at runtime and surfaces a clear error if
-a binary is missing.
+Restart the MCP client. The model now has tools named
+`mcp__pharos__hover`, `mcp__pharos__find_references`, etc.
+
+**Optional — warm the LSPs once on a per-project basis:**
+
+```bash
+cd /path/to/your/project
+pharos warm --all       # detects languages from workspace markers, pre-indexes each
+pharos warm rust go     # or name them explicitly — one or more languages
+```
+
+This makes the first MCP tool call ~3-5 s instead of ~30-60 s for
+heavy LSPs like rust-analyzer or jdtls by populating their on-disk
+indexes ahead of time.
+
+[↑ top](#pharos)
+
+## How it works
+
+Pharos is a long-lived BEAM-VM process that the MCP client spawns as
+a child for the duration of a session.
+
+**Lifecycle of one LSP request from agent to language server:**
+
+1. Agent calls an MCP tool over stdio: `find_references(uri, line, character)`.
+2. Pharos detects the language from the file URI (extension → registry
+   lookup) and looks up the configured LSP for that language.
+3. If the LSP isn't already in pharos's pool for this `(language,
+   workspace)`, pharos spawns it as a subprocess and runs the LSP
+   `initialize` handshake plus a readiness probe per
+   [ADR-024](doc/adr/024-lsp-readiness-gate.md). Cold start is
+   ~3-60 s depending on the LSP (gopls fast, jdtls/metals slow).
+4. Pharos forwards the request as the corresponding LSP method
+   (`textDocument/references`).
+5. LSP responds; pharos shapes the response into the MCP tool's
+   return schema and ships it back to the agent.
+
+**The LSP stays cached** in pharos's pool for the lifetime of the
+pharos process — every subsequent tool call against the same
+`(language, workspace)` reuses it. The pool also handles
+multi-language workspaces (one pyright + one rust-analyzer running
+side by side for the same project tree) and multi-server languages
+(python uses pyright AND ruff with method routing — see
+[ADR-019](doc/adr/019-lsp-multi-server-routing.md)).
+
+**No background daemon.** Pharos lives only as long as the MCP
+client that spawned it. When the client closes its end of the stdio
+pipe pharos drains in-flight requests, sends `shutdown`/`exit` to
+each cached LSP, removes its instance tracking dir (see
+[Troubleshooting](#troubleshooting)), and halts.
+
+[↑ top](#pharos)
+
+## Language support
+
+Pharos does not bundle LSPs — you install them; pharos resolves
+them via `PATH` at runtime and surfaces a clear error if a binary is
+missing. Run `pharos --doctor` after install to verify each.
+
+The five benchmarked in Phase 5 — full install one-liners:
 
 | Language | Server(s) | Install |
 |----------|-----------|---------|
 | Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
 | TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server typescript` |
-| Python | `pyright-langserver` (types/hover/goto) **+** `ruff` (formatting / lint / fixes) | `npm install -g pyright` and `pip install ruff` (or `uv tool install ruff`) |
-| Elixir | `next-ls` (default) — alternatives: `elixir-ls` (heavier, includes dialyzer), `start_expert` (alpha; will become the official LSP) | `gh release download v0.23.4 --pattern next_ls_linux_amd64 --output ~/.local/bin/next-ls --repo elixir-tools/next-ls && chmod +x ~/.local/bin/next-ls` (Linux). macOS: `brew install elixir-tools/tap/next-ls`. To switch: pin `[languages.elixir] command = "elixir-ls"` in pharos.toml. |
-| Gleam | `gleam lsp` (built into the gleam compiler) | **Currently broken upstream at gleam 1.16.** `gleam lsp` panics on stdin EOF (`Receiving LSP message: RecvError` in language-server/src/messages.rs:188). Affects every LSP host that closes stdin gracefully, not just pharos. Track at [gleam-lang/gleam](https://github.com/gleam-lang/gleam). pharos config wired and ready when upstream lands a fix. |
-| Lua | `lua-language-server` (sumneko/luals) | `brew install lua-language-server` or asdf. Tarball releases at [LuaLS/lua-language-server](https://github.com/LuaLS/lua-language-server/releases). |
-| Bash | `bash-language-server` | `npm install -g bash-language-server`. Diagnostics come via `shellcheck` (`apt install shellcheck` / `brew install shellcheck`); without it bash-language-server still serves hover/goto/document-symbols. |
-| Ruby | `ruby-lsp` (Shopify) | `gem install ruby-lsp`. Project must have `Gemfile.lock` — run `bundle install` once before pharos can talk to the workspace. |
-| Zig | `zls` | Per-zig-version. asdf: `asdf plugin add zls && asdf install zls 0.16.0 && asdf set -u zls 0.16.0`. Direct: download release matching your zig version from [zigtools/zls](https://github.com/zigtools/zls/releases). |
-| C / C++ | `clangd` | `apt install clangd-18 && sudo update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-18 100` (Linux). macOS: `brew install llvm`. clangd needs `compile_commands.json` for non-trivial projects; generate via `bear -- make` or CMake's `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. |
-| Java | `jdtls` (Eclipse JDT Language Server) | `mkdir -p ~/.local/lib/jdtls && cd ~/.local/lib/jdtls && curl -L https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz \| tar xz && ln -sf $(pwd)/bin/jdtls ~/.local/bin/jdtls && chmod +x ~/.local/bin/jdtls`. JDK 17+ required. Cold start 30-60s — pharos's initialize timeout is bumped to 90s globally to accommodate. |
-| Erlang | `elp` (WhatsApp/erlang-language-platform — default) | Pre-built binaries per OTP version at [WhatsApp/erlang-language-platform](https://github.com/WhatsApp/erlang-language-platform/releases). Pick the asset matching your OTP version (`-otp-26.2`, `-otp-27.3`, `-otp-28`). Alternative: `erlang_ls` (mature, BEAM-native) — override via `[languages.erlang] command = "erlang_ls"` in pharos.toml. |
-| Scala | `metals` | Coursier (NOT asdf — coursier IS the Scala polyglot manager): `curl -fL "https://github.com/coursier/coursier/releases/latest/download/cs-x86_64-pc-linux.gz" \| gunzip > ~/.local/bin/cs && chmod +x ~/.local/bin/cs && cs install metals scala-cli`. metals first-run bootstraps Bloop (~2-3 min); pharos's `[languages.scala.servers] initialize_timeout_ms = 180000` covers it. |
-| Clojure | `clojure-lsp` | Native binary, no JVM cold-start. Download from [clojure-lsp releases](https://github.com/clojure-lsp/clojure-lsp/releases): `gh release download --repo clojure-lsp/clojure-lsp --pattern 'clojure-lsp-native-static-linux-amd64.zip'` then unzip to `~/.local/bin/`. Clojure runtime via asdf: `asdf plugin add clojure && asdf install clojure latest`. |
-| Haskell | `haskell-language-server-wrapper` (HLS) | ghcup (NOT asdf — ghcup manages GHC/cabal/HLS version compatibility): `curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \| sh && ghcup install ghc recommended && ghcup install hls recommended`. Heavy — full GHC install is ~1GB. |
-| Perl | `pls` (FractalBoy/perl-language-server) | `cpanm PLS` (asdf-perl + cpanm). Run `asdf reshim perl` after install so the `pls` shim resolves on PATH. |
-| HTML / CSS / JSON | `vscode-html-language-server`, `vscode-css-language-server`, `vscode-json-language-server` | One npm package: `npm install -g vscode-langservers-extracted`. Three LSPs in one install. |
-| YAML | `yaml-language-server` | Separate npm package from the vscode bundle: `npm install -g yaml-language-server`. |
-| Markdown | `marksman` | Single Rust binary. `gh release download --repo artempyanykh/marksman --pattern 'marksman-linux-x64' --output ~/.local/bin/marksman --clobber && chmod +x ~/.local/bin/marksman`. |
-| Terraform / HCL | `terraform-ls` | HashiCorp hosts on `releases.hashicorp.com`, NOT GitHub Releases: `TFLS_VERSION=0.38.6 && curl -fLO "https://releases.hashicorp.com/terraform-ls/${TFLS_VERSION}/terraform-ls_${TFLS_VERSION}_linux_amd64.zip" && unzip -o terraform-ls_*_linux_amd64.zip -d ~/.local/bin/ && chmod +x ~/.local/bin/terraform-ls`. |
+| Python | `pyright` (types/hover/goto) **+** `ruff` (format/lint/fixes) | `npm install -g pyright` and `pip install ruff` (or `uv tool install ruff`) |
+| Java | `jdtls` (Eclipse JDT) | `mkdir -p ~/.local/lib/jdtls && cd ~/.local/lib/jdtls && curl -L https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz \| tar xz && ln -sf $(pwd)/bin/jdtls ~/.local/bin/jdtls && chmod +x ~/.local/bin/jdtls`. JDK 17+ required. |
 
-Python uses two servers via ADR-019 method routing: pyright owns
-hover, goto, types, references; ruff owns formatting, lint
-diagnostics, and lint-quick-fix code actions. Both contribute to
-`textDocument/codeAction` (their results merge). Either binary can be
-overridden in `pharos.toml`.
+[More languages ↓](#more-languages) — also wired and ready:
+C/C++, Elixir, Erlang, Gleam, Scala, Clojure, Haskell, Ruby, Lua,
+Bash, Zig, Perl, HTML/CSS/JSON, YAML, Markdown, Terraform.
 
-Run `pharos --doctor` to verify each server resolves; output includes
-the absolute path PATH lookup landed on (or a `MISSING` row plus
-install hint when it didn't).
+**Don't see your language?** Any language with an LSP-compliant server
+can be wired in via `pharos.toml` — full worked example at
+[Adding your own language ↓](#adding-your-own-language). 23 languages
+ship bundled today; the registry is just a default and is fully
+overridable.
 
-## Language registry
+Multi-server routing is supported for languages that need it
+([Python](#multi-server-languages-adr-019); see
+[ADR-019](doc/adr/019-lsp-multi-server-routing.md)).
 
-pharos ships a built-in registry mapping language ids to LSP commands,
-file extensions, and workspace-root markers. Lookup flow per tool call:
+[↑ top](#pharos)
 
-1. Tool receives a `file:// URI`.
-2. File extension is matched against the registry (`.rs` → `rust`,
-   `.go` → `go`, `.ts/.tsx/.js/.jsx` → `typescript`, `.py/.pyi` →
-   `python`).
-3. The matched language's `command` is resolved on PATH:
-   - **Bare name** (e.g. `rust-analyzer`) goes through `os:find_executable/1`,
-     which searches every directory in `$PATH` in order.
-   - **Absolute path** (e.g. `/opt/custom/rust-analyzer`) is used verbatim
-     after a regular-file check.
-4. Pharos spawns the resolved binary, drives the LSP handshake, dispatches
-   the tool's underlying LSP method, returns the result.
+## Tools
 
-### Bundled defaults
+53 MCP tools across 5 categories + 2 filter presets. The 5
+categories (read, write, memory, debug, raw) partition every tool
+exactly once. The 2 presets (`default`, `all`) are filter aliases
+that aggregate across categories — what your MCP host sees when you
+set e.g. `tools = ["default", "raw", "runtime_kill_lsp"]` (preset +
+category + literal tool name — mix freely) or `tools = ["all"]` in
+[pharos.toml](#configuration); full per-tool detail at
+[Tool reference](#tool-reference).
 
-| id | extensions | command | workspace markers |
-|----|------------|---------|-------------------|
-| `rust` | `.rs` | `rust-analyzer` | `Cargo.toml`, `rust-project.json` |
-| `go` | `.go` | `gopls` | `go.mod`, `go.work` |
-| `typescript` | `.ts`, `.tsx`, `.js`, `.jsx` | `typescript-language-server --stdio` | `tsconfig.json`, `package.json`, `jsconfig.json` |
-| `python` | `.py`, `.pyi` | `pyright-langserver --stdio` | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt` |
+| Category | Count | Examples | When you'd toggle off |
+|----------|------:|----------|------------------------|
+| **default** *(preset)* | 37 | Aggregates `read` + `write` + `memory` plus 5 runtime essentials the LLM uses for tool-error recovery (`echo`, `runtime_set_tool_timeout`, `runtime_effective_tool_config`, `runtime_language_config`, `runtime_server_capabilities`) | This is the shipping preset. Replace with an explicit list (e.g. `tools = ["read"]`) for tighter surfaces. |
+| **read** | 22 | `hover`, `goto_definition`, `find_references`, `find_referencing_symbols`, `find_symbol`, `document_symbols`, `workspace_symbols`, `containing_symbol`, `call_hierarchy_*`, `type_hierarchy_*`, `signature_help`, `get_diagnostics`, `inlay_hints`, `semantic_tokens`, `fetch_uri_contents` | Never — these are the core LSP queries that make pharos worth running. |
+| **write** | 5 | `rename_preview`, `format_document`, `code_actions`, `apply_workspace_edit`, `edit_at_symbol` | When the agent should propose edits without authority to apply them. Set `tools = ["read"]` for query-only mode. |
+| **memory** | 5 | `memory_save`, `memory_get`, `memory_list`, `memory_prune`, `memory_audit` | Project-memory store ([ADR-027](doc/adr/027-project-memory-tools.md)) — toggle off if the agent doesn't need persistent notes scoped to the workspace. |
+| **debug** | 20 | `runtime_processes`, `runtime_supervision_tree`, `runtime_log_tail`, `runtime_kill_lsp`, `runtime_lsp_state`, `runtime_pool_recon`, `runtime_trace_lsp`, `runtime_memory`, `echo`, `runtime_set_tool_timeout`, [full list ↓](#debug-20-tools) | Off by default beyond the 5 essentials. Opt in (`tools = ["default", "debug"]`) for dogfood / power-user installs where pharos's BEAM internals should be reachable. |
+| **raw** | 1 | `lsp_request_raw` | Off by default. Opt in only when the agent legitimately needs LSP methods pharos hasn't wrapped natively. |
+| **all** *(preset)* | 53 | All tools available | The "expose everything" preset (`tools = ["all"]`) — dogfood / power-user installs that want both `debug` and `raw` exposed. |
 
-The full default registry lives in [src/pharos/lsp/languages.gleam](src/pharos/lsp/languages.gleam) — every field
-overlay-able from `pharos.toml` (see below).
+[↑ top](#pharos)
 
-### Custom paths (override a bundled language)
+## CLI reference
 
-Common case: language server installed somewhere `os:find_executable`
-won't see, or you want to pin a specific build (e.g. nightly
-rust-analyzer). Drop into `~/.config/pharos/pharos.toml`:
+Pharos has no runtime-configuration CLI flags — every knob lives in
+`pharos.toml` or `PHAROS_*` env vars. Flags are operational meta
+commands.
 
-```toml
-[languages.rust]
-command = "/opt/custom/rust-analyzer-nightly"
+| Command | Purpose |
+|---------|---------|
+| `pharos` | MCP server (default — what your client invokes). Reads JSON-RPC from stdin, writes responses to stdout, logs to stderr. |
+| `pharos warm <lang>...` | Pre-warm the named languages' LSPs against cwd. Spawns each LSP, runs the readiness gate, exits. Subsequent MCP-server runs in the same workspace boot ~10-20× faster because the LSPs' on-disk indexes are now hot. |
+| `pharos warm --all` | Same as above but enumerates every language pharos knows about and warms whichever ones have project markers in cwd. Languages without markers (e.g. `Cargo.toml` for rust, `go.mod` for go) are skipped with a clear log line. |
+| `pharos --doctor` | Self-diagnostic. Resolves config the same way a normal boot does, probes each language server's binary on PATH, reports anything that would break a real run. Doubles as a Burrito-cache warmup. |
+| `pharos --cleanup` | List orphan LSP children left behind by prior pharos sessions that exited uncleanly (host crash, SIGKILL, OOM-killer). Dry-run by default — adds nothing destructive without a flag. |
+| `pharos --cleanup --yes` | Reap the orphans listed by `--cleanup`: SIGTERM each, wait 5 s, SIGKILL survivors, remove their per-PID tracking directory. |
+| `pharos --purge-cache` | Remove the Burrito extract cache (`<user_cache>/burrito_runtime/_/pharos/`). Next run re-extracts (~3-5 s). |
+| `pharos --print-default-config` | Print the canonical `pharos.toml` starter with comments. Pipe to `~/.config/pharos/pharos.toml` to begin customising. |
+| `pharos --print-language-config <id>` | Print one language's resolved registry entry (after `pharos.toml` overlays). Useful for debugging "why isn't my custom binary path being used?". |
+| `pharos --version` / `-V` | Print version and exit. |
+| `pharos --help` / `-h` | Print usage and exit. |
 
-[languages.python]
-command = "/Users/me/.venv/bin/pyright-langserver"
-args = ["--stdio"]
-```
+### Useful env vars
 
-Only fields you supply override the default — everything else
-(`file_extensions`, `root_markers`, etc.) is inherited from the bundled
-entry. Verify with `pharos --doctor`:
+| Var | What it does | Default |
+|-----|--------------|---------|
+| `PHAROS_WARM_LANGS` | CSV; pharos pre-warms these languages every boot. Useful in MCP client configs where you want warm-on-every-spawn rather than the one-shot `pharos warm` CLI. | unset (off) |
+| `PHAROS_LOG` | RUST_LOG-style filter (`info`, `info,pharos/lsp/pool=debug`). | `info` |
+| `PHAROS_LOG_FILE` | Override the per-PID per-timestamp default log file location. | `~/.cache/pharos/log/session-<pid>-<timestamp>.log` |
+| `PHAROS_HEARTBEAT_INTERVAL_MS` | Cadence of the idle-heartbeat log line (memory + LSP child count). | `60000` |
+| `PHAROS_SHUTDOWN_DRAIN_MS` | How long to wait for in-flight requests before initiating LSP shutdown on SIGTERM/stdin-EOF. | `2000` |
+| `PHAROS_CLEANUP_GRACE_MS` | How long `pharos cleanup --yes` waits between SIGTERM and SIGKILL on each orphan. | `5000` |
 
-```
-rust              ok     /opt/custom/rust-analyzer-nightly
-python            ok     /Users/me/.venv/bin/pyright-langserver
-```
-
-### Custom paths per project
-
-For monorepos that pin a project-specific server build, drop a
-`.pharos.toml` at the project root. Pharos walks up from cwd at boot to
-find it; project values beat global values:
-
-```toml
-# /workspace/myproject/.pharos.toml
-[languages.python]
-command = "/workspace/myproject/.venv/bin/pyright-langserver"
-args = ["--stdio"]
-```
-
-### Adding a brand-new language
-
-`command` and `file_extensions` are required; everything else has
-sensible blank defaults. Example for Haskell:
-
-```toml
-[languages.haskell]
-command = "haskell-language-server-wrapper"
-args = ["--lsp"]
-file_extensions = [".hs", ".lhs"]
-root_markers = ["cabal.project", "stack.yaml", "package.yaml"]
-diagnostics_mode = "push"      # or "pull" — see ADR-018
-```
-
-After the entry lands, hover/goto/etc. on a `.hs` file will spawn
-`haskell-language-server-wrapper`. `pharos --doctor` will probe it
-alongside the bundled languages.
-
-### Diagnostics mode
-
-`diagnostics_mode` controls how `get_diagnostics` retrieves data:
-
-- `"push"` — pharos waits for the server's `textDocument/publishDiagnostics`
-  notification after `didOpen`. Default. Matches rust-analyzer, gopls.
-- `"pull"` — pharos sends `textDocument/diagnostic` request and reads
-  the response. Required for typescript-language-server (does not push)
-  and pyright when the file's diagnostic stream went idle.
-
-When in doubt, leave the default and read the doctor output to see
-what the configured server emits.
-
-### Readiness token
-
-`readiness_token` lets pharos drain a `$/progress` indexing notification
-to the `end` state before serving the **first** request to a freshly
-spawned server, eliminating the cold-start `null` failure mode. Bundled
-values:
-
-| Language | Token |
-|----------|-------|
-| `rust` | `rustAnalyzer/Indexing` |
-| `go` | `setup` |
-| `python` | `Indexing` |
-
-Override per language if your server uses a different progress token,
-or set `readiness_token = ""` to disable the wait entirely.
-
-### Multi-server languages (ADR-019)
-
-Each language has a list of `ServerConfig` entries declaring which LSP
-methods they handle. Most languages bundle a single server with
-`methods = "all"`. Python ships with two:
-
-| Server | Scope | Owns |
-|--------|-------|------|
-| `pyright` | `methods = "all"` | hover, goto, references, types, signature_help, document_symbols, workspace_symbols, completion |
-| `ruff` | `methods = ["textDocument/formatting", "textDocument/codeAction", "textDocument/diagnostic"]` | formatter, lint quick-fixes, import-sort, lint diagnostics |
-
-Routing rule (per ADR-019): for each LSP method, the **first server
-declaring it via `Only` wins**, otherwise the **first `All`-scope
-server wins**. Methods that produce array-shaped results
-(`textDocument/codeAction`, `textDocument/diagnostic`) merge results
-across every claiming server — pyright's type-related quick-fixes and
-ruff's lint autofixes both reach the LLM in one response.
-
-The single-server flat-override form stays the simplest path for
-swapping a primary binary path. To target a non-primary server (e.g.
-ruff in python) or to layer additional servers (mypy alongside
-pyright + ruff), use the array-of-tables form
-`[[languages.<id>.servers]]`. Each entry merges into the default
-by `id`, or appends as a new server if the id is absent:
-
-```toml
-[[languages.python.servers]]
-id = "ruff"
-command = "/custom/path/to/ruff"
-
-[[languages.python.servers]]
-id = "mypy"
-command = "mypy"
-args = ["--strict"]
-methods = ["textDocument/diagnostic"]
-```
-
-Methods routing rule: a server with `methods = [...]` declares
-`Only` scope (handles only the listed methods); a server without
-`methods` keeps `All` scope (handles every method). For each LSP
-method, Primary-strategy methods pick the first `Only` match (else
-first `All`); Merge / FanOut methods consult every claiming server
-and combine results.
+[↑ top](#pharos)
 
 ## Configuration
 
-pharos reads configuration in this precedence order (later wins):
+Pharos reads configuration in this precedence order (later wins):
 
 1. Compiled-in defaults (no config required)
 2. `~/.config/pharos/pharos.toml` — global per-user
-3. `./.pharos.toml` — per-project; walked up from the cwd pharos was launched in
+3. `./.pharos.toml` — per-project; walked up from cwd
 4. `PHAROS_*` environment variables — final override
 
 To start customising, dump the canonical TOML with comments:
@@ -386,16 +303,7 @@ The full schema lives in [doc/example-pharos.toml](doc/example-pharos.toml).
 
 ### Tool filter (`tools = [...]`)
 
-Four categories cover every MCP tool pharos exposes:
-
-| Category | Members |
-|----------|---------|
-| `read` | non-mutating LSP queries (hover, goto, references, symbols, diagnostics, signature help, call/type hierarchy, inlay hints, semantic tokens) — 17 tools |
-| `write` | edit-producing LSP tools (rename_preview, format_document, code_actions return `WorkspaceEdit` data; apply_workspace_edit writes one to disk) — 4 tools |
-| `debug` | pharos runtime introspection (processes, supervision tree, ETS, log tail, kill_lsp, language_config, …) — 15 tools incl. `echo` |
-| `raw` | power-user escape hatch (`lsp_request_raw`) — 1 tool |
-
-Mix categories with literal tool names freely:
+Pick categories or literal tool names. Default: all four categories on.
 
 ```toml
 tools = ["read"]                       # query-only agent
@@ -404,32 +312,18 @@ tools = ["read", "runtime_log_tail"]   # category + one extra
 tools = ["hover", "goto_definition"]   # fully explicit
 ```
 
-Default: all categories on.
-
 ### Per-tool timeout overrides (`[tool_config.<name>]`)
 
-Every LSP-bound tool accepts an optional `timeout_ms` argument and
-has a compile-time default (`30s` for most, `60s` for
-`find_references`). Override the default per-tool in TOML so heavy
-workspaces don't need the LLM to pass `timeout_ms` on every call:
+Every LSP-bound tool accepts an optional `timeout_ms` argument and has
+a compile-time default (`30s` for most, `60s` for `find_references`).
+Override globally or per-language:
 
 ```toml
 [tool_config.format_document]
 default_timeout_ms = 90000
 
-[tool_config.find_references]
-default_timeout_ms = 120000
-```
-
-For finer control, narrow an override to one language (handy when a
-single heavy LSP is the slow one):
-
-```toml
 [tool_config.find_references.java]
-default_timeout_ms = 120000   # jdtls workspace-wide refs
-
-[tool_config.workspace_symbols.go]
-default_timeout_ms = 90000    # gopls fuzzy-match across stdlib
+default_timeout_ms = 120000     # jdtls workspace-wide refs are slow
 ```
 
 Resolution order (later wins):
@@ -438,217 +332,506 @@ Resolution order (later wins):
 3. `[tool_config.<name>.<lang>] default_timeout_ms` (per-tool × per-lang)
 4. Per-call `timeout_ms` argument
 
-The `<lang>` key matches the language registry (`rust`, `python`,
-`java`, etc.). Pharos classifies the call's URI by file extension to
-pick which per-lang override to consult; if no override applies, the
-global per-tool default takes over.
-
-Recommended starting bumps for heavy LSPs that the M13 test matrix
-regularly times out on (raise only if your workspace actually needs
-the headroom):
+Recommended starting bumps for heavy LSPs:
 
 | LSP | Tools that benefit | Suggested |
 |---|---|---|
-| `jdtls` (java) | `type_hierarchy_*`, `find_references`, `format_document` | 90-120s |
-| `metals` (scala) | `workspace_symbols`, `inlay_hints`, `semantic_tokens`, `rename_preview` | 60-90s |
-| `ruby-lsp` | `goto_*`, `call_hierarchy_prepare` | 60s |
-| `perl/PLS` | `find_references`, `rename_preview` | 120-240s |
-| `gopls` (big-mod) | `workspace_symbols` | 90s |
-| `rust-analyzer` (monorepo) | `format_document` | 60s |
+| `jdtls` (java) | `type_hierarchy_*`, `find_references`, `format_document` | 90-120 s |
+| `metals` (scala) | `workspace_symbols`, `inlay_hints`, `semantic_tokens`, `rename_preview` | 60-90 s |
+| `ruby-lsp` | `goto_*`, `call_hierarchy_prepare` | 60 s |
+| `perl/PLS` | `find_references`, `rename_preview` | 120-240 s |
+| `gopls` (big mod) | `workspace_symbols` | 90 s |
+| `rust-analyzer` (monorepo) | `format_document` | 60 s |
 
-When a tool times out today the LLM sees a clear `tool timeout: LSP
-did not respond in time...` message that names the
-`runtime_set_tool_timeout` and per-call `timeout_ms` escape hatches —
-so most tuning ends up happening in-conversation rather than in
-TOML. Use TOML for durable bumps you want every session to see.
+When a tool times out the LLM sees `tool timeout: LSP did not respond
+in time...` with pointers to the `runtime_set_tool_timeout` and
+per-call `timeout_ms` escape hatches — so most tuning ends up happening
+in-conversation, not in TOML.
 
-## CLI flags
+### Multi-server languages (ADR-019)
 
-pharos has no runtime-configuration CLI flags — every knob lives in
-TOML or `PHAROS_*` env vars. Flags are limited to operational meta
-commands.
+A few languages route different LSP methods to different servers.
+Python is the prominent case:
 
-| Flag | What it does |
+| Server | Scope | Owns |
+|--------|-------|------|
+| `pyright` | `methods = "all"` | hover, goto, references, types, signature_help, document_symbols, workspace_symbols |
+| `ruff` | `methods = ["textDocument/formatting", "textDocument/codeAction", "textDocument/diagnostic"]` | formatter, lint quick-fixes, import-sort, lint diagnostics |
+
+Routing rule per [ADR-019](doc/adr/019-lsp-multi-server-routing.md):
+the first server declaring a method via `Only` wins; otherwise the
+first `All`-scope server wins. Methods that produce array-shaped
+results (`codeAction`, `diagnostic`) merge across every claiming
+server.
+
+Add a third server (e.g. mypy alongside pyright + ruff):
+
+```toml
+[[languages.python.servers]]
+id = "mypy"
+command = "mypy"
+args = ["--strict"]
+methods = ["textDocument/diagnostic"]
+```
+
+[↑ top](#pharos)
+
+## Benchmark methodology
+
+### Run shape
+
+- **Corpora.** One open-source workspace per language: Flask (python),
+  bytes (rust), zod (typescript), a representative go module, and
+  spring-petclinic (java). Each picked for being moderately complex
+  but small enough to fully index inside the WSL2 box used for the
+  run.
+- **Questions.** 60-70 per language, auto-generated by
+  `bench/oracle.py` from random sampling of `document_symbols`
+  output. No human curation. Seven question kinds spanning the
+  navigation surface: `find_definition`, `find_implementation`,
+  `references_count`, `symbol_kind`, `hover_first_word`,
+  `hover_signature`, `call_hierarchy_in`, `containing_symbol`,
+  `collision_resolve`.
+- **Arms.** Same question, two tool surfaces:
+  - **control** — Bash, Glob, Grep, Read (no pharos).
+  - **treatment** — the same set PLUS the full pharos MCP tool surface.
+- **Model.** DeepSeek-v4-pro, thinking mode on.
+- **Trials.** 3 independent runs per (question, arm); per-arm n =
+  base_questions × 3.
+- **Run wall time.** 8 hours, 5 languages in parallel (one pharos
+  process per language, isolated workspaces).
+
+### Ground truth
+
+Each question's ground truth is computed by `bench/oracle.py` calling
+the LSP authoritatively before the run starts. The `references_count`
+ground truth for "how many references does `foo` have" comes from
+running `textDocument/references` on `foo` and counting. The
+`find_definition` ground truth is the URI the LSP returned for
+`textDocument/definition`.
+
+This means **the LSP is the oracle for ground truth**, and the
+benchmark measures whether an LLM equipped with pharos reaches the
+LSP-correct answer more often than an LLM restricted to grep. That's
+deliberate: the LSP IS the authoritative source for language
+semantics (rust-analyzer knows whether two `fn foo`s are the same
+generic instantiation; grep can't), and the hypothesis under test is
+exactly that giving the agent access to that authoritative source
+helps.
+
+### Scoring
+
+Mechanical, deterministic. No human judgment. Rules per kind in
+[bench/score.py](bench/score.py):
+
+| Kind | Rule |
+|------|------|
+| `references_count` | First integer in answer == ground_truth integer |
+| `find_definition` / `find_implementation` | Normalised file path equality |
+| `symbol_kind` | Case-insensitive SymbolKind name equality |
+| `hover_first_word` | Substring match on first word |
+| `hover_signature` | Substring match on type sig |
+
+Rerunning the scorer against the same per-question JSONL yields the
+same numbers; the scoring is reproducible.
+
+### Cost — local estimate vs. billed
+
+The per-cell `cost_usd` field is a local estimate using DeepSeek-v4-pro
+promo rates (active through 2026-05-31). It underestimates the actual
+DeepSeek-billed total by ~4.5× in this run (local sum $11.35 vs. actual
+delta ~$50.60). The pricing constants in
+[bench/harness_deepseek.py](bench/harness_deepseek.py) may pre-date a
+DeepSeek rate change or there's a cache-hit vs cache-miss classification
+gap; per-arm relative deltas are unaffected (both arms use the same
+constants). v1.1 reconciliation item.
+
+### Full data
+
+- [`bench/results/v1.0-final/phase5-final-report/summary.md`](bench/results/v1.0-final/phase5-final-report/summary.md) — headline matrix + percentiles + per-kind drill-down
+- [`bench/results/v1.0-final/phase5-final-report/per-question.md`](bench/results/v1.0-final/phase5-final-report/per-question.md) — every cell (1986 rows)
+- [`bench/results/v1.0-final/phase5-final-report/pairs.csv`](bench/results/v1.0-final/phase5-final-report/pairs.csv) — joined control/treatment per (qid, trial); has `flip_c_wrong_t_right` and `flip_c_right_t_wrong` columns for fine-grained diff analysis
+
+### What this bench does NOT measure
+
+- **Code-writing tasks** (refactors, new feature implementation).
+  Different methodology needed.
+- **Agent reasoning quality.** A bad LLM with a good tool surface
+  can still get the right answer mechanically. The control arm
+  partially baselines this.
+- **Production traffic patterns.** Phase 5 is synthetic by design —
+  random symbol sampling, evenly distributed across kinds. Real
+  agent workloads cluster heavily around a few question types.
+
+[↑ top](#pharos)
+
+## Tool reference
+
+Brief per-tool summaries below. All tools accept `timeout_ms` as an
+optional argument; defaults are listed in
+[Configuration](#per-tool-timeout-overrides-tool_configname).
+
+### read (22 tools)
+
+| Tool | What it returns | Backed by |
+|------|-----------------|-----------|
+| `hover` | Type info + docs for the symbol at `(uri, line, character)` | `textDocument/hover` |
+| `goto_definition` | URI + range of the symbol's definition | `textDocument/definition` |
+| `goto_type_definition` | URI + range of the symbol's type | `textDocument/typeDefinition` |
+| `goto_implementation` | URI + range list of implementations (trait impls, abstract overrides, etc.) | `textDocument/implementation` |
+| `find_references` | URI + range list of every reference site | `textDocument/references` |
+| `find_referencing_symbols` | One step deeper than `find_references` — returns the *containing symbol* of each reference (function name, class, etc.) | composed: `references` → `documentSymbol` per uri |
+| `find_symbol` | Locate a symbol by name + optional kind across the workspace | `workspace/symbol` |
+| `document_symbols` | Outline of every symbol in one file (hierarchical) | `textDocument/documentSymbol` |
+| `workspace_symbols` | Fuzzy-match symbol name across the workspace | `workspace/symbol` |
+| `get_symbols_overview` | Top-level outline only (no nesting) — cheaper than `document_symbols` for "what's in this file" probes | composed |
+| `containing_symbol` | The innermost named symbol covering a given line | composed: `documentSymbol` → tree walk |
+| `signature_help` | Function signature + active parameter for the call at cursor | `textDocument/signatureHelp` |
+| `call_hierarchy_prepare` | Anchor a call-hierarchy query at a symbol | `textDocument/prepareCallHierarchy` |
+| `call_hierarchy_incoming_calls` | Who calls this symbol | `callHierarchy/incomingCalls` |
+| `call_hierarchy_outgoing_calls` | What this symbol calls | `callHierarchy/outgoingCalls` |
+| `type_hierarchy_prepare` | Anchor a type-hierarchy query | `textDocument/prepareTypeHierarchy` |
+| `type_hierarchy_supertypes` | Parent classes/traits | `typeHierarchy/supertypes` |
+| `type_hierarchy_subtypes` | Child classes/implementations | `typeHierarchy/subtypes` |
+| `get_diagnostics` | Errors/warnings for one file or workspace-wide | `textDocument/diagnostic` + cached `publishDiagnostics` |
+| `inlay_hints` | Inline type / parameter hints in a range | `textDocument/inlayHint` |
+| `semantic_tokens` | Token-level semantic classifications for syntax-aware operations | `textDocument/semanticTokens/*` |
+| `fetch_uri_contents` | Read raw text behind a custom URI scheme (e.g. `jdt://` for jdtls class-file contents) — see [ADR-029](doc/adr/029-custom-uri-schemes.md) | scheme-dependent |
+
+### write (5 tools)
+
+| Tool | What it does | Authority model |
+|------|--------------|------------------|
+| `rename_preview` | Compute a `WorkspaceEdit` for renaming a symbol — does NOT apply | Caller (LLM) inspects + applies via `apply_workspace_edit` |
+| `format_document` | Compute a `WorkspaceEdit` from the LSP formatter — does NOT apply | same |
+| `code_actions` | Enumerate available quick-fixes / refactors at a position, each as a `WorkspaceEdit` | same |
+| `edit_at_symbol` | Replace the source range of a named symbol with new text — convenience for "rewrite `fn foo` body" style edits | Returns a `WorkspaceEdit`; caller applies |
+| `apply_workspace_edit` | Write a `WorkspaceEdit` to disk. `dry_run=true` by default (returns the diff); flip to `false` to actually write. Per-file atomic writes. | This is the only tool that mutates source files. |
+
+### memory (5 tools)
+
+Per-project key-value memory store ([ADR-027](doc/adr/027-project-memory-tools.md)).
+Files live at `.pharos/memories/` in the workspace root; safe to commit
+to version control if the project's policy allows. Useful for agents
+that benefit from durable notes across sessions ("the auth tests use
+fixture X", "this module is being refactored").
+
+| Tool | What it does |
 |------|--------------|
-| `--version`, `-V` | Print version and exit. |
-| `--help`, `-h` | Print usage and exit. |
-| `--print-default-config` | Print the canonical pharos.toml starter file with comments. |
-| `--doctor` | Self-diagnostic. Resolves Config the same way a normal boot does, probes each language server's binary on PATH, reports anything that would break. Doubles as a Burrito-cache warmup — run once after install so the first MCP host spawn is fast. |
-| `--purge-cache` | Remove Burrito's extracted ERTS+BEAM payload at `<user_cache>/burrito_runtime/_/pharos/`. Next run re-extracts (~1–3s). Does **not** remove the binary itself or your config files. |
+| `memory_save` | Write or update a memory entry by key |
+| `memory_get` | Read one memory entry |
+| `memory_list` | List all memory entries (paginated) |
+| `memory_prune` | Delete one or more entries by key |
+| `memory_audit` | Surface entries that have not been read in N days, suggest review |
 
-## Updating
+### debug (20 tools)
 
-There is no `--update` flag. Use the channel-appropriate recipe:
+BEAM / pharos introspection. The first 5 ship under the `default`
+preset because the read/write surface points at them in tool-error
+recovery recipes; the remaining 15 are opt-in via `tools = ["default",
+"debug"]` or `tools = ["all"]`.
 
-```bash
-# npm install
-npm update -g pharos
+| Tool | What it does | Exposed under |
+|------|--------------|---------------|
+| `echo` | Round-trip an MCP message — smoke test for the transport before exercising any LSP-bound tool | `default` |
+| `runtime_set_tool_timeout` | Bump or lower one tool's timeout for the current session; the LLM uses this after a timeout to retry with a wider budget | `default` |
+| `runtime_effective_tool_config` | Inspect the resolved per-tool config (timeout, max bytes, etc.) after `pharos.toml` + env-var overlays | `default` |
+| `runtime_language_config` | Inspect one language's resolved LSP config — "is the binary path the override I set or the default?" | `default` |
+| `runtime_server_capabilities` | Report which LSP methods the spawned server advertised in its `initialize` response — useful when a tool returns "unsupported" | `default` |
+| `runtime_processes` | Snapshot of BEAM processes (memory, message-queue length, registered name) — pharos's view of "what's running" | `debug` |
+| `runtime_pid_info` | Drill into one pid: current function, links, monitors, trap_exit, dictionary | `debug` |
+| `runtime_supervision_tree` | Dump the live supervised tree as application_controller sees it | `debug` |
+| `runtime_ets_tables` | List ETS tables (size, memory, owner) — pharos uses ETS for the pool's subject bridge + diagnostics cache | `debug` |
+| `runtime_memory` | BEAM memory breakdown (atom, binary, processes, code, ETS) | `debug` |
+| `runtime_applications` | List running OTP applications with their start args | `debug` |
+| `runtime_scheduler_util` | Per-scheduler utilization snapshot over a short window | `debug` |
+| `runtime_log_tail` | Read the last N entries from the in-memory log ring (post-filter) | `debug` |
+| `runtime_log_clear` | Drop the in-memory ring's contents — useful before reproducing a bug | `debug` |
+| `runtime_log_level` | Get or set the current log filter spec (`info`, `debug,pharos/lsp/pool=trace`, etc.) without a restart | `debug` |
+| `runtime_trace_lsp` | Enable / disable per-LSP wire trace (every `textDocument/*` request + response logged) | `debug` |
+| `runtime_trace_calls` | Enable / disable per-MCP-tool call trace (every `tools/call` request + response logged) | `debug` |
+| `runtime_kill_lsp` | Graceful kill of one or all LSPs in a workspace; next request lazily respawns (see [Architecture](#architecture)) | `debug` |
+| `runtime_lsp_state` | Inspect cached state of one LSP — initialize-time, advertised capabilities, request counters | `debug` |
+| `runtime_pool_recon` | Pool reconciliation stats: cache hit rate, leak count, ghost-subject count, top N hot keys | `debug` |
 
-# Direct download (replace the platform suffix)
-curl -L https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/pharos-linux-x64 \
-  -o ~/.local/bin/pharos
-chmod +x ~/.local/bin/pharos
+[back ↑](#tools)
 
-# After update, recommended:
-pharos --purge-cache       # clear stale Burrito extract from prior version
-pharos --doctor            # warm fresh cache + re-verify
+### raw (1 tool)
+
+| Tool | What it does |
+|------|--------------|
+| `lsp_request_raw` | Escape hatch for any LSP method pharos hasn't wrapped natively (e.g. `textDocument/foldingRange`, server-specific extensions like `rust-analyzer/inlayHints`). Off by default in the `tools = [...]` filter; enable explicitly. |
+
+[↑ top](#pharos)
+
+## More languages
+
+The remaining 18 wired into pharos. Same MCP tool surface as the
+benchmarked five — only the LSP binary install command differs.
+
+| Language | Server(s) | Install |
+|----------|-----------|---------|
+| C / C++ | `clangd` | `apt install clangd-18` (Linux) / `brew install llvm` (macOS). Needs `compile_commands.json` for non-trivial projects. |
+| Elixir | `next-ls` (default) — alts: `elixir-ls`, `start_expert` | macOS: `brew install elixir-tools/tap/next-ls`. Linux: `gh release download v0.23.4 --pattern next_ls_linux_amd64 --repo elixir-tools/next-ls -O ~/.local/bin/next-ls && chmod +x ~/.local/bin/next-ls`. |
+| Erlang | `elp` (WhatsApp/erlang-language-platform) — alt: `erlang_ls` | Pre-built binaries per OTP version at [WhatsApp/erlang-language-platform releases](https://github.com/WhatsApp/erlang-language-platform/releases). |
+| Gleam | `gleam lsp` (built into compiler) | Comes with the gleam compiler — `brew install gleam` or [gleam-lang/gleam releases](https://github.com/gleam-lang/gleam/releases). Pharos dogfoods its own gleam tree against this. |
+| Scala | `metals` | Coursier: `cs install metals`. First-run bootstraps Bloop (~2-3 min); pharos timeout config covers it. |
+| Clojure | `clojure-lsp` | Native binary, no JVM cold-start. [clojure-lsp releases](https://github.com/clojure-lsp/clojure-lsp/releases). |
+| Haskell | `haskell-language-server-wrapper` | ghcup (manages GHC/cabal/HLS compatibility): `curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \| sh && ghcup install hls recommended`. |
+| Ruby | `ruby-lsp` | `gem install ruby-lsp`. Project needs `Gemfile.lock` (run `bundle install` first). |
+| Lua | `lua-language-server` | `brew install lua-language-server` or asdf. |
+| Bash | `bash-language-server` | `npm install -g bash-language-server`. Diagnostics need `shellcheck`. |
+| Zig | `zls` | Match your zig version. `asdf plugin add zls && asdf install zls 0.16.0`. |
+| Perl | `pls` | `cpanm PLS`. |
+| HTML / CSS / JSON | one package: `vscode-langservers-extracted` | `npm install -g vscode-langservers-extracted` |
+| YAML | `yaml-language-server` | `npm install -g yaml-language-server` |
+| Markdown | `marksman` | Single Rust binary. [marksman releases](https://github.com/artempyanykh/marksman/releases). |
+| Terraform / HCL | `terraform-ls` | HashiCorp hosts on `releases.hashicorp.com`. |
+
+### Adding your own language
+
+Pharos's bundled language list is just a default — every entry can
+be overridden and any language with an LSP-compliant server can be
+added in `pharos.toml` (see [Configuration](#configuration) for the
+file's load order).
+
+**Override a bundled language's binary path** (everything else
+inherited from defaults):
+
+```toml
+[languages.rust]
+command = "/opt/custom-rust-analyzer"
 ```
 
-## Uninstalling
+**Add a brand-new language** pharos doesn't bundle — Fennel as a
+worked example:
 
-```bash
-pharos --purge-cache              # remove Burrito's extracted payload
+```toml
+[languages.fennel]
+id = "fennel"                           # internal key (must match table name)
+extensions = ["fnl"]                    # file extensions → this language
+language_id = "fennel"                  # value pharos sends in initialize's clientCapabilities
+root_markers = [".git", "fennel.fnl"]   # filenames whose presence marks the project root
 
-# Then per channel:
-npm uninstall -g pharos           # if installed via npm
-rm ~/.local/bin/pharos            # if installed via direct download
-
-# Optional cleanup:
-rm -rf ~/.config/pharos           # config files (TOML + language registry)
-rm -rf ~/.cache/pharos            # log files
+[[languages.fennel.servers]]
+id = "fennel-lsp"
+command = "fennel-lsp"                  # must resolve on PATH or be an absolute path
+args = []
+methods = "all"                         # this one server handles every LSP method
+# Optional: env = { FENNEL_PATH = "..." }
 ```
 
-## Known limitations
+**Required keys** (everything else has a sane default):
 
-- **Gleam LSP (`gleam lsp`) is stability-buggy at gleam 1.16.** Two
-  panic shapes surface, both `Receiving LSP message: RecvError`
-  inside `language-server/src/messages.rs:188`:
-  1. Stdin-close mid-drain when many requests are in flight on the
-     shared connection. Mitigated by serial-mode dispatch (`gleam`
-     is marked `serial_mode=True` in the test-suite); real MCP hosts
-     dispatch one request at a time so this rarely surfaces in normal
-     use.
-  2. `workspace/symbol` requests crash gleam-lsp regardless of
-     warm-up state. `workspace_symbols` is the only Tier-1 tool that
-     reliably fails on gleam; every other read/write tool works.
-  Both are tracked upstream; pharos requires no change once gleam
-  fixes its mpsc receive handler.
-- **Java cold start is 30-60s.** jdtls boots a full Eclipse JDT engine in
-  Java. Pharos bumps `initialize_timeout_ms` to 90s globally to
-  accommodate; faster servers (rust-analyzer, gopls, pyright, tsserver,
-  next-ls) all initialize in <10s so the longer ceiling does not slow
-  them down.
-- **Bash diagnostics need `shellcheck`** to surface anything beyond
-  syntax errors. Hover/goto/document-symbols work without it.
-- **Windows is untested.** Pharos's Erlang `os:find_executable/1` should
-  resolve `command = "rust-analyzer"` against `%PATH%` + `%PATHEXT%`
-  on Windows the same way `which` does on Linux/macOS, and absolute
-  paths in pharos.toml are accepted by Erlang on Windows. No CI
-  coverage for Windows yet, so confirmed-working only on Linux/macOS
-  as of M11. M13 distribution adds Windows binaries + smoke tests.
-- **Windows path overrides:** prefer forward slashes
-  (`C:/Users/me/.local/bin/rust-analyzer.exe`) in pharos.toml — Erlang
-  accepts `/` on Windows and TOML doesn't need backslash escaping.
+| Key | Purpose |
+|-----|---------|
+| `extensions` | Filename extensions to associate with this language |
+| `language_id` | The `languageId` pharos sends in `initialize`'s `textDocument/clientCapabilities` |
+| `root_markers` | Filenames whose presence marks the project root (used to pick the LSP workspace) |
+| `[[languages.<id>.servers]]` (≥1) | At least one server with a `command` resolvable on PATH |
 
-## Why?
+**Validate** the new entry before booting an MCP client against it:
 
-LLMs talk MCP. Editors talk LSP. Both already speak JSON-RPC 2.0 over stdio. Nothing bridges them generically. This project is that bridge. See [doc/init.md](doc/init.md) for the full vision.
+```bash
+pharos --print-language-config fennel   # resolved merged config
+pharos --doctor                         # probes binary + reports any issue
+pharos warm fennel                      # optional: spawn the LSP once to confirm initialize handshake
+```
 
-## Documentation
+Multi-server routing (e.g. attaching a linter alongside the main
+LSP) uses the same `[[languages.<id>.servers]]` block with method
+scoping — see [Multi-server languages](#multi-server-languages-adr-019)
+for the rules.
 
-- [doc/init.md](doc/init.md) — vision, architecture, repo layout, distribution pipeline, roadmap
-- [doc/adr/](doc/adr/) — accepted Architecture Decision Records (language, JSON-RPC library, distribution, build chain, etc.)
-- [doc/bridge-protocol.md](doc/bridge-protocol.md) — local HTTP API the optional VSCode extension exposes (forthcoming)
+[↑ top](#pharos) · [back ↑](#language-support)
+
+## Troubleshooting
+
+### Orphan LSP children after a hard kill
+
+If pharos is killed via SIGKILL, OOM, host shutdown, or a crash,
+the LSP children it spawned may outlive it for seconds-to-minutes
+before they notice the pipe is gone. Pharos tracks every LSP it
+spawns under `~/.local/share/pharos/instances/<pharos-pid>/`. To
+reap:
+
+```bash
+pharos --cleanup            # dry-run: lists orphan instance dirs + their LSP children
+pharos --cleanup --yes      # actually reap
+```
+
+The CLI verifies each LSP PID's process name matches what pharos
+recorded before signalling, so it won't kill anything pharos didn't
+spawn.
+
+### Cold-start latency on first MCP call
+
+The first call to a tool that needs rust-analyzer / jdtls / metals
+can take 30-90 s while the LSP indexes the project. Two mitigations:
+
+```bash
+# Per-project: pre-warm once before launching the MCP client
+cd /path/to/project
+pharos warm --all
+
+# Per-MCP-client-spawn: warm on every spawn
+PHAROS_WARM_LANGS=rust,go,typescript pharos
+```
+
+The CLI form is cheaper if you launch the MCP client often; the env
+form is convenient when your MCP client config is the only place you
+configure pharos.
+
+### Where are my logs?
+
+Per-session per-PID log file at
+`~/.cache/pharos/log/session-<pid>-<YYYY-MM-DD-HHMMSS>.log`. LRU-rotated
+to keep the 10 most recent. Override with `PHAROS_LOG_FILE`.
+
+A stable-path `~/.cache/pharos/log/last-crash.log` always points at the
+most recent crash dump (if any) — useful in incident reports.
+
+### Pharos boot panic on closed stderr
+
+If a parent process closes pharos's `stderr` (`2>/dev/null` patterns,
+some MCP clients during teardown), older versions could panic before
+`main` ran and write `erl_crash.dump` in cwd. Fixed in v1.0 via
+ADR-030 — pharos installs a try/catch-wrapped logger handler that
+silently drops events when fd 2 is gone. If you see a crash dump,
+file an issue; the dump itself goes to `~/.cache/pharos/log/`, not
+cwd.
+
+### Updating
+
+```bash
+npm update -g pharos-mcp                   # npm channel
+# or direct download from GitHub Releases
+
+# After update:
+pharos --purge-cache                       # clear stale Burrito extract
+pharos --doctor                            # warm fresh cache + verify
+```
+
+### Uninstalling
+
+```bash
+npm uninstall -g pharos-mcp                # if installed via npm
+rm ~/.local/bin/pharos                     # if installed via direct download
+rm -rf ~/.local/share/.burrito/pharos_*    # extract cache
+rm -rf ~/.local/share/pharos/              # instance tracking
+rm -rf ~/.cache/pharos/                    # logs + crash dumps
+rm -rf ~/.config/pharos/                   # user config (only if you want it gone)
+```
+
+[↑ top](#pharos)
+
+## Architecture
+
+Pharos is a Gleam application running on the Erlang/OTP 28 BEAM,
+distributed via [Burrito](https://github.com/burrito-elixir/burrito).
+Key design choices live in
+[doc/adr/](doc/adr/):
+
+| ADR | Topic |
+|-----|-------|
+| [001](doc/adr/001-language-gleam.md) | Gleam over Elixir |
+| [002](doc/adr/002-pollux-for-jsonrpc.md) | pollux for JSON-RPC |
+| [004](doc/adr/004-distribution-npm-and-releases.md) | npm optional-deps + GitHub Releases |
+| [013](doc/adr/013-supervisor-tree.md) | Supervisor tree shape |
+| [017](doc/adr/017-stdio-worker.md) | Stdio transport actor |
+| [019](doc/adr/019-lsp-multi-server-routing.md) | Multi-server method routing |
+| [021](doc/adr/021-timeout-resolution-stack.md) | Timeout resolution |
+| [024](doc/adr/024-lsp-readiness-gate.md) | LSP readiness probe |
+| [029](doc/adr/029-custom-uri-schemes.md) | jdt:// / jar:// virtual URIs |
+| [030](doc/adr/030-process-lifecycle-hardening.md) | Boot / shutdown / cleanup hardening |
+
+Top-level supervision tree at runtime (per ADR-013/017):
+
+```
+pharos_root (one_for_one)
+├─ log_subtree (rest_for_one)
+│   ├─ ring_keeper        (permanent)
+│   └─ log_writer         (permanent)
+├─ pool_subtree (rest_for_one)
+│   ├─ pool_actor         (permanent)
+│   └─ lsp_dyn_sup        (permanent)
+├─ sessions_actor         (permanent)    ◄── HTTP / Both transport
+├─ http_listener_subtree  (permanent)    ◄── HTTP / Both transport
+└─ stdio_worker           (transient)   ◄── Stdio / Both transport
+```
+
+Full prose architecture overview at
+[doc/architecture.md](doc/architecture.md).
+
+[↑ top](#pharos)
 
 ## Development
 
-Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, rebar3 3.27+. Pinned versions in [.tool-versions](.tool-versions) (`asdf install`).
+Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, rebar3 3.27+,
+Zig 0.15.2 (for binary builds). Pinned versions in
+[.tool-versions](.tool-versions) — `asdf install` resolves all of
+them.
 
 ```bash
-# One-time: install the Gleam compiler archive (LoganBresnahan/mix_gleam fork —
-# tracks Elixir 1.15+ and Gleam 1.x; upstream gleam-lang/mix_gleam is dormant
-# and pinned to Gleam pre-1.0 on Hex).
-mix archive.install --force github LoganBresnahan/mix_gleam
-
-mix deps.get                             # fetches Hex dependencies (Gleam + Elixir)
-mix compile                              # compiles Gleam → BEAM via mix_gleam
-mix gleam.test                           # runs gleeunit tests
-mix start                                # runs the stdio MCP server (reads stdin, writes stdout)
+mix archive.install --force github LoganBresnahan/mix_gleam  # one-time
+mix deps.get
+mix compile
+mix gleam.test
 ```
 
-### Smoke-testing the stdio server
+To run pharos against a real MCP client without rebuilding the binary,
+use the dev wrapper:
 
-```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
-  '{"jsonrpc":"2.0","method":"initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hello"}}}' \
-  | mix start
+```jsonc
+{
+  "mcpServers": {
+    "pharos": { "command": "/abs/path/to/pharos/bin/pharos-dev" }
+  }
+}
 ```
 
-Expected: three JSON-RPC responses on stdout (initialize → tools/list → tools/call echo), with `[info]` log lines on stderr. The notification line produces no response, by spec.
+`bin/pharos-dev` compiles silently (all output to stderr) and boots
+Erlang directly so it picks up edits without a release build.
 
-### Wiring as a real MCP server
-
-`mix start` is fine for the smoke test above (where stdout is captured into a variable), but it cannot be used directly as an MCP server `command` because Mix prints compile progress to stdout, corrupting the JSON-RPC stream. Two ways to wire pharos as a real MCP server:
-
-**Burrito binary (recommended, M6 path).** Build once, then point your MCP host at the resulting binary:
+For a release binary:
 
 ```bash
 MIX_ENV=prod mix release   # produces burrito_out/pharos_<target>
 ```
 
-```json
-{
-  "mcpServers": {
-    "pharos": {
-      "command": "/absolute/path/to/pharos/burrito_out/pharos_linux_x64"
-    }
-  }
-}
-```
+Multi-target build needs Zig + `xz`. Windows builds additionally need
+`7z`/`7zz` on PATH.
 
-The binary is self-contained (Erlang runtime included), produces only JSON-RPC frames on stdout, and routes logger output to stderr. M10 ships pre-built binaries via GitHub Releases; until then, build locally.
-
-**Dev wrapper (`bin/pharos-dev`).** Bash wrapper that compiles silently (all output to stderr) then boots Erlang directly. Useful while iterating on Gleam code because it picks up edits without a release rebuild:
-
-```json
-{
-  "mcpServers": {
-    "pharos": {
-      "command": "/absolute/path/to/pharos/bin/pharos-dev"
-    }
-  }
-}
-```
-
-Restart the host (or use its MCP reconnect command) after changing config. Once registered, the LLM has tools named `mcp__pharos__<tool>` available.
-
-**Naming convention recap.** The config key (`pharos`) is arbitrary but conventionally matches the BEAM identifier and repo directory. The binary's executable filename (`pharos`) and npm package name (`pharos`) use hyphens because their respective ecosystems require it (Unix CLI tradition; npm package-naming rule). Stay underscored on the BEAM side, hyphenated on the distribution-channel side.
-
-For binary builds (requires Zig 0.15.2 + xz, see [Burrito's setup notes](https://github.com/burrito-elixir/burrito#preparation-and-requirements)):
+The crash-repro suite at [bench/crash-repro/run-all.sh](bench/crash-repro/run-all.sh)
+exercises six lifecycle failure modes and is gating for release tags.
+Run it before pushing a tag:
 
 ```bash
-MIX_ENV=prod mix release                 # produces Burrito binaries in burrito_out/
+MIX_ENV=prod mix release --overwrite
+bench/crash-repro/run-all.sh
 ```
 
-`MIX_ENV=prod mix release` produces multi-target binaries (`pharos_linux_x64`, `pharos_linux_arm64`, `pharos_darwin_x64`, `pharos_darwin_arm64`). Windows requires `7z`/`7zz` on PATH; without it that target is skipped (other targets still build).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR flow, including
+the CLA.
 
-### Build note: hpack_erl naming workaround
-
-`mix.exs` runs a `fix_app_names` hook after `deps.compile` to work around a hex-package-name vs OTP-application-name mismatch in `hpack_erl` (transitive via `mist`). The hook writes a wrapper `<hex_name>.app` so Mix's `validate_app/1` filename check passes; runtime behavior is unaffected. See [doc/adr/011-mix-app-name-symlink-workaround.md](doc/adr/011-mix-app-name-symlink-workaround.md). Removed when the upstream Gleam publish fix lands and `mist` republishes against it.
-
-## Companion repos
-
-- [pharos_ext](https://github.com/LoganBresnahan/pharos_ext) — optional VSCode extension (bootstrapped separately)
+[↑ top](#pharos)
 
 ## License
 
 Pharos is dual-licensed.
 
-**Open-source license**: [AGPL-3.0-only](LICENSE). Use, modify,
-and self-host pharos freely under the AGPL. Network use counts
-as distribution — if you operate pharos as part of a service
-offered to others, you must offer the corresponding source under
-the same license.
+**Open-source**: [AGPL-3.0-only](LICENSE). Use, modify, and self-host
+pharos freely under the AGPL. Network use counts as distribution — if
+you operate pharos as part of a service offered to others, you must
+offer the corresponding source under the same license.
 
-**Commercial license**: if the AGPL's terms don't work for your
-deployment (e.g. you ship pharos inside a closed-source product
-or operate it inside a managed-service offering where you can't
-release source), a commercial license is available. See
-[COMMERCIAL.md](COMMERCIAL.md).
+**Commercial**: if the AGPL's terms don't work for your deployment
+(shipping pharos inside a closed-source product, operating it inside
+a managed-service offering where you can't release source), a
+commercial license is available. See [COMMERCIAL.md](COMMERCIAL.md).
 
 Contributors sign a [CLA](CONTRIBUTING.md#contributor-license-agreement)
 so the project can offer both license tracks. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full flow.
+
+[↑ top](#pharos)

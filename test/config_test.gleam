@@ -8,7 +8,7 @@
 import gleam/option.{None}
 import gleeunit/should
 import pharos/config.{
-  type Config, CatDebug, CatDefault, CatRaw, CatRead, CatWrite, ToolFilter,
+  type Config, CatDebug, CatRaw, CatRead, CatWrite, ToolFilter,
 }
 
 pub fn defaults_expose_default_profile_test() {
@@ -29,29 +29,31 @@ pub fn defaults_expose_default_profile_test() {
   config.tool_allowed(filter, "apply_workspace_edit", CatWrite)
   |> should.be_true
 
-  // CatDefault essentials — the LLM-facing escape hatches that read
-  // and write tools tell the LLM to call when timeouts surface.
-  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDefault)
+  // Default-essentials — CatDebug tools the LLM uses for tool-error
+  // recovery. They live in CatDebug now (registry refactor) but the
+  // `"default"` alias still pulls them in via the name allowlist.
+  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDebug)
   |> should.be_true
-  config.tool_allowed(filter, "runtime_effective_tool_config", CatDefault)
+  config.tool_allowed(filter, "runtime_effective_tool_config", CatDebug)
   |> should.be_true
-  config.tool_allowed(filter, "runtime_language_config", CatDefault)
+  config.tool_allowed(filter, "runtime_language_config", CatDebug)
   |> should.be_true
-  config.tool_allowed(filter, "echo", CatDefault) |> should.be_true
+  config.tool_allowed(filter, "echo", CatDebug) |> should.be_true
 
-  // Debug + raw are NOT in the default profile — opt-in via
-  // `tools = ["default", "debug"]` or explicit names.
+  // Non-essential debug + raw are NOT in the default profile — opt-in
+  // via `tools = ["default", "debug"]` or explicit names.
   config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_false
   config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_false
 }
 
-pub fn default_alias_subsumes_read_write_default_test() {
-  // The `"default"` meta-alias resolves to (read ∪ write ∪ CatDefault).
-  // It should NOT pull debug or raw — those stay opt-in.
+pub fn default_alias_subsumes_read_write_memory_essentials_test() {
+  // The `"default"` meta-alias resolves to read ∪ write ∪ memory ∪
+  // the small CatDebug allowlist. It should NOT pull the rest of
+  // debug or raw — those stay opt-in.
   let filter = ToolFilter(entries: ["default"])
   config.tool_allowed(filter, "hover", CatRead) |> should.be_true
   config.tool_allowed(filter, "rename_preview", CatWrite) |> should.be_true
-  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDefault)
+  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDebug)
   |> should.be_true
   config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_false
   config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_false
@@ -63,7 +65,7 @@ pub fn default_plus_debug_unions_categories_test() {
   let filter = ToolFilter(entries: ["default", "debug"])
   config.tool_allowed(filter, "hover", CatRead) |> should.be_true
   config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_true
-  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDefault)
+  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDebug)
   |> should.be_true
   config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_false
 }
@@ -105,7 +107,7 @@ pub fn all_alias_exposes_every_category_test() {
   config.tool_allowed(filter, "rename_preview", CatWrite) |> should.be_true
   config.tool_allowed(filter, "runtime_processes", CatDebug) |> should.be_true
   config.tool_allowed(filter, "lsp_request_raw", CatRaw) |> should.be_true
-  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDefault)
+  config.tool_allowed(filter, "runtime_set_tool_timeout", CatDebug)
   |> should.be_true
 }
 

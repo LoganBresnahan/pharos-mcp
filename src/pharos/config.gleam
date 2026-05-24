@@ -259,13 +259,15 @@ const default_http_bind: String = "127.0.0.1"
 pub fn defaults() -> Config {
   Config(
     transport: Stdio,
-    // The `"default"` meta-alias expands to read + write + the
-    // CatDefault essentials (`runtime_set_tool_timeout`,
-    // `runtime_effective_tool_config`, `runtime_language_config`) —
-    // the curated production surface. Users who want diagnostics
-    // (`runtime_processes`, log_*, trace_*, kill_lsp, etc.) opt in
-    // explicitly via `tools = ["default", "debug"]` or by listing
-    // individual tool names; same for the `"raw"` escape hatch.
+    // The `"default"` meta-alias expands to read + write + memory
+    // plus a small allowlist of debug-category essentials the LLM
+    // needs to recover from tool errors (`echo`,
+    // `runtime_set_tool_timeout`, `runtime_effective_tool_config`,
+    // `runtime_language_config`, `runtime_server_capabilities`) —
+    // see `is_default_essential/1`. Diagnostics beyond those five
+    // (`runtime_processes`, log_*, trace_*, kill_lsp, etc.) are
+    // opt-in via `tools = ["default", "debug"]` or explicit names;
+    // same for the `"raw"` escape hatch.
     tools: ToolFilter(entries: ["default"]),
     http: HttpConfig(
       port: default_http_port,
@@ -326,16 +328,6 @@ pub type ToolCategory {
   CatWrite
   CatDebug
   CatRaw
-  /// Tools that are NOT pure read/write but ship as part of the
-  /// default production profile because the read/write surface
-  /// relies on them. Today: `runtime_set_tool_timeout`,
-  /// `runtime_effective_tool_config`, `runtime_language_config` —
-  /// the three knobs the LLM needs to follow the timeout-recovery
-  /// recipe printed in every `tool timeout` error message
-  /// (ADR-021's 5-layer stack). Without them in the default profile
-  /// the LLM cannot self-service the very escape hatch we tell it
-  /// about.
-  CatDefault
   /// Project-local memory tools (ADR-027): cross-MCP-client
   /// knowledge store under `.pharos/memories/` and `~/.pharos/memories/`.
   /// Ships in the default profile; opt out via explicit category
@@ -346,17 +338,20 @@ pub type ToolCategory {
 /// True iff `name` (with its known category) is exposed under the
 /// supplied filter. Resolution: a name is exposed iff
 ///   1. the literal tool name is in `entries`, or
-///   2. its category alias ("read"/"write"/"debug"/"raw") is in
-///      `entries`, or
-///   3. the meta-alias `"default"` is in `entries` AND the tool's
-///      category is part of the default-shipped profile (read,
-///      write, or `CatDefault`), or
+///   2. its category alias ("read"/"write"/"memory"/"debug"/"raw")
+///      is in `entries`, or
+///   3. the meta-alias `"default"` is in `entries` AND EITHER the
+///      tool's category is part of the default-shipped profile
+///      (read, write, memory) OR the tool is one of the five
+///      default-essentials — small carve-out from `CatDebug` for
+///      the LLM-facing escape hatches the read/write surface
+///      points at when timeouts surface (ADR-021's 5-layer stack).
 ///   4. the meta-alias `"all"` is in `entries` (every category
-///      exposed; shorthand for read+write+debug+raw+default).
+///      exposed).
 ///
 /// Rule 3 makes `tools = ["default"]` a one-knob production preset
-/// without losing the categorical filter for stricter setups
-/// (`tools = ["read"]` still excludes everything else). Rule 4
+/// — same surface as the previous `CatDefault`-as-its-own-category
+/// design but without the conceptual overlap with `CatDebug`. Rule 4
 /// makes `tools = ["all"]` the matching one-knob "expose everything"
 /// preset for dogfood / debugging / power-user installs.
 pub fn tool_allowed(
@@ -365,7 +360,8 @@ pub fn tool_allowed(
   category: ToolCategory,
 ) -> Bool {
   let alias = category_alias(category)
-  let default_member = is_in_default_profile(category)
+  let default_member =
+    is_in_default_profile(category) || is_default_essential(name)
   list.any(filter.entries, fn(e) {
     e == "all"
     || e == alias
@@ -380,19 +376,39 @@ fn category_alias(category: ToolCategory) -> String {
     CatWrite -> "write"
     CatDebug -> "debug"
     CatRaw -> "raw"
-    CatDefault -> "default"
     CatMemory -> "memory"
   }
 }
 
-/// Categories that the meta-alias `"default"` resolves to. Read +
-/// Write + `CatDefault` together form the production-shipping
-/// profile: they cover the LLM's primary surface AND its escape
-/// hatch for runtime knobs.
+/// Categories that the meta-alias `"default"` resolves to wholesale.
+/// Read + Write + Memory cover the LLM's primary surface; the
+/// default-essentials allowlist (`is_default_essential/1`) covers
+/// the small `CatDebug` carve-out the LLM needs for tool-error
+/// recovery.
 fn is_in_default_profile(category: ToolCategory) -> Bool {
   case category {
-    CatRead | CatWrite | CatDefault | CatMemory -> True
+    CatRead | CatWrite | CatMemory -> True
     CatDebug | CatRaw -> False
+  }
+}
+
+/// Named members of `CatDebug` that the `"default"` filter alias
+/// pulls in despite the category itself being opt-in. Keep this
+/// list small — every entry widens the production attack surface.
+/// `echo` is the MCP smoke-test affordance an MCP host can hit
+/// before any LSP-bound tool; the four `runtime_*` tools are the
+/// timeout-recovery knobs printed in every `tool timeout` error
+/// message (ADR-021's 5-layer stack). Without them in the default
+/// profile the LLM cannot self-service the very escape hatch we
+/// tell it about.
+fn is_default_essential(name: String) -> Bool {
+  case name {
+    "echo"
+    | "runtime_set_tool_timeout"
+    | "runtime_effective_tool_config"
+    | "runtime_language_config"
+    | "runtime_server_capabilities" -> True
+    _ -> False
   }
 }
 

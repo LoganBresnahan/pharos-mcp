@@ -1,7 +1,7 @@
 //// Tool categorization + filter helper.
 ////
 //// Every MCP tool pharos registers belongs to one of five categories
-//// — `read`, `write`, `default`, `debug`, `raw` — exposed in
+//// — `read`, `write`, `memory`, `debug`, `raw` — exposed in
 //// `pharos/config` as the `ToolCategory` enum. The category drives
 //// the user-visible filter in `pharos.toml` / `PHAROS_TOOLS`:
 ////
@@ -11,13 +11,14 @@
 ////   tools = ["read", "runtime_log_tail"]           # mix
 ////   tools = ["hover", "goto_definition"]           # explicit
 ////
-//// `default` is a meta-alias that resolves to (read ∪ write ∪
-//// CatDefault) — see `config.tool_allowed/3`. Tools placed in
-//// `CatDefault` are NOT read or write themselves but ship in the
-//// default production profile because the read/write surface
-//// relies on them (today: the three timeout-recovery knobs from
-//// ADR-021's 5-layer stack — `runtime_set_tool_timeout`,
-//// `runtime_effective_tool_config`, `runtime_language_config`).
+//// `default` and `all` are meta-aliases (NOT categories). `default`
+//// resolves to (read ∪ write ∪ memory ∪ a small `CatDebug`
+//// allowlist) — see `config.tool_allowed/3` +
+//// `config.is_default_essential/1`. The allowlist covers the
+//// LLM-facing escape hatches the read/write surface points at when
+//// timeouts surface (ADR-021's 5-layer stack): `echo`,
+//// `runtime_set_tool_timeout`, `runtime_effective_tool_config`,
+//// `runtime_language_config`, `runtime_server_capabilities`.
 ////
 //// Resolution lives in `config.tool_allowed/3`. This module owns the
 //// canonical (name → category) mapping and one helper —
@@ -30,12 +31,12 @@
 //// An unrecognised name falls back to `CatRaw` — power-user
 //// behaviour that fails closed when the user opted into a stricter
 //// filter (`["read"]` does not pick up unknown tools). When adding
-//// a runtime tool that the LLM-facing surface depends on (e.g.,
-//// future `runtime_session_digest`), classify it as `CatDefault`
-//// so it ships alongside read/write.
+//// a runtime tool the LLM-facing surface depends on, classify it as
+//// `CatDebug` and add its name to `is_default_essential/1` in
+//// `pharos/config` so it ships in the default profile.
 
 import pharos/config.{
-  type ToolCategory, CatDebug, CatDefault, CatMemory, CatRaw, CatRead, CatWrite,
+  type ToolCategory, CatDebug, CatMemory, CatRaw, CatRead, CatWrite,
 }
 
 /// Canonical category for `name`. Unknown tools default to `CatRaw`
@@ -78,19 +79,6 @@ pub fn category_for(name: String) -> ToolCategory {
     // -- ADR-026 symbol layer (preview-only write path) --
     | "edit_at_symbol" -> CatWrite
 
-    // -- default (essentials the LLM needs to follow tool-error
-    //    recovery recipes; ship in the production default profile
-    //    alongside read/write). Keep this list small — every entry
-    //    here widens the prod attack surface. `echo` is included
-    //    as the smoke-test affordance an MCP host can hit before
-    //    any LSP-bound tool, useful for diagnosing transport
-    //    issues without exposing the rest of the debug surface.
-    "echo"
-    | "runtime_set_tool_timeout"
-    | "runtime_effective_tool_config"
-    | "runtime_language_config"
-    | "runtime_server_capabilities" -> CatDefault
-
     // -- ADR-027 memory tools --
     "memory_save"
     | "memory_get"
@@ -98,9 +86,19 @@ pub fn category_for(name: String) -> ToolCategory {
     | "memory_prune"
     | "memory_audit" -> CatMemory
 
-    // -- debug (pharos runtime introspection + sanity; opt-in
-    //    via `tools = ["default", "debug"]` or explicit names) --
-    "runtime_processes"
+    // -- debug (pharos runtime introspection + sanity). The first
+    //    five names below are the default-essentials: they ship in
+    //    the `"default"` filter alias because the read/write
+    //    surface points at them in tool-error recovery recipes
+    //    (`is_default_essential/1` in pharos/config). The remaining
+    //    debug tools are opt-in only via `tools = ["default",
+    //    "debug"]` or explicit names. --
+    "echo"
+    | "runtime_set_tool_timeout"
+    | "runtime_effective_tool_config"
+    | "runtime_language_config"
+    | "runtime_server_capabilities"
+    | "runtime_processes"
     | "runtime_supervision_tree"
     | "runtime_ets_tables"
     | "runtime_memory"
