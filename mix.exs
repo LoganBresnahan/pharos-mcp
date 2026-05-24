@@ -113,7 +113,7 @@ defmodule Pharos.MixProject do
   defp releases do
     [
       pharos: [
-        steps: [:assemble, &Burrito.wrap/1, &refresh_npm_vendor/1],
+        steps: [:assemble, &Burrito.wrap/1, &refresh_npm_platform_packages/1],
         burrito: [
           targets: [
             linux_x64: [os: :linux, cpu: :x86_64],
@@ -127,30 +127,39 @@ defmodule Pharos.MixProject do
     ]
   end
 
-  # Copy every built `burrito_out/pharos_*` into `npm/vendor/` so the
-  # postinstall warmup (`npm/scripts/postinstall.js`) extracts THIS
-  # build, not whatever stale binary was committed last. Without this
-  # step the warmup silently runs against `npm/vendor/` whose contents
-  # may be days old — a class of "tests pass against ghost code" bugs
-  # caught the hard way (May 2026 dogfood). See doc/dogfood.md prereq.
-  defp refresh_npm_vendor(release) do
+  # Copy each built `burrito_out/pharos_<target>` into the matching
+  # npm platform sub-package's bin/. The release workflow then runs
+  # `npm publish` per sub-package + once for the main `pharos-mcp`
+  # package (which lists the five as `optionalDependencies`). Local
+  # `mix release` also runs this so devs can `npm pack` each
+  # sub-package and smoke-test the layout before tagging.
+  defp refresh_npm_platform_packages(release) do
     project_root = File.cwd!()
     burrito_out = Path.join(project_root, "burrito_out")
-    npm_vendor = Path.join([project_root, "npm", "vendor"])
+
+    # Burrito target name → {npm sub-package, binary filename}.
+    mapping = %{
+      "pharos_linux_x64" => {"pharos-mcp-linux-x64", "pharos"},
+      "pharos_linux_arm64" => {"pharos-mcp-linux-arm64", "pharos"},
+      "pharos_darwin_x64" => {"pharos-mcp-darwin-x64", "pharos"},
+      "pharos_darwin_arm64" => {"pharos-mcp-darwin-arm64", "pharos"},
+      "pharos_win_x64.exe" => {"pharos-mcp-win-x64", "pharos.exe"}
+    }
 
     if File.dir?(burrito_out) do
-      File.mkdir_p!(npm_vendor)
+      Enum.each(mapping, fn {burrito_name, {sub_pkg, dest_name}} ->
+        src = Path.join(burrito_out, burrito_name)
 
-      burrito_out
-      |> File.ls!()
-      |> Enum.filter(&String.starts_with?(&1, "pharos_"))
-      |> Enum.each(fn name ->
-        src = Path.join(burrito_out, name)
-        dst = Path.join(npm_vendor, name)
-        File.cp!(src, dst)
+        if File.regular?(src) do
+          dest_dir = Path.join([project_root, "npm", sub_pkg, "bin"])
+          File.mkdir_p!(dest_dir)
+          dest = Path.join(dest_dir, dest_name)
+          File.cp!(src, dest)
+          File.chmod!(dest, 0o755)
+        end
       end)
 
-      Mix.shell().info("[pharos] refreshed npm/vendor from burrito_out")
+      Mix.shell().info("[pharos] refreshed npm/<platform>/bin/ from burrito_out")
     end
 
     release

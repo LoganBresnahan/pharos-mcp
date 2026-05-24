@@ -1,0 +1,19 @@
+{
+  "name": "pharos-mcp-win-x64",
+  "version": "0.0.1",
+  "description": "Windows x86-64 binary for pharos-mcp. Do not install directly — install pharos-mcp instead; this package is pulled in automatically as an optionalDependency.",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://github.com/LoganBresnahan/pharos-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LoganBresnahan/pharos-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LoganBresnahan/pharos-mcp/issues"
+  },
+  "author": "Logan Bresnahan <loganbresnahan@proton.me>",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["bin/", "README.md", "LICENSE"],
+  "preferUnplugged": true
+}

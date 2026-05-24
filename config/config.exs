@@ -39,7 +39,7 @@ if Mix.env() == :prod do
   # crash BEAM during the OTP startup window and so log events
   # cannot leak to `:standard_io` (the MCP JSON-RPC channel).
   #
-  # Three handlers have to be addressed because Elixir's `:logger`
+  # Two surfaces have to be addressed because Elixir's `:logger`
   # app installs more than just the OTP kernel default:
   #
   # 1. **OTP kernel default** — set to `:undefined`. Elixir's
@@ -49,12 +49,13 @@ if Mix.env() == :prod do
   # 2. **Elixir Logger default handler** — `default_handler: false`
   #    stops `Logger.App.add_elixir_handler/1` from installing
   #    Elixir's own `logger_std_h` writing to standard_io.
-  # 3. **Elixir backend handler** — `backends: []` stops
-  #    `Logger.Backends.Internal` from starting; its `init/1`
-  #    unconditionally calls
-  #    `:logger.add_handler(Logger, Logger.Backends.Handler, …)`
-  #    which writes to the configured device (default: stdout in
-  #    `-noshell` mode).
+  #
+  # Earlier Elixir versions also required `backends: []` to suppress
+  # `Logger.Backends.Internal`, which would unconditionally add a
+  # stdout-bound handler. Elixir 1.19 removed `Logger.Backends.*`
+  # from the default install and made `default_handler: false` the
+  # single knob; setting `backends: []` now emits a deprecation
+  # warning at every boot and is no longer needed.
   #
   # Net effect: between BEAM startup and `pharos:main/0` no logger
   # handlers exist; events are silently dropped. `pharos:main/0`
@@ -63,9 +64,17 @@ if Mix.env() == :prod do
   # post-main handler. The drop window is the few milliseconds
   # between :logger app start and pharos:main reaching its install
   # call — those events are uninteresting OTP / SASL boot chatter.
-  config :logger,
-    default_handler: false,
-    backends: []
+  # Elixir 1.19.5's `Logger.App.start/2` emits a one-time deprecation
+  # warning on stderr at boot, regardless of whether `:backends` is
+  # set or not (the check fires against Logger app defaults, not
+  # against user config). Tried `[]`, `nil`, and omitting the key
+  # entirely — all three produce the same warning. The warning is
+  # cosmetic only: stdout (MCP JSON-RPC) stays clean, and
+  # `default_handler: false` correctly suppresses Elixir's own
+  # logger_std_h. Filed for v1.1: either upgrade to a logger patch
+  # release that fixes the false positive, or add `:logger_backends`
+  # as a no-op dep (the warning's official "fix").
+  config :logger, default_handler: false
 
   # Leave the kernel `:default` handler unconfigured. At boot OTP
   # installs its own emergency `:simple` handler (`logger_simple_h`)

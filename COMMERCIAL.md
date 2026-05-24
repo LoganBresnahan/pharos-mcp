@@ -28,11 +28,11 @@ commercial terms you receive:
 
 ## How to inquire
 
-> **Contact email:** `_to_be_set_at_v1_publication_`
+> **Contact email:** loganbresnahan@proton.me
 
-Until the contact is published, open a GitHub Issue tagged
-`commercial-license-inquiry`. We'll move the conversation to
-private channels once a real email address is in place.
+For non-sensitive inquiries you may also open a GitHub Issue tagged
+`commercial-license-inquiry` — we'll move the conversation to email
+once the basics are scoped.
 
 ## What we'll need from you
 
