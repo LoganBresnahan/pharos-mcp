@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "pharos": {
+      "command": "./bin/pharos-dev"
+    }
+  }
+}
