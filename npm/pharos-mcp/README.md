@@ -18,6 +18,12 @@ Or run on-demand without a global install:
 npx -y pharos-mcp
 ```
 
+Release candidates publish under the `next` dist-tag:
+
+```bash
+npm install -g pharos-mcp@next   # latest rc / preview
+```
+
 ## Configure your MCP client
 
 ```jsonc
