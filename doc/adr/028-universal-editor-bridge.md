@@ -16,24 +16,23 @@ the companion repo per ADR-007 but is not wired up end to end.
 
 Three things changed since ADR-003 was accepted:
 
-1. **Competitive landscape clarified.** Serena (24k★) bundles
-   memory + symbol editing on top of multilspy but its open-source LSP
-   backend has the same external-dependency gap pharos has — it leans
-   on its paid JetBrains plugin to close it. The 1.5k★ Go server is
-   minimal. The TS forks are POCs or single-language. A VSCode-only
-   extension (beixiyo/vsc-lsp-mcp, 25★) takes the opposite design:
-   editor becomes the LSP host, MCP server is a thin JSON-RPC wrapper
-   over `vscode.executeXxxProvider`. That approach concedes BEAM's
-   strength (OTP-supervised LSP lifecycle) for zero-config language
-   coverage. Pharos's headless-by-default story is differentiated and
-   should not be sacrificed.
+1. **Design space surveyed.** Other LSP-MCP projects in this space
+   sit at two extremes. One pattern wraps a Python LSP-client library
+   plus a custom symbol/memory layer; that approach inherits its
+   client library's external-dependency gap and tends to monetise the
+   gap through editor plugins. Another pattern (a VSCode-only
+   extension) makes the editor the LSP host, with the MCP server as
+   a thin JSON-RPC wrapper over `vscode.executeXxxProvider`. That
+   path concedes BEAM's strength (OTP-supervised LSP lifecycle) for
+   zero-config language coverage. Pharos's headless-by-default story
+   is the differentiator and should not be sacrificed.
 
 2. **The unsaved-buffer feature is the floor, not the ceiling.** Once
    the binary speaks to a live editor, several additional capabilities
-   come into reach that no competitor has: focus context tools,
-   diff-preview UX for `apply_workspace_edit`, push-side diagnostics
-   surfacing, and progress reporting. All of these are achievable
-   while pharos retains full LSP ownership.
+   come into reach: focus-context tools, diff-preview UX for
+   `apply_workspace_edit`, push-side diagnostics surfacing, and
+   progress reporting. All of these are achievable while pharos
+   retains full LSP ownership.
 
 3. **Editor diversity matters.** ADR-003 leaves a footnote that
    non-VSCode editors get only the disk-based mode "unless someone
@@ -60,8 +59,9 @@ present, pharos falls back to disk reads and stderr output — exactly
 the headless story of ADR-003.
 
 This rules out the "use the editor's already-running LSP" design
-(beixiyo's model) explicitly. Sustaining BEAM-supervised LSPs is
-pharos's identity. Outsourcing them to an editor would invert that.
+(the editor-as-LSP-host pattern, common in VSCode-only extensions)
+explicitly. Sustaining BEAM-supervised LSPs is pharos's identity.
+Outsourcing them to an editor would invert that.
 
 ### Architectural seam
 
@@ -324,9 +324,8 @@ logs a warning and continues in disk-only mode.
 - The headline win — unsaved buffer fidelity — is achievable while
   preserving every BEAM-side guarantee from ADR-013 / ADR-017.
 - Tiers 2–5 give pharos UX capabilities (focus context, diff-preview,
-  diagnostics surfacing, progress) that no listed competitor offers
-  in their LSP backend. Serena offers comparable features only via
-  its paid JetBrains plugin, not via LSP.
+  diagnostics surfacing, progress) entirely through its LSP backend,
+  rather than relying on a per-editor plugin to surface them.
 - Editor-side complexity stays small and bounded. Each plugin is
   ~150–500 LOC. Authors can port without learning Erlang, BEAM, or
   pharos internals.
@@ -377,7 +376,7 @@ logs a warning and continues in disk-only mode.
 
 ## Alternatives considered
 
-### Editor hosts the LSPs (beixiyo / mode B)
+### Editor hosts the LSPs (editor-as-host / mode B)
 
 The editor's own `vscode.executeXxxProvider` (or equivalent) becomes
 the LSP backend; pharos's MCP server is a thin JSON-RPC wrapper.
@@ -408,8 +407,8 @@ Rejected because:
 - Each editor must expose raw LSP frames over its plugin API.
   VSCode does not do this directly without significant plumbing
   (its LSP is wrapped inside `vscode.LanguageClient` etc).
-  Beixiyo works around this with a single `execute_lsp` dispatcher
-  exposed as MCP — not raw LSP.
+  Existing editor-as-host MCP extensions work around this with a
+  single `execute_lsp` dispatcher exposed as MCP — not raw LSP.
 
 ### Disk-only forever, no bridge
 
@@ -510,8 +509,9 @@ Governance scaffolding (parallel track to Tier 1):
 - ADR-026 (symbol layer) — bridge does not alter symbol-handle
   semantics. `containing_symbol`, `find_symbol`, `edit_at_symbol`
   work identically whether file content comes from disk or bridge.
-- beixiyo/vsc-lsp-mcp — the design this ADR explicitly rejects as a
-  blueprint for pharos's bridge. Useful as a feature reference for
-  what an editor-as-host model gets right (jdt:// resolution via
-  registered handlers, focus state) and what it gets wrong (LSP
-  lifecycle delegated, headless story lost).
+- The editor-as-host pattern (common in VSCode-only LSP-MCP
+  extensions) — explicitly rejected as a blueprint for pharos's
+  bridge. Useful as a feature reference for what that model gets
+  right (jdt:// resolution via registered handlers, focus state)
+  and what it gets wrong (LSP lifecycle delegated, headless story
+  lost).

@@ -353,10 +353,13 @@ Pharos v1.0 ships:
   metals and Clojure clojure-lsp get navigation but not
   `fetch_uri_contents`. Driver axis arrives in v1.1.
 
-This is honest scope and matches Serena's open-source positioning
-on the same problem (Serena monetizes Java through a JetBrains
-plugin that sidesteps LSP entirely; their open-source LSP backend
-has the same Pattern B gap pharos does).
+This is honest scope. Other LSP-MCP projects in this space face
+the same Pattern B gap on Scala and Clojure; some sidestep the
+limitation by routing Java navigation through an editor plugin
+(JetBrains) rather than the LSP itself. Pharos's headless story
+keeps everything in-LSP, accepting the Pattern B gap as a known
+limit and offering the toml override path for users who validate
+their own setup.
 
 ## Alternatives considered
 

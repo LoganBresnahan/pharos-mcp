@@ -31,34 +31,39 @@ build `WorkspaceEdit` → apply) is more work than just textually
 matching `def authenticate(` and rewriting around it. The LSP
 knowledge stays unused.
 
-Serena (oraios/serena) addresses this with a symbol-oriented tool
-surface — `find_symbol`, `replace_symbol_body`, `insert_after_symbol`,
-`find_referencing_symbols`, `get_symbols_overview`. Its tools take a
+A symbol-oriented tool surface addresses this gap — operations like
+`find_symbol`, `replace_symbol_body`, `insert_after_symbol`,
+`find_referencing_symbols`, `get_symbols_overview` take a
 `name_path` like `"User/authenticate"` rather than coordinates, and
 return symbol records the LLM can chain into edit operations
-without ever holding a line number. Real-usage data on its tracker
-(serena#1491) shows symbol tools dominate tool-call volume across 21k
-calls over 21 days; LLMs reach for them when they exist.
+without ever holding a line number. Open-source usage data we
+reviewed (~21k calls over 21 days from a prior-art project) shows
+symbol-oriented tools dominate tool-call volume when present;
+LLMs reach for them when they exist.
 
-We have all the LSP primitives Serena composes. We can do better than
-copy because Serena has accumulated bug reports that point at fixable
-design choices:
+We have all the LSP primitives needed to compose such tools. Prior
+art in this space has accumulated bug reports pointing at design
+choices we want to avoid:
 
-- **Stale symbol cache** (serena#issues several): Serena maintains its
-  own symbol index alongside the LSP's. Edits made through Serena
-  desync the cache from the file on disk.
-- **Hardcoded per-language body-range heuristics** (Python regex against
-  source text to find the closing brace, indented block, etc.) — brittle,
-  has bug reports per language.
-- **Early ambiguity collapse**: `find_symbol` for an overloaded name
-  returns the first match or errors, losing information the LLM could
-  have used. The set of candidates is the answer in many cases.
-- **No multi-server fan-out**: Serena assumes one LSP per workspace.
-  Pharos's pool supports several (`pyright` + `ruff` for python under
-  ADR-019); symbol lookup should query whichever advertises
+- **Stale symbol cache.** Maintaining a separate symbol index
+  alongside the LSP's desyncs from the file on disk as soon as
+  edits flow through the same tool. The LSP server's own index
+  is the only source of truth that stays consistent.
+- **Hardcoded per-language body-range heuristics** (regex against
+  source text to find the closing brace, indented block, etc.) —
+  brittle, accumulates per-language bug reports.
+- **Early ambiguity collapse.** A `find_symbol` for an overloaded
+  name that returns the first match or errors loses information
+  the LLM could have used. The set of candidates is the answer in
+  many cases.
+- **No multi-server fan-out.** An assumption of one LSP per
+  workspace breaks pharos's pool, which supports several
+  (`pyright` + `ruff` for python under ADR-019). Symbol lookup
+  should query whichever server advertises
   `documentSymbolProvider`.
-- **Untyped `name_path`**: a string parameter, with parsing errors
-  surfacing late.
+- **Untyped `name_path`** as a string parameter, with parsing
+  errors surfacing late at execution time rather than at the
+  call-site.
 
 There is also a deeper question about how `find_symbol` should treat
 ambiguity. LSP returns a *set* of matches for any name that exists in
@@ -71,8 +76,8 @@ will model it as data in Gleam.
 
 ## Decision
 
-Ship a `pharos/tools/symbols` module with **four** MCP tools, not the
-six Serena exposes. The edit-trio (`replace_symbol_body`,
+Ship a `pharos/tools/symbols` module with **four** MCP tools. The
+edit-trio (`replace_symbol_body`,
 `insert_before_symbol`, `insert_after_symbol`) take identical
 arguments — a `SymbolHandle` and a content string — and differ only
 in where the content lands. We consolidate them under one tool with
@@ -153,7 +158,7 @@ than Opus. Add an opt-in `--verbose-tool-docs` flag that re-expands
 primitive descriptions for those deployments. Default stays
 compressed.
 
-Design choices that diverge from Serena:
+Design choices specific to pharos:
 
 1. **No symbol cache.** Always re-fetch via `workspace/symbol` +
    `textDocument/documentSymbol`. Avoids the stale-after-edit class
@@ -252,8 +257,9 @@ What becomes easier:
 - LLMs can address code by intent ("the `authenticate` method on `User`")
   rather than by coordinate. Edits compose without line-number drift
   bugs.
-- We close a feature gap with Serena while keeping the raw-LSP primitive
-  surface available for advanced use.
+- We close the symbol-oriented gap in the raw-LSP surface (intent-by-name
+  rather than intent-by-coordinate) while keeping the raw-LSP primitives
+  available for advanced use.
 - Ambiguity surfaces to the LLM rather than being silently collapsed
   by the tool. The LLM gets to use context (recent file, current
   conversation, type information) to disambiguate.
@@ -264,10 +270,11 @@ What becomes harder:
 
 - New tools to maintain — four MCP entries with their own JSON-schema
   surface, prompts, and golden-output tests.
-- The `Resolution` set-returning shape is novel; LLMs trained on
-  Serena's collapsed API will need to learn the two-call protocol.
-  Mitigation: tool descriptions explicitly explain `Multiple ->
-  re-call with chosen handle` flow.
+- The `Resolution` set-returning shape is novel for symbol APIs;
+  LLMs trained on collapsed-result APIs from other tools in this
+  space will need to learn the two-call protocol. Mitigation: tool
+  descriptions explicitly explain `Multiple -> re-call with chosen
+  handle` flow.
 - Multi-server fan-out is fan-in too: we have to dedupe `(uri,
   range)` pairs that come back from independently-indexed servers,
   and resolve conflicts when ranges overlap but do not match.
@@ -301,9 +308,9 @@ Risks and follow-up:
 ## Alternatives considered
 
 - **Don't add symbol layer — just document the LSP primitive flow.**
-  Loses the empirical evidence from Serena that LLMs avoid composing
-  primitives. Documentation does not change LLM behavior.
-- **Six separate edit tools (Serena's shape).** Three of them
+  Loses the empirical evidence that LLMs avoid composing primitives
+  on their own. Documentation does not change LLM behavior.
+- **Six separate edit tools.** Three of them
   (`replace_symbol_body`, `insert_before_symbol`, `insert_after_symbol`)
   take identical arguments and differ only in placement. One tool
   with a `mode` enum collapses them without losing schema clarity —
@@ -318,9 +325,11 @@ Risks and follow-up:
   shapes; collapsing them forces the LLM into a two-stage decision
   ("symbol_op + which sub-op"). Hybrid (four tools, edit-trio
   consolidated) keeps the names where they matter.
-- **Copy Serena verbatim.** Inherits the stale-cache, hardcoded-
-  body-range, and early-collapse bugs we know about from its tracker.
-  No reason to ship the same defects.
+- **Copy an existing symbol-tool surface verbatim.** Several
+  prior-art projects have shipped these tools; their issue
+  trackers surface stale-cache, hardcoded-body-range, and
+  early-collapse bugs. Designing fresh against the LSP primitives
+  lets us skip those defects.
 - **Build on top of tree-sitter rather than LSP.** Tree-sitter has
   grammars for every language already and a stable concrete syntax
   tree. But the LSP server already knows symbol kinds and scopes
@@ -332,7 +341,8 @@ Risks and follow-up:
   wrong language. Gleam has no effect-handler primitive. The
   `Disambiguation` enum + `Resolution` return type approximates it
   with concrete data; semantically equivalent for our use case.
-- **Symbol cache to amortize repeated lookups.** Serena tried this
-  and the failure mode (cache vs disk skew after edits) is worse
-  than the cost it saves. Our LSP servers cache internally; we
-  re-query them each time and let them decide what is fresh.
+- **Symbol cache to amortize repeated lookups.** Prior-art projects
+  that took this path report cache-vs-disk skew after edits as the
+  dominant failure mode, worse than the cost it saves. Our LSP
+  servers cache internally; we re-query them each time and let them
+  decide what is fresh.

@@ -54,17 +54,17 @@ ADR-006, deliberately deferred. The formatter renders the result,
 nothing more.
 
 **Prior-art check (completed 2026-05-10).** Surveyed three
-LSP-MCP bridges. No emerging convention exists; each picks a
-different point on the JSON↔prose axis:
+LSP-MCP bridges (anonymised here). No emerging convention exists;
+each picks a different point on the JSON↔prose axis:
 
-- **`jonrad/lsp-mcp`** — raw LSP JSON pass-through, `file://`
-  URIs, no transformation. Validates raw-JSON viability but does
-  not help token-conscious agents.
-- **`isaacphi/mcp-language-server`** — plaintext only (no JSON
-  escape), absolute filesystem paths, grouped by file with
-  `---` separators, `L<line>:C<col>` notation, embeds 5 lines of
-  surrounding code context per reference.
-- **`oraios/serena`** — transformed-JSON only (no raw escape),
+- **Bridge A** — raw LSP JSON pass-through, `file://` URIs, no
+  transformation. Validates raw-JSON viability but does not help
+  token-conscious agents.
+- **Bridge B** — plaintext only (no JSON escape), absolute
+  filesystem paths, grouped by file with `---` separators,
+  `L<line>:C<col>` notation, embeds 5 lines of surrounding code
+  context per reference.
+- **Bridge C** — transformed-JSON only (no raw escape),
   workspace-relative paths, grouped by `kind` and
   `relative_path`, embeds 1-line snippets, ships
   shortened-result-factories that auto-degrade to counts when
@@ -73,35 +73,33 @@ different point on the JSON↔prose axis:
 Two design details from the survey worth borrowing into pharos's
 compact format spec below:
 
-- **File grouping** (mcp-language-server pattern). When ≥2 hits
-  share a file, emit the file path on its own line and indent
-  the locations beneath. Compresses better than repeating the
-  path on every row.
-- **Workspace-relative paths + emit `workspace_root` once**
-  (serena pattern). Mcp-language-server burns tokens on absolute
-  per-row paths; serena strips them. Pharos already proposed
-  this; survey confirms it's the better choice.
+- **File grouping.** When ≥2 hits share a file, emit the file path
+  on its own line and indent the locations beneath. Compresses
+  better than repeating the path on every row.
+- **Workspace-relative paths + emit `workspace_root` once.**
+  Absolute per-row paths burn tokens; relative + once-emitted
+  root strips them. Pharos already proposed this; survey
+  confirms it's the better choice.
 
 **Three differentiators retained** vs the surveyed bridges:
 
-1. **JSON-default opt-in compact.** Neither opinionated bridge
-   (1 or 2) offers a raw-JSON escape; that loses agents who
+1. **JSON-default opt-in compact.** The two opinionated bridges
+   above do not offer a raw-JSON escape; that loses agents who
    want the LSP shape they were trained on. Pharos's
    pass-through stance (ADR-006) keeps the LSP shape primary.
 2. **`path:line:col-col` (grep-style).** No surveyed bridge uses
-   exactly this shape, but it parses identically to
-   `L%d:C%d` and matches grep/ripgrep/editor conventions agents
-   already know.
-3. **Spelled-out symbol kinds (`fn`/`class`/`var`).** Serena
-   uses numeric `SymbolKind`, mcp-language-server uses long
-   names. Short tokens are a pharos choice; document the
-   vocabulary in the tool description.
+   exactly this shape, but it parses identically to `L%d:C%d`
+   and matches grep/ripgrep/editor conventions agents already
+   know.
+3. **Spelled-out symbol kinds (`fn`/`class`/`var`).** Surveyed
+   bridges use either numeric `SymbolKind` or long names. Short
+   tokens are a pharos choice; document the vocabulary in the
+   tool description.
 
-**Deferred for follow-up** (orthogonal to this ADR): serena's
-tiered degradation pattern (response-size cap →
-auto-summarize). Worth considering once usage data shows real
-runs hitting context-window limits on huge `find_references`
-results.
+**Deferred for follow-up** (orthogonal to this ADR): a tiered
+degradation pattern (response-size cap → auto-summarize) similar
+to Bridge C's. Worth considering once usage data shows real runs
+hitting context-window limits on huge `find_references` results.
 
 ## Decision
 
