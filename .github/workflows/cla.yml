@@ -1,0 +1,56 @@
+name: CLA
+
+# CLA Assistant Lite — signatures stored in this repo on a separate
+# branch (signatures/version1/cla.json). Contributors sign by
+# commenting on their PR with the exact text:
+#
+#   I have read the CLA Document and I hereby sign the CLA
+#
+# The action posts a comment with sign-status, links to the CLA
+# text, and updates a check on the PR. Same-repo storage requires
+# only the default GITHUB_TOKEN — no PAT.
+#
+# Why a CLA at all: pharos is dual-licensed (AGPL-3.0 for OSS, a
+# separate commercial license — see COMMERCIAL.md). Without a CLA
+# the maintainer cannot grant a commercial license to code
+# contributed under AGPL. The CLA explicitly grants the maintainer
+# permission to relicense contributions under terms other than the
+# inbound AGPL.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    name: Contributor License Agreement
+    steps:
+      - name: "CLA Assistant"
+        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: 'signatures/version1/cla.json'
+          path-to-document: 'https://github.com/LoganBresnahan/pharos-mcp/blob/main/CLA.md'
+          branch: 'main'
+          allowlist: 'LoganBresnahan,dependabot[bot]'
+          remote-organization-name: ''
+          remote-repository-name: ''
+          create-file-commit-message: 'docs(cla): initialize signature store'
+          signed-commit-message: 'docs(cla): @$contributorName signed CLA in PR #$pullRequestNo'
+          custom-notsigned-prcomment: |
+            Thanks for the contribution! Before we can merge it, please sign the [Contributor License Agreement](https://github.com/LoganBresnahan/pharos-mcp/blob/main/CLA.md) so the project can keep its dual AGPL/commercial licensing intact.
+
+            Reply with this exact text in a comment on this PR:
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-allsigned-prcomment: 'All contributors have signed the CLA. Thanks!'

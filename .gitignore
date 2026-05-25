@@ -34,11 +34,14 @@ Thumbs.db
 __pycache__/
 *.pyc
 
-# npm package's bundled binaries — populated at release time by
-# copying from /burrito_out/. The scaffolding under /npm/
-# (package.json, bin/, scripts/, README.md) IS committed.
-/npm/vendor/
-/npm/node_modules/
+# npm: per-platform binaries land under each platform sub-package's
+# bin/ at release time (release.yml copies from /burrito_out/). The
+# package.json + README.md scaffolding for each sub-package IS
+# committed; only the binary + LICENSE copy are ignored.
+/npm/**/bin/pharos
+/npm/**/bin/pharos.exe
+/npm/**/node_modules/
+/npm/**/LICENSE
 
 # Local secrets / config overrides
 *.local.exs

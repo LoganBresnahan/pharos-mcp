@@ -11,7 +11,8 @@
 // to install time, where it is expected.
 //
 // Behavior:
-//   1. Resolve the platform binary (same logic as bin/pharos.js).
+//   1. Resolve the platform binary via require.resolve on the
+//      installed optional sub-package (same logic as bin/pharos.js).
 //   2. Spawn it with stdin closed and stdout/stderr to /dev/null.
 //   3. Poll for the burrito cache directory until it exists OR a
 //      generous deadline expires.
@@ -19,7 +20,8 @@
 //   5. Exit 0 always — install must not fail because of warmup.
 //
 // Skip conditions (exit 0 cleanly):
-//   - Bundled binary missing for this platform.
+//   - Bundled binary missing for this platform (unsupported platform
+//     or optional dep filtered out).
 //   - Cache directory already exists (warmed by a prior install).
 //   - PHAROS_SKIP_POSTINSTALL=1 set in env.
 
@@ -34,6 +36,14 @@ const SKIP_VAR = "PHAROS_SKIP_POSTINSTALL";
 const DEADLINE_MS = 120_000; // 2 minutes — generous for slow disks
 const POLL_INTERVAL_MS = 500;
 
+const PLATFORM_MAP = {
+  "linux-x64": { pkg: "pharos-mcp-linux-x64", bin: "pharos" },
+  "linux-arm64": { pkg: "pharos-mcp-linux-arm64", bin: "pharos" },
+  "darwin-x64": { pkg: "pharos-mcp-darwin-x64", bin: "pharos" },
+  "darwin-arm64": { pkg: "pharos-mcp-darwin-arm64", bin: "pharos" },
+  "win32-x64": { pkg: "pharos-mcp-win-x64", bin: "pharos.exe" },
+};
+
 function main() {
   if (process.env[SKIP_VAR] === "1") {
     console.error("pharos: postinstall skipped (" + SKIP_VAR + "=1)");
@@ -42,9 +52,10 @@ function main() {
 
   const bin = resolve_binary();
   if (bin === null) {
-    // No matching binary; bin/pharos.js will print an error at first
-    // run. Postinstall stays silent — installs of supplementary tools
-    // on unsupported platforms shouldn't error out.
+    // No matching platform package; bin/pharos.js will print an
+    // error at first run. Postinstall stays silent — installs of
+    // supplementary tools on unsupported platforms shouldn't error
+    // out.
     return;
   }
 
@@ -71,29 +82,16 @@ function main() {
 }
 
 function resolve_binary() {
-  const platform = process.platform;
-  const arch = process.arch;
+  const entry = PLATFORM_MAP[process.platform + "-" + process.arch];
+  if (!entry) return null;
 
-  const target =
-    platform === "linux" && arch === "x64"
-      ? "linux_x64"
-      : platform === "linux" && arch === "arm64"
-      ? "linux_arm64"
-      : platform === "darwin" && arch === "x64"
-      ? "darwin_x64"
-      : platform === "darwin" && arch === "arm64"
-      ? "darwin_arm64"
-      : platform === "win32" && arch === "x64"
-      ? "win_x64"
-      : null;
-
-  if (target === null) return null;
-
-  const ext = platform === "win32" ? ".exe" : "";
-  const filename = "pharos_" + target + ext;
-  const candidate = path.join(__dirname, "..", "vendor", filename);
-
-  return fs.existsSync(candidate) ? candidate : null;
+  try {
+    const pkg_json_path = require.resolve(entry.pkg + "/package.json");
+    const candidate = path.join(path.dirname(pkg_json_path), "bin", entry.bin);
+    return fs.existsSync(candidate) ? candidate : null;
+  } catch (_err) {
+    return null;
+  }
 }
 
 function cache_root() {
@@ -118,9 +116,7 @@ function cache_exists() {
   // Burrito creates a versioned directory like
   // `pharos_erts-16.1_0.0.1`. Any pharos_* entry counts as warm.
   try {
-    return fs
-      .readdirSync(root)
-      .some((entry) => entry.startsWith("pharos_"));
+    return fs.readdirSync(root).some((entry) => entry.startsWith("pharos_"));
   } catch (_) {
     return false;
   }

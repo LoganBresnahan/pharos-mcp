@@ -1,13 +1,15 @@
 {
   "name": "pharos-mcp",
   "version": "0.0.1",
-  "description": "MCP server bridging LLMs to Language Server Protocol (LSP) servers. Brings hover, goto_definition, find_references, and 36 more LSP tools to Claude and other MCP-aware agents. Single-binary, 23 languages.",
+  "description": "Headless LSP-MCP bridge for AI agents. Hands rust-analyzer, gopls, tsserver, pyright, jdtls and 19 more language servers to any MCP-aware agent (Claude Code, Cursor, ChatGPT Desktop). Single binary, 23 languages.",
   "keywords": [
     "mcp",
     "model-context-protocol",
     "lsp",
     "language-server-protocol",
     "claude",
+    "claude-code",
+    "cursor",
     "anthropic",
     "ai-tools",
     "code-intelligence",
@@ -31,6 +33,10 @@
     "type": "git",
     "url": "git+https://github.com/LoganBresnahan/pharos-mcp.git"
   },
+  "bugs": {
+    "url": "https://github.com/LoganBresnahan/pharos-mcp/issues"
+  },
+  "author": "Logan Bresnahan <loganbresnahan@proton.me>",
   "bin": {
     "pharos": "bin/pharos.js"
   },
@@ -40,12 +46,17 @@
   "files": [
     "bin/",
     "scripts/",
-    "vendor/",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
   },
-  "os": ["linux", "darwin", "win32"],
-  "cpu": ["x64", "arm64"]
+  "optionalDependencies": {
+    "pharos-mcp-linux-x64": "0.0.1",
+    "pharos-mcp-linux-arm64": "0.0.1",
+    "pharos-mcp-darwin-x64": "0.0.1",
+    "pharos-mcp-darwin-arm64": "0.0.1",
+    "pharos-mcp-win-x64": "0.0.1"
+  }
 }
