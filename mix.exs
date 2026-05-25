@@ -137,13 +137,16 @@ defmodule Pharos.MixProject do
     project_root = File.cwd!()
     burrito_out = Path.join(project_root, "burrito_out")
 
-    # Burrito target name → {npm sub-package, binary filename}.
+    # Burrito target name → {npm sub-package dir under "@pharos-mcp/",
+    # binary filename}. Sub-packages publish as `@pharos-mcp/<platform>`
+    # (scoped names under the pharos-mcp npm org); on disk we mirror
+    # that with `npm/@pharos-mcp/<platform>/`.
     mapping = %{
-      "pharos_linux_x64" => {"pharos-mcp-linux-x64", "pharos"},
-      "pharos_linux_arm64" => {"pharos-mcp-linux-arm64", "pharos"},
-      "pharos_darwin_x64" => {"pharos-mcp-darwin-x64", "pharos"},
-      "pharos_darwin_arm64" => {"pharos-mcp-darwin-arm64", "pharos"},
-      "pharos_win_x64.exe" => {"pharos-mcp-win-x64", "pharos.exe"}
+      "pharos_linux_x64" => {"linux-x64", "pharos"},
+      "pharos_linux_arm64" => {"linux-arm64", "pharos"},
+      "pharos_darwin_x64" => {"darwin-x64", "pharos"},
+      "pharos_darwin_arm64" => {"darwin-arm64", "pharos"},
+      "pharos_win_x64.exe" => {"win-x64", "pharos.exe"}
     }
 
     if File.dir?(burrito_out) do
@@ -151,7 +154,9 @@ defmodule Pharos.MixProject do
         src = Path.join(burrito_out, burrito_name)
 
         if File.regular?(src) do
-          dest_dir = Path.join([project_root, "npm", sub_pkg, "bin"])
+          dest_dir =
+            Path.join([project_root, "npm", "@pharos-mcp", sub_pkg, "bin"])
+
           File.mkdir_p!(dest_dir)
           dest = Path.join(dest_dir, dest_name)
           File.cp!(src, dest)
@@ -159,7 +164,9 @@ defmodule Pharos.MixProject do
         end
       end)
 
-      Mix.shell().info("[pharos] refreshed npm/<platform>/bin/ from burrito_out")
+      Mix.shell().info(
+        "[pharos] refreshed npm/@pharos-mcp/<platform>/bin/ from burrito_out"
+      )
     end
 
     release

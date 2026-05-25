@@ -1,10 +1,10 @@
-# pharos-mcp-linux-x64
+# @pharos-mcp/darwin-x64
 
-Linux x86-64 binary for **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
+macOS Intel (x86-64) binary for **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
 
 Do not install this package directly. Install `pharos-mcp` instead —
 this package is pulled in automatically as an optional dependency on
-Linux x86-64 hosts.
+macOS Intel hosts.
 
 ```bash
 npm install -g pharos-mcp

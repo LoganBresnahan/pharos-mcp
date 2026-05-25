@@ -1,10 +1,10 @@
-# pharos-mcp-linux-arm64
+# @pharos-mcp/linux-x64
 
-Linux aarch64 binary for **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
+Linux x86-64 binary for **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
 
 Do not install this package directly. Install `pharos-mcp` instead —
 this package is pulled in automatically as an optional dependency on
-Linux aarch64 hosts.
+Linux x86-64 hosts.
 
 ```bash
 npm install -g pharos-mcp

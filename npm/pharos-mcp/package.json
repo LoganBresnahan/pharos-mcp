@@ -53,10 +53,10 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "pharos-mcp-linux-x64": "0.1.0",
-    "pharos-mcp-linux-arm64": "0.1.0",
-    "pharos-mcp-darwin-x64": "0.1.0",
-    "pharos-mcp-darwin-arm64": "0.1.0",
-    "pharos-mcp-win-x64": "0.1.0"
+    "@pharos-mcp/linux-x64": "0.1.0",
+    "@pharos-mcp/linux-arm64": "0.1.0",
+    "@pharos-mcp/darwin-x64": "0.1.0",
+    "@pharos-mcp/darwin-arm64": "0.1.0",
+    "@pharos-mcp/win-x64": "0.1.0"
   }
 }

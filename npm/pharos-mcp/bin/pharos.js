@@ -8,7 +8,7 @@
 // shim resolves the right platform sub-package via require.resolve
 // and exec's its binary.
 //
-// The platform sub-packages (pharos-mcp-linux-x64, etc.) are
+// The platform sub-packages (@pharos-mcp/linux-x64, etc.) are
 // declared as optionalDependencies in this package's package.json,
 // with `os` and `cpu` fields on each sub-package. npm filters
 // optional deps at install time, so exactly one platform package
@@ -26,11 +26,11 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 
 const PLATFORM_MAP = {
-  "linux-x64": { pkg: "pharos-mcp-linux-x64", bin: "pharos" },
-  "linux-arm64": { pkg: "pharos-mcp-linux-arm64", bin: "pharos" },
-  "darwin-x64": { pkg: "pharos-mcp-darwin-x64", bin: "pharos" },
-  "darwin-arm64": { pkg: "pharos-mcp-darwin-arm64", bin: "pharos" },
-  "win32-x64": { pkg: "pharos-mcp-win-x64", bin: "pharos.exe" },
+  "linux-x64": { pkg: "@pharos-mcp/linux-x64", bin: "pharos" },
+  "linux-arm64": { pkg: "@pharos-mcp/linux-arm64", bin: "pharos" },
+  "darwin-x64": { pkg: "@pharos-mcp/darwin-x64", bin: "pharos" },
+  "darwin-arm64": { pkg: "@pharos-mcp/darwin-arm64", bin: "pharos" },
+  "win32-x64": { pkg: "@pharos-mcp/win-x64", bin: "pharos.exe" },
 };
 
 function resolve_binary() {

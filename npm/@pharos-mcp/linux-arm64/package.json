@@ -1,5 +1,5 @@
 {
-  "name": "pharos-mcp-linux-arm64",
+  "name": "@pharos-mcp/linux-arm64",
   "version": "0.1.0",
   "description": "Linux aarch64 binary for pharos-mcp. Do not install directly — install pharos-mcp instead; this package is pulled in automatically as an optionalDependency.",
   "license": "AGPL-3.0-only",
@@ -12,8 +12,19 @@
     "url": "https://github.com/LoganBresnahan/pharos-mcp/issues"
   },
   "author": "Logan Bresnahan <loganbresnahan@proton.me>",
-  "os": ["linux"],
-  "cpu": ["arm64"],
-  "files": ["bin/", "README.md", "LICENSE"],
-  "preferUnplugged": true
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "preferUnplugged": true,
+  "publishConfig": {
+    "access": "public"
+  }
 }

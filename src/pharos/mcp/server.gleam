@@ -59,7 +59,7 @@ const protocol_version: String = "2024-11-05"
 
 const server_name: String = "pharos"
 
-const server_version: String = "0.0.1"
+const server_version: String = "0.1.0"
 
 /// JSON-RPC request id — string or integer per spec.
 pub type Id {

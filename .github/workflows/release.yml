@@ -95,11 +95,11 @@ jobs:
         run: |
           set -e
           for entry in \
-            "pharos-mcp-linux-x64/bin/pharos" \
-            "pharos-mcp-linux-arm64/bin/pharos" \
-            "pharos-mcp-darwin-x64/bin/pharos" \
-            "pharos-mcp-darwin-arm64/bin/pharos" \
-            "pharos-mcp-win-x64/bin/pharos.exe"
+            "@pharos-mcp/linux-x64/bin/pharos" \
+            "@pharos-mcp/linux-arm64/bin/pharos" \
+            "@pharos-mcp/darwin-x64/bin/pharos" \
+            "@pharos-mcp/darwin-arm64/bin/pharos" \
+            "@pharos-mcp/win-x64/bin/pharos.exe"
           do
             path="npm/$entry"
             if [[ ! -f "$path" ]]; then
@@ -132,11 +132,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,     target: linux-x64,     pkg: pharos-mcp-linux-x64,     bin: pharos }
-          - { os: ubuntu-24.04-arm,  target: linux-arm64,   pkg: pharos-mcp-linux-arm64,   bin: pharos }
-          - { os: macos-13,          target: darwin-x64,    pkg: pharos-mcp-darwin-x64,    bin: pharos }
-          - { os: macos-latest,      target: darwin-arm64,  pkg: pharos-mcp-darwin-arm64,  bin: pharos }
-          - { os: windows-latest,    target: win-x64,       pkg: pharos-mcp-win-x64,       bin: pharos.exe }
+          - { os: ubuntu-latest,     target: linux-x64,     pkg: "@pharos-mcp/linux-x64",     bin: pharos }
+          - { os: ubuntu-24.04-arm,  target: linux-arm64,   pkg: "@pharos-mcp/linux-arm64",   bin: pharos }
+          - { os: macos-13,          target: darwin-x64,    pkg: "@pharos-mcp/darwin-x64",    bin: pharos }
+          - { os: macos-latest,      target: darwin-arm64,  pkg: "@pharos-mcp/darwin-arm64",  bin: pharos }
+          - { os: windows-latest,    target: win-x64,       pkg: "@pharos-mcp/win-x64",       bin: pharos.exe }
     runs-on: ${{ matrix.os }}
     steps:
       - name: Download npm/ tree
@@ -211,7 +211,7 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -e
-          for pkg in pharos-mcp pharos-mcp-linux-x64 pharos-mcp-linux-arm64 pharos-mcp-darwin-x64 pharos-mcp-darwin-arm64 pharos-mcp-win-x64; do
+          for pkg in pharos-mcp "@pharos-mcp/linux-x64" "@pharos-mcp/linux-arm64" "@pharos-mcp/darwin-x64" "@pharos-mcp/darwin-arm64" "@pharos-mcp/win-x64"; do
             file="npm/$pkg/package.json"
             node -e "
               const fs = require('fs');
@@ -231,14 +231,14 @@ jobs:
       - name: Copy LICENSE into each sub-package
         run: |
           set -e
-          for pkg in pharos-mcp pharos-mcp-linux-x64 pharos-mcp-linux-arm64 pharos-mcp-darwin-x64 pharos-mcp-darwin-arm64 pharos-mcp-win-x64; do
+          for pkg in pharos-mcp "@pharos-mcp/linux-x64" "@pharos-mcp/linux-arm64" "@pharos-mcp/darwin-x64" "@pharos-mcp/darwin-arm64" "@pharos-mcp/win-x64"; do
             cp LICENSE "npm/$pkg/LICENSE"
           done
 
       - name: Publish 5 platform packages (OIDC, with provenance)
         run: |
           set -e
-          for pkg in pharos-mcp-linux-x64 pharos-mcp-linux-arm64 pharos-mcp-darwin-x64 pharos-mcp-darwin-arm64 pharos-mcp-win-x64; do
+          for pkg in "@pharos-mcp/linux-x64" "@pharos-mcp/linux-arm64" "@pharos-mcp/darwin-x64" "@pharos-mcp/darwin-arm64" "@pharos-mcp/win-x64"; do
             echo "==> Publishing $pkg"
             (cd "npm/$pkg" && npm publish --provenance --access public)
           done

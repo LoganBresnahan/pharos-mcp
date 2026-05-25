@@ -36,7 +36,7 @@ if you used the npx path.)
 ## How the binary ships
 
 Per-platform binaries live in separate npm packages
-(`pharos-mcp-linux-x64`, `pharos-mcp-darwin-arm64`, etc.) declared
+(`@pharos-mcp/linux-x64`, `@pharos-mcp/darwin-arm64`, etc.) declared
 as `optionalDependencies` of this package. npm filters by host
 `os` + `cpu` and installs exactly one. The `pharos` shim on PATH
 resolves it via `require.resolve` and exec's it.

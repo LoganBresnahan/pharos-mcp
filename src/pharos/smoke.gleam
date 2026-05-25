@@ -135,7 +135,7 @@ fn build_initialize_params(workspace_path: String) -> json.Json {
       "clientInfo",
       json.object([
         #("name", json.string("pharos-smoke")),
-        #("version", json.string("0.0.1")),
+        #("version", json.string("0.1.0")),
       ]),
     ),
     #("initializationOptions", json.object([])),

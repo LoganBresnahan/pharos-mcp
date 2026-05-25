@@ -1,4 +1,4 @@
-# pharos-mcp-win-x64
+# @pharos-mcp/win-x64
 
 Windows x86-64 binary for **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
 

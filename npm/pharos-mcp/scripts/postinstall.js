@@ -37,11 +37,11 @@ const DEADLINE_MS = 120_000; // 2 minutes — generous for slow disks
 const POLL_INTERVAL_MS = 500;
 
 const PLATFORM_MAP = {
-  "linux-x64": { pkg: "pharos-mcp-linux-x64", bin: "pharos" },
-  "linux-arm64": { pkg: "pharos-mcp-linux-arm64", bin: "pharos" },
-  "darwin-x64": { pkg: "pharos-mcp-darwin-x64", bin: "pharos" },
-  "darwin-arm64": { pkg: "pharos-mcp-darwin-arm64", bin: "pharos" },
-  "win32-x64": { pkg: "pharos-mcp-win-x64", bin: "pharos.exe" },
+  "linux-x64": { pkg: "@pharos-mcp/linux-x64", bin: "pharos" },
+  "linux-arm64": { pkg: "@pharos-mcp/linux-arm64", bin: "pharos" },
+  "darwin-x64": { pkg: "@pharos-mcp/darwin-x64", bin: "pharos" },
+  "darwin-arm64": { pkg: "@pharos-mcp/darwin-arm64", bin: "pharos" },
+  "win32-x64": { pkg: "@pharos-mcp/win-x64", bin: "pharos.exe" },
 };
 
 function main() {
