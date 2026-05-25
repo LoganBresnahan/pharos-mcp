@@ -2,7 +2,44 @@
 
 Per-language LSP support, derived from dogfood passes.
 
-Last refresh: 2026-05-15 (pass 19 stdio/all + pass 20c stdio/all symbol cells).
+Last refresh: 2026-05-15 (pass 19 stdio/all + pass 20c stdio/all
+symbol cells). Pass 26 (2026-05-17) confirmed 4-way dev/binary ×
+stdio/http parity at 84.7%. ADR-029 (`jdt://` URI scheme + relaxed
+session gate + `fetch_uri_contents` tool) landed 2026-05-20 and is
+validated separately — see [Custom URI schemes](#custom-uri-schemes-adr-029)
+below. Full pass-27 refresh planned ahead of the v0.1.0 tag.
+
+## Custom URI schemes (ADR-029)
+
+The matrix below covers `file://` URIs. Custom URI schemes are
+handled separately by relaxed session-level URI gating plus the
+`fetch_uri_contents` tool per
+[ADR-029](adr/029-custom-uri-schemes.md). `fetch_uri_contents` is
+intentionally NOT a per-language column (would be 22 dashes + 1 ✓).
+
+**Out-of-the-box (validated):**
+
+| Scheme | Language | Tools that work | Validated by |
+|--------|----------|-----------------|--------------|
+| `jdt://` | java (jdtls) | hover, goto_definition, find_references, find_referencing_symbols, fetch_uri_contents | `bin/dogfood-adr-029.py` — cells 5-9 |
+
+**LSP-emitted but not pre-wired.** The following LSPs return custom
+URIs during goto-def into dependency / JAR / virtual code. Pharos's
+relaxed session gate means **hover / goto / refs still work** —
+those URIs pass through to the LSP that emitted them. But
+`fetch_uri_contents` (reading raw text from the URI) will fail
+until the scheme is added to `pharos.toml`:
+
+| Scheme | LSP(s) | Add to `pharos.toml` |
+|--------|--------|----------------------|
+| `jar://` | clojure-lsp, metals (scala) | `[languages.<id>.custom_uri_schemes.jar]` |
+| `metals-decode://` | metals (scala) — variant | `[languages.scala.custom_uri_schemes."metals-decode"]` |
+| `org-dartlang-sdk://` | Dart LSP (when added) | per-scheme config |
+
+Pharos does not ship defaults for the second group because the
+fetch protocol varies per LSP and was not validated end-to-end for
+v0.1.0. Users with working setups can self-configure — see
+[ADR-029](adr/029-custom-uri-schemes.md) § "How to add a scheme".
 
 ## How to read
 
