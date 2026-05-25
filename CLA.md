@@ -110,10 +110,10 @@ in any respect.
 ## 7. Governing Law
 
 This Agreement shall be governed by and construed in accordance with the
-laws of the State of Delaware, USA, without regard to its conflict of
+laws of the State of Illinois, USA, without regard to its conflict of
 laws principles. Any disputes arising out of or in connection with this
 Agreement shall be subject to the exclusive jurisdiction of the courts
-located within the State of Delaware, USA.
+located within the State of Illinois, USA.
 
 ---
 

@@ -42,25 +42,24 @@ build saves both sides the cost of a wrong-direction PR.
 is dual-licensed (AGPL-3.0 open-source + commercial), and the
 CLA gives the project the rights it needs to offer both tracks.
 
-We use the [Apache Individual Contributor License Agreement][icla]
-template, signed via the [CLA Assistant][cla-assistant] GitHub
-App. When you open your first PR, the bot leaves a comment with
-a link; signing is a one-time action and applies to all future
-PRs from the same GitHub account.
+The agreement text lives at [CLA.md](CLA.md) — an Apache-style
+Individual CLA adapted for pharos's dual-license model. Signatures
+are collected by [CLA Assistant Lite][cla-lite] (a GitHub Action,
+not a SaaS) and stored in this repository at
+`signatures/version1/cla.json`. When you open your first PR, the
+bot comments with the agreement link and asks you to reply with:
+
+> I have read the CLA Document and I hereby sign the CLA
+
+Signing is a one-time action and applies to all future PRs from
+the same GitHub account.
 
 For corporate contributions (where your employer holds copyright
-on the work you contribute on company time), we'll ask for the
-Apache Corporate CLA instead. Reach out via the contact in
-[COMMERCIAL.md](COMMERCIAL.md) if your company needs that.
+on the work you contribute on company time), reach out via the
+contact in [COMMERCIAL.md](COMMERCIAL.md) — we'll arrange a
+corporate-flavored grant instead of the individual CLA.
 
-We also use the [Developer Certificate of Origin][dco] alongside
-the CLA — sign your commits with `git commit -s` so the
-provenance chain is explicit. The CLA carries the relicensing
-rights; the DCO carries the per-commit assertion.
-
-[icla]: https://www.apache.org/licenses/contributor-agreements.html
-[cla-assistant]: https://cla-assistant.io/
-[dco]: https://developercertificate.org/
+[cla-lite]: https://github.com/contributor-assistant/github-action
 
 ## Local development
 
@@ -126,7 +125,7 @@ When you open a PR, the template prompts for:
 2. Brief summary of the change (the "why", not the "what" — the
    diff carries the what)
 3. Test plan
-4. CLA signature confirmation (CLA Assistant bot will gate this)
+4. CLA signature confirmation (CLA Assistant Lite bot will gate this)
 
 A failed CLA check is the most common reason a PR isn't merged
 quickly. Sign it once; the bot handles the rest.
@@ -142,10 +141,3 @@ A good bug report includes:
   sequence)
 - Observed vs expected behaviour
 - Any log output (`PHAROS_LOG_LEVEL=debug` is useful)
-
-## Security
-
-Don't open public issues for security findings. Email the
-contact listed in [COMMERCIAL.md](COMMERCIAL.md) directly. We'll
-acknowledge within 72 hours, fix in private, and credit you in
-the release notes once the patch is public.

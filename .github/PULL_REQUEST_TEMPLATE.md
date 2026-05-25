@@ -34,7 +34,7 @@ ran. -->
 
 - [ ] I have signed the CLA (see
   [CONTRIBUTING.md](../CONTRIBUTING.md#contributor-license-agreement)).
-  The CLA Assistant bot will confirm this automatically once
+  The CLA Assistant Lite bot will confirm this automatically once
   this PR is opened.
 
 ## Notes for the reviewer

@@ -22,9 +22,6 @@ commercial terms you receive:
 - The right to operate pharos inside a managed-service or
   sandbox-runner offering without releasing your service's
   source
-- Priority on bug reports and feature requests for issues that
-  block your deployment
-- Direct support channel separate from the public issue tracker
 
 ## How to inquire
 
