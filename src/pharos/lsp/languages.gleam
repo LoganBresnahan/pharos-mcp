@@ -502,7 +502,15 @@ fn typescript() -> LanguageConfig {
         readiness_token: None,
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
-        warm_probe: ProbeWorkspaceSymbol(""),
+        // tsserver throws `No Project` on workspace/symbol until at
+        // least one textDocument/didOpen has primed a tsconfig
+        // project — the error surfaces in client tool output as a
+        // noisy stack trace even though the LSP recovers on the next
+        // real query. Same shape as scala/metals (line 714 below):
+        // `ProbeNone` lets pool return the Proc as soon as initialize
+        // completes; the first real tool call (which carries a
+        // didOpen) loads the project naturally.
+        warm_probe: ProbeNone,
       ),
     ],
     custom_uri_schemes: dict.new(),

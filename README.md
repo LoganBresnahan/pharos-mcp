@@ -93,6 +93,17 @@ curl -L \
 chmod +x ~/.local/bin/pharos
 ```
 
+Or via the GitHub CLI:
+
+```bash
+gh release download v0.1.0 --repo LoganBresnahan/pharos-mcp -p 'pharos_linux_x64'
+chmod +x pharos_linux_x64
+```
+
+> **Heads up:** GitHub Release assets are uploaded without an
+> executable bit, so you must `chmod +x` the downloaded binary before
+> running it. The npm install path handles this automatically.
+
 ### 3. Build from source
 
 Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, Zig 0.15.2.
