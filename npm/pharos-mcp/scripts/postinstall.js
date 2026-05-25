@@ -114,7 +114,7 @@ function cache_exists() {
   if (!fs.existsSync(root)) return false;
 
   // Burrito creates a versioned directory like
-  // `pharos_erts-16.1_0.0.1`. Any pharos_* entry counts as warm.
+  // `pharos_erts-16.1_0.1.0`. Any pharos_* entry counts as warm.
   try {
     return fs.readdirSync(root).some((entry) => entry.startsWith("pharos_"));
   } catch (_) {

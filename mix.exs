@@ -2,16 +2,16 @@ defmodule Pharos.MixProject do
   use Mix.Project
 
   @app :pharos
-  # SemVer base. Pre-release identifier (`-rc.1`) lifts the version
-  # above plain `0.0.1` so Burrito's cache dir name changes for every
-  # user upgrading from older dev binaries.
+  # SemVer base. First public release ships as 0.1.0 (OSS convention:
+  # 0.x.y signals early-stage / breaking-change-allowed; 1.0.0 is
+  # reserved for the stable-API promise).
   #
   # The effective version computed by `version/0` appends a SemVer
   # build-metadata suffix (`+<id>`) on every non-release build:
   #   - `PHAROS_BUILD_ID=<id>` env wins (CI / release pipeline).
   #   - Otherwise short git SHA, falling back to `local` outside git.
   #   - Set `PHAROS_RELEASE=1` to ship the clean base version
-  #     (e.g. `1.0.0`) at tag time.
+  #     (e.g. `0.1.0`) at tag time.
   #
   # Why this matters: Burrito names its extracted-runtime directory
   # `<release>_erts-<erts>_<app_version>/` and gates re-extraction on
@@ -20,7 +20,7 @@ defmodule Pharos.MixProject do
   # silently reuses the first build's extracted beam files — a known
   # foot-gun that bit us once during ADR-029 dogfood. Suffixing the
   # version per build forces a fresh extract automatically.
-  @version_base "1.0.0-rc.1"
+  @version_base "0.1.0"
 
   defp version do
     case System.get_env("PHAROS_RELEASE") do

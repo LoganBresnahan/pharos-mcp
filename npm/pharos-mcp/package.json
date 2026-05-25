@@ -1,6 +1,6 @@
 {
   "name": "pharos-mcp",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Headless LSP-MCP bridge for AI agents. Hands rust-analyzer, gopls, tsserver, pyright, jdtls and 19 more language servers to any MCP-aware agent (Claude Code, Cursor, ChatGPT Desktop). Single binary, 23 languages.",
   "keywords": [
     "mcp",
@@ -53,10 +53,10 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "pharos-mcp-linux-x64": "0.0.1",
-    "pharos-mcp-linux-arm64": "0.0.1",
-    "pharos-mcp-darwin-x64": "0.0.1",
-    "pharos-mcp-darwin-arm64": "0.0.1",
-    "pharos-mcp-win-x64": "0.0.1"
+    "pharos-mcp-linux-x64": "0.1.0",
+    "pharos-mcp-linux-arm64": "0.1.0",
+    "pharos-mcp-darwin-x64": "0.1.0",
+    "pharos-mcp-darwin-arm64": "0.1.0",
+    "pharos-mcp-win-x64": "0.1.0"
   }
 }

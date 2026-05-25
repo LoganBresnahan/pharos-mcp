@@ -1,6 +1,6 @@
 {
   "name": "pharos-mcp-win-x64",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Windows x86-64 binary for pharos-mcp. Do not install directly — install pharos-mcp instead; this package is pulled in automatically as an optionalDependency.",
   "license": "AGPL-3.0-only",
   "homepage": "https://github.com/LoganBresnahan/pharos-mcp",
