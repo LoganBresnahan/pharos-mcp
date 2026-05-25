@@ -89,7 +89,12 @@ defmodule Mix.Tasks.Release.Dev do
     case File.ls(cache_root) do
       {:ok, entries} ->
         Enum.each(entries, fn entry ->
-          if String.starts_with?(entry, "pharos_") do
+          # Only wipe dev-build caches. Dev versions always contain `+`
+          # (the build_suffix from mix.exs); release/rc caches never do
+          # (clean SemVer or `-rc1` suffix). Preserves any globally-
+          # installed npm rc/release pharos so dev rebuilds don't force
+          # the user's other pharos to re-extract.
+          if String.starts_with?(entry, "pharos_") and String.contains?(entry, "+") do
             full = Path.join(cache_root, entry)
             Mix.shell().info("[release.dev] wiping Burrito cache: #{full}")
             File.rm_rf!(full)
