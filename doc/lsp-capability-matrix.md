@@ -2,12 +2,61 @@
 
 Per-language LSP support, derived from dogfood passes.
 
-Last refresh: 2026-05-15 (pass 19 stdio/all + pass 20c stdio/all
-symbol cells). Pass 26 (2026-05-17) confirmed 4-way dev/binary ×
-stdio/http parity at 84.7%. ADR-029 (`jdt://` URI scheme + relaxed
-session gate + `fetch_uri_contents` tool) landed 2026-05-20 and is
-validated separately — see [Custom URI schemes](#custom-uri-schemes-adr-029)
-below. Full pass-27 refresh planned ahead of the v0.1.0 tag.
+Last refresh: 2026-05-25 (pass 27 stdio/all, pre-v0.1.0 — see
+[Pass 27 results](#pass-27-results-2026-05-25-pre-v010) below).
+Per-tool cells from passes 19/24 are kept as historical detail
+because per-tool behaviour is stable: pass 27's 23-language
+aggregate (565/656, 86.1%) confirms the prior topology. ADR-029
+(`jdt://` URI scheme + relaxed session gate + `fetch_uri_contents`
+tool) landed 2026-05-20 and is validated separately — see
+[Custom URI schemes](#custom-uri-schemes-adr-029) below.
+
+## Pass 27 results (2026-05-25, pre-v0.1.0)
+
+First full pass against the 0.1.0-stamped binary. Profile: `all`
+(includes debug + raw categories). Transport: stdio. **565/656
+cells PASS = 86.1%.** Per-language breakdown (each cell = one of
+the 27 LSP-bound + symbol-layer tools):
+
+| Lang | Score | Notes |
+|------|-------|-------|
+| clojure | 25/27 | Fully green; the 2 misses are LSP-side call-h/type-h gaps |
+| cpp | 25/27 | Fully green; same gap class |
+| erlang | 25/27 | Fully green; ELP doesn't advertise call-h |
+| haskell | 25/27 | Fully green |
+| java | 25/27 | Fully green; jdt:// validated separately (ADR-029) |
+| python | 25/27 | Fully green |
+| rust | 25/27 | Fully green |
+| typescript | 25/27 | Fully green |
+| go | 24/27 | One additional call-h prepare regression vs typescript twin |
+| bash | 23/27 | LSP-side gap class for hierarchy tools |
+| css | 23/27 | Same |
+| html | 23/27 | Same |
+| json | 23/27 | Same |
+| lua | 23/27 | Same |
+| markdown | 23/27 | Same |
+| perl | 23/27 | Same |
+| yaml | 23/27 | Same |
+| zig | 23/27 | Same |
+| terraform | 22/27 | One workspace_symbols decoder edge |
+| ruby | 21/27 | hierarchy gaps + one find_symbol decoder retry |
+| gleam | 20/27 | Multiple hierarchy gaps + one fixture-positioning miss |
+| scala | 20/27 | metals workspace/symbol timeout on cold workspace (LSP-side) |
+| elixir | 16/27 | **next-ls `-32603 Timeout`** on workspace/symbol, goto_definition, find_references, format_document. LSP-side, not pharos. |
+| global (cross-lang) | 18/18 | All `runtime_*` + `echo` PASS |
+| memory probe (ADR-027) | 17/17 | Full coverage |
+
+**Failure modes are LSP-side, not pharos plumbing.** Most "23/27"
+cells share an identical call-hierarchy / type-hierarchy gap
+pattern that boils down to the LSP not advertising those server
+capabilities (clean GAP, not a defect). The two outliers (elixir,
+scala) reflect known timeout / cold-index behaviour in next-ls
+and metals respectively — also LSP-side. Pass 24's "17/23 fully
+green + 3 functional-with-legit-gap + 3 LSP-side" topology
+holds; pass 27 just brings the score history forward by 9 days
+and confirms parity against the freshly-stamped 0.1.0 binary.
+
+
 
 ## Custom URI schemes (ADR-029)
 
@@ -371,3 +420,5 @@ After a `bin/dogfood-23lang.py` run:
 | pass 23  | 2026-05-16 | 512/616 (83.1%) | Two-tier fuzzy + refs Resolution envelope + Latin-1 fallback (9c705d8). 13/23 green; tier-2 unlocked css/terraform; Latin-1 unlocked lua find_symbol. Surfaced lua refs decoder gap (Location[]/LocationLink[]/null) + 4 NF-on-empty-ws cases. |
 | pass 24  | 2026-05-16 | 519/616 (84.3%) | Empty-ws fallback + LocationLink/null refs decoder + html/markdown fixture tunes (3a91eaf). **17/23 fully green + 3 refs-GAP-legit = 20/23 functional.** Remaining 3 are LSP-side issues. |
 | pass 24h | 2026-05-16 | 519/616 (84.3%) | Same as pass 24 over HTTP transport. **Perfect parity stdio↔http** across all 23 langs × 26 tools. |
+| pass 26  | 2026-05-17 | 536/633 (84.7%) | Post-`memory_audit` regression. 4-way parity: pharos-dev × Burrito-binary × stdio × http all return identical 536/633 with identical lang-level + tool-level failures. Memory probe 17/17 on every combination. |
+| pass 27  | 2026-05-25 | 565/656 (86.1%) | **Pre-v0.1.0 refresh.** First pass against the 0.1.0-stamped binary. +29 cells over pass 26 from `runtime_pid_info` + `runtime_lsp_state` global cells + extra memory-probe variants. 8 langs at 25/27 (clojure, cpp, erlang, haskell, java, python, rust, typescript); 9 at 23/27; elixir lowest at 16/27 (next-ls -32603 Timeout on workspace/symbol, goto_definition, find_references, format_document — LSP-side, not pharos). ADR-029 jdt:// validated separately via `bin/dogfood-adr-029.py`. |
