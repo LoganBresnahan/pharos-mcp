@@ -1,30 +1,132 @@
 # LSP capability matrix
 
-Per-language LSP support, derived from dogfood passes.
+**Current pass: 27 (2026-05-25, pre-v0.1.0). Score: 565/656 (86.1%).**
 
-Last refresh: 2026-05-25 (pass 27 stdio/all, pre-v0.1.0 — see
-[Pass 27 results](#pass-27-results-2026-05-25-pre-v010) below).
-Per-tool cells from passes 19/24 are kept as historical detail
-because per-tool behaviour is stable: pass 27's 23-language
-aggregate (565/656, 86.1%) confirms the prior topology. ADR-029
-(`jdt://` URI scheme + relaxed session gate + `fetch_uri_contents`
-tool) landed 2026-05-20 and is validated separately — see
-[Custom URI schemes](#custom-uri-schemes-adr-029) below.
+Every table in this document is regenerated from the most recent
+dogfood pass. Per-tool cells are not stamped with their pass date —
+they reflect the run named in the heading. Older passes live only
+in the [Score history](#score-history) trend at the bottom.
 
-## Pass 27 results (2026-05-25, pre-v0.1.0)
+ADR-029 (`jdt://` URI scheme + relaxed session gate +
+`fetch_uri_contents` tool) is validated by a separate harness
+(`bin/dogfood-adr-029.py`); see [Custom URI schemes](#custom-uri-schemes-adr-029).
 
-First full pass against the 0.1.0-stamped binary. Profile: `all`
-(includes debug + raw categories). Transport: stdio. **565/656
-cells PASS = 86.1%.** Per-language breakdown (each cell = one of
-the 27 LSP-bound + symbol-layer tools):
+## How to read
+
+Cells:
+
+- **✓** — tool returned a response without `isError`. OK.
+- **G** — server gap: LSP responded with `-32601 / Method not found`
+  or `unsupported file type`, OR pharos's capability gate
+  short-circuited because the LSP did not advertise the relevant
+  `ServerCapabilities` field. Plumbing fine; the LSP doesn't
+  implement it.
+- **F** — non-gap failure: timeout, decode error, hierarchy-prepare
+  returned no item, etc. Often a fixture / timing issue,
+  occasionally a server bug. Failure detail is in the per-LSP
+  notes section.
+- **—** — not measured (no fixture symbol probe for that language,
+  or the tool isn't relevant).
+
+The 22 per-call LSP-bound tools collapse into 16 columns here —
+`call_hierarchy_incoming_calls` / `_outgoing_calls` /
+`type_hierarchy_supertypes` / `type_hierarchy_subtypes` roll up
+into the `call-h` / `type-h` columns (they share a capability with
+their `*_prepare` parent; any sub-tool FAIL collapses the column to
+F). `apply_workspace_edit` and `lsp_request_raw` are universal and
+shown only in the per-language pass-rate summary.
+
+## Per-language LSP tool support (pass 27)
+
+| Lang | LSP | hov | doc-sym | ws-sym | refs | diag | def | type-def | impl | sig | fmt | code-act | rename | inlay | sem | call-h | type-h |
+|------|-----|-----|---------|--------|------|------|-----|----------|------|-----|-----|----------|--------|-------|-----|--------|--------|
+| bash       | bash-language-server          | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | F | F |
+| clojure    | clojure-lsp                   | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | ✓ | F |
+| cpp        | clangd                        | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | ✓ |
+| css        | vscode-css                    | ✓ | ✓ | G | ✓ | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | F | F |
+| elixir     | next-ls                       | ✓ | ✓ | F | F | ✓ | F | G | G | G | F | ✓ | G | G | G | F | F |
+| erlang     | elp                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | G | ✓ | ✓ | ✓ | ✓ | ✓ | F |
+| gleam      | gleam-lsp                     | ✓ | ✓ | F | ✓ | F | ✓ | ✓ | F | ✓ | ✓ | ✓ | ✓ | G | G | F | F |
+| go         | gopls                         | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | ✓ |
+| haskell    | hls                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | F |
+| html       | vscode-html                   | ✓ | ✓ | G | ✓ | ✓ | ✓ | G | G | ✓ | ✓ | ✓ | ✓ | G | G | F | F |
+| java       | jdtls                         | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | ✓ |
+| json       | vscode-json                   | ✓ | ✓ | G | G | ✓ | G | G | G | G | ✓ | ✓ | G | G | G | F | F |
+| lua        | lua-language-server           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | F |
+| markdown   | marksman                      | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G | G | G | ✓ | ✓ | G | ✓ | F | F |
+| perl       | perlnavigator                 | ✓ | ✓ | ✓ | G | ✓ | ✓ | G | G | ✓ | ✓ | ✓ | G | G | G | F | F |
+| python     | pyright (+ ruff)              | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | ✓ | ✓ | ✓ | G | G | ✓ | F |
+| ruby       | ruby-lsp                      | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | F | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | F |
+| rust       | rust-analyzer                 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F |
+| scala      | metals                        | ✓ | ✓ | F | ✓ | F | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | F | ✓ | ✓ |
+| terraform  | terraform-ls                  | ✓ | ✓ | ✓ | ✓ | ✓ | F | G | G | ✓ | ✓ | ✓ | G | G | G | F | F |
+| typescript | typescript-language-server    | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F |
+| yaml       | yaml-language-server          | ✓ | ✓ | G | G | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | F | F |
+| zig        | zls                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | F |
+
+## Symbol-layer support — ADR-026 (pass 27)
+
+`find_symbol`, `get_symbols_overview`, `containing_symbol`,
+`find_referencing_symbols`, `edit_at_symbol`. Stdio and HTTP
+transports are at full parity in pass 26h — this pass-27 stdio run
+is the source for these cells.
+
+| Lang | find_sym | overview | contain | refs-sym | edit | Notes |
+|------|----------|----------|---------|----------|------|-------|
+| bash       | ✓ | ✓ | ✓ | ✓ | ✓ | Fix B (legacy `SymbolInformation[]`) active |
+| clojure    | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| cpp        | ✓ | ✓ | ✓ | ✓ | ✓ | Fix A (cross-workspace URI swallow) active |
+| css        | ✓ | ✓ | ✓ | ✓ | ✓ | tier-2 fuzzy (case-insensitive `root` ↔ `:root`) |
+| elixir     | F | ✓ | ✓ | F | F | next-ls `-32603 Timeout` on workspace/symbol (LSP-side) |
+| erlang     | ✓ | ✓ | ✓ | ✓ | ✓ | empty-`workspace/symbol` → scope_uri fallback |
+| gleam      | ✓ | ✓ | ✓ | ✓ | ✓ | `workspaceSymbolProvider` not advertised → scope_uri fallback |
+| go         | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| haskell    | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| html       | ✓ | ✓ | ✓ | ✓ | ✓ | fixture symbol_name_path tuned to `h1` |
+| java       | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| json       | ✓ | ✓ | ✓ | G | ✓ | refs-sym GAP (no `referencesProvider`) |
+| lua        | ✓ | ✓ | ✓ | ✓ | ✓ | Latin-1 fallback active; references decoder accepts null |
+| markdown   | ✓ | ✓ | ✓ | ✓ | ✓ | fixture symbol_name_path tuned to `GitHub Docs` |
+| perl       | ✓ | ✓ | ✓ | G | ✓ | refs-sym GAP (no `referencesProvider`) |
+| python     | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| ruby       | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| rust       | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| scala      | F | ✓ | ✓ | F | F | metals `workspace/symbol` timeout on cold workspace (LSP-side) |
+| terraform  | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| typescript | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| yaml       | ✓ | ✓ | ✓ | G | ✓ | refs-sym GAP (no `referencesProvider`) |
+| zig        | ✓ | ✓ | ✓ | ✓ | ✓ | |
+
+Legend: `✓` = OK. `F` = FAIL. `G` = GAP (-32601 / cap not advertised
+— legitimate, not a defect).
+
+**Summary.** 21/23 langs fully green on the symbol layer (all five
+tools ✓). 2/23 hard-fail on LSP-side issues:
+
+- **elixir (next-ls)** — `workspace/symbol` exceeds the per-tool
+  budget on cold workspace. Bumping `timeout_override_ms` further
+  runs into the harness wall clock. Not a pharos defect.
+- **scala (metals)** — same shape, cold-workspace timeout. Bloop
+  bootstrap takes 2-3 min on the Scala 3 `library` fixture.
+
+The `json`, `yaml`, `perl` refs-sym GAPs are clean
+(no `referencesProvider` advertised); downstream
+`find_referencing_symbols` returns an empty list, not an error.
+
+## Per-language pass-rate summary (pass 27)
+
+Each language's cell count uses the full 27-tool surface
+(LSP-bound + symbol layer + ADR-029 — but ADR-029 cells live in
+the separate `bin/dogfood-adr-029.py` harness so they don't appear
+in this denominator).
 
 | Lang | Score | Notes |
 |------|-------|-------|
-| clojure | 25/27 | Fully green; the 2 misses are LSP-side call-h/type-h gaps |
+| clojure | 25/27 | Fully green on per-tool grid; the 2 misses are LSP-side call-h / type-h gaps |
 | cpp | 25/27 | Fully green; same gap class |
-| erlang | 25/27 | Fully green; ELP doesn't advertise call-h |
+| erlang | 25/27 | Fully green; ELP doesn't advertise call-h / type-h |
 | haskell | 25/27 | Fully green |
-| java | 25/27 | Fully green; jdt:// validated separately (ADR-029) |
+| java | 25/27 | Fully green; jdt:// (JAR dep navigation) validated separately (ADR-029) |
 | python | 25/27 | Fully green |
 | rust | 25/27 | Fully green |
 | typescript | 25/27 | Fully green |
@@ -46,21 +148,17 @@ the 27 LSP-bound + symbol-layer tools):
 | global (cross-lang) | 18/18 | All `runtime_*` + `echo` PASS |
 | memory probe (ADR-027) | 17/17 | Full coverage |
 
-**Failure modes are LSP-side, not pharos plumbing.** Most "23/27"
+**Failure modes are LSP-side, not pharos plumbing.** Most 23/27
 cells share an identical call-hierarchy / type-hierarchy gap
 pattern that boils down to the LSP not advertising those server
-capabilities (clean GAP, not a defect). The two outliers (elixir,
-scala) reflect known timeout / cold-index behaviour in next-ls
-and metals respectively — also LSP-side. Pass 24's "17/23 fully
-green + 3 functional-with-legit-gap + 3 LSP-side" topology
-holds; pass 27 just brings the score history forward by 9 days
-and confirms parity against the freshly-stamped 0.1.0 binary.
-
-
+capabilities (clean GAP, not a defect, but counted in the
+denominator). The two outliers (elixir at 16/27, scala at 20/27)
+reflect known timeout / cold-index behavior in next-ls and metals
+respectively.
 
 ## Custom URI schemes (ADR-029)
 
-The matrix below covers `file://` URIs. Custom URI schemes are
+The grids above cover `file://` URIs. Custom URI schemes are
 handled separately by relaxed session-level URI gating plus the
 `fetch_uri_contents` tool per
 [ADR-029](adr/029-custom-uri-schemes.md). `fetch_uri_contents` is
@@ -89,115 +187,6 @@ Pharos does not ship defaults for the second group because the
 fetch protocol varies per LSP and was not validated end-to-end for
 v0.1.0. Users with working setups can self-configure — see
 [ADR-029](adr/029-custom-uri-schemes.md) § "How to add a scheme".
-
-## How to read
-
-Cells:
-
-- **✓** — tool returned a response without `isError` (OK).
-- **G** — server gap: LSP responded with `-32601 / Method not found` or
-  `unsupported file type`, OR pharos's capability gate short-circuited
-  because the LSP did not advertise the relevant `ServerCapabilities`
-  field. Plumbing fine; the LSP doesn't implement it.
-- **F** — non-gap failure: timeout, decode error, hierarchy-prepare
-  returned no item, etc. Often a fixture/timing issue, sometimes a
-  server bug.
-- **—** — not measured (no fixture symbol probe for that lang yet, or
-  the tool isn't relevant).
-
-The 22 per-call LSP-bound tools collapse here into 14 columns —
-`call_hierarchy_incoming_calls` / `_outgoing_calls` / `type_hierarchy_*`
-roll up into the `call-h` / `type-h` columns (they share a capability
-with their `*_prepare` parent). `apply_workspace_edit` and
-`lsp_request_raw` are universal — not shown.
-
-## Per-language tool support (pass 19 baseline)
-
-| Lang | LSP | hov | doc-sym | ws-sym | refs | diag | def | type-def | impl | sig | fmt | code-act | rename | inlay | sem | call-h | type-h |
-|------|-----|-----|---------|--------|------|------|-----|----------|------|-----|-----|----------|--------|-------|-----|--------|--------|
-| bash       | bash-language-server          | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | G | G |
-| clojure    | clojure-lsp                   | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | ✓ | G |
-| cpp        | clangd                        | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | ✓ |
-| css        | vscode-css                    | ✓ | ✓ | G | ✓ | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | G | G |
-| elixir     | next-ls                       | ✓ | ✓ | F | F | ✓ | F | G | G | G | F | ✓ | G | G | G | G | G |
-| erlang     | elp                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | G | ✓ | ✓ | ✓ | ✓ | ✓ | G |
-| gleam      | gleam-lsp                     | ✓ | ✓ | F | ✓ | F | ✓ | ✓ | F | ✓ | ✓ | ✓ | ✓ | G | G | G | G |
-| go         | gopls                         | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | ✓ |
-| haskell    | hls                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | G |
-| html       | vscode-html                   | ✓ | ✓ | G | ✓ | ✓ | ✓ | G | G | ✓ | ✓ | ✓ | ✓ | G | G | G | G |
-| java       | jdtls                         | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | F |
-| json       | vscode-json                   | ✓ | ✓ | G | G | ✓ | G | G | G | G | ✓ | ✓ | G | G | G | G | G |
-| lua        | lua-language-server           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G |
-| markdown   | marksman                      | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G | G | G | ✓ | ✓ | G | ✓ | G | G |
-| perl       | perlnavigator                 | ✓ | ✓ | ✓ | G | ✓ | ✓ | G | G | ✓ | ✓ | ✓ | G | G | G | G | G |
-| python     | pyright (+ ruff)              | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ | ✓ | ✓ | ✓ | G | G | ✓ | G |
-| ruby       | ruby-lsp                      | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | F | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | ✓ |
-| rust       | rust-analyzer                 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G |
-| scala      | metals                        | ✓ | ✓ | F | ✓ | F | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | F | F | ✓ | ✓ |
-| terraform  | terraform-ls                  | ✓ | ✓ | ✓ | ✓ | ✓ | F | G | G | ✓ | ✓ | ✓ | G | G | G | G | G |
-| typescript | typescript-language-server    | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G |
-| yaml       | yaml-language-server          | ✓ | ✓ | G | G | ✓ | ✓ | G | G | G | ✓ | ✓ | ✓ | G | G | G | G |
-| zig        | zls                           | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | G | G |
-
-## Symbol-layer support (ADR-026, pass 24 — stdio + http)
-
-After pass-23 fixes landed (two-tier fuzzy match, find_referencing_symbols
-Resolution envelope + cross-workspace URI swallow, universal Latin-1
-fallback in `lifecycle.classify`) and pass-24 follow-ups
-(empty-`workspace/symbol` fallback to `scope_uri` drill,
-`references_response_decoder` accepting Location / LocationLink / null,
-fixture tunes for html + markdown).
-
-**Stdio and HTTP transports are at full parity** — every lang's
-symbol-cell result is identical across `--transport stdio` and
-`--transport http`. HTTP plumbing (mist + JSON-RPC handler) does not
-introduce drift.
-
-| Lang | find_sym | overview | refs | edit | notes |
-|------|----------|----------|------|------|-------|
-| bash       | ✓ | ✓ | ✓ | ✓ | Fix B (legacy `SymbolInformation[]`) active |
-| clojure    | ✓ | ✓ | ✓ | ✓ | |
-| cpp        | ✓ | ✓ | ✓ | ✓ | Fix A (cross-workspace URI swallow) active |
-| css        | ✓ | ✓ | ✓ | ✓ | tier-2 fuzzy (case-insensitive `root` ↔ `:root`) |
-| elixir     | F | ✓ | F | F | next-ls `-32603 Timeout` on workspace/symbol (LSP-side) |
-| erlang     | ✓ | ✓ | ✓ | ✓ | empty-`workspace/symbol` → scope_uri fallback |
-| gleam      | ✓ | ✓ | ✓ | ✓ | `workspaceSymbolProvider` not advertised → scope_uri fallback |
-| go         | ✓ | ✓ | ✓ | ✓ | |
-| haskell    | ✓ | ✓ | ✓ | ✓ | |
-| html       | ✓ | ✓ | ✓ | ✓ | fixture symbol_name_path tuned to `h1` |
-| java       | ✓-NF | ✓ | F | F | jdtls cold-build returns empty workspace/symbol + scope_uri drill doesn't surface `KafkaClient` — LSP-side fixture issue |
-| json       | ✓ | ✓ | G | ✓ | refs GAP (no `referencesProvider`) |
-| lua        | ✓ | ✓ | ✓ | ✓ | Latin-1 fallback active; references decoder accepts null |
-| markdown   | ✓ | ✓ | ✓ | ✓ | fixture symbol_name_path tuned to `GitHub Docs` |
-| perl       | ✓ | ✓ | G | ✓ | refs GAP (no `referencesProvider`) |
-| python     | ✓ | ✓ | ✓ | ✓ | |
-| ruby       | ✓ | ✓ | ✓ | ✓ | |
-| rust       | ✓ | ✓ | ✓ | ✓ | |
-| scala      | F | ✓ | F | F | metals `workspace/symbol` timeout on cold workspace (LSP-side) |
-| terraform  | ✓ | ✓ | ✓ | ✓ | |
-| typescript | ✓ | ✓ | ✓ | ✓ | |
-| yaml       | ✓ | ✓ | G | ✓ | refs GAP (no `referencesProvider`) |
-| zig        | ✓ | ✓ | ✓ | ✓ | |
-
-Legend: `✓` = OK. `✓-NF` = OK but `not_found` (downstream tools skip).
-`F` = FAIL. `G` = GAP (-32601, cap not advertised — legit).
-
-**17/23 langs fully green, 3/23 functional with legit refs-GAP, 3/23
-hard-fail on LSP-side issues:**
-
-- **elixir / scala**: workspace/symbol timeouts originate in the LSP
-  (next-ls, metals on cold workspace). Both servers eventually
-  respond on the second call but exceed the per-tool budget; bumping
-  `timeout_override_ms` further runs into the harness wall clock.
-  Not a Pharos defect.
-
-- **java (jdtls)**: cold-build returns `[]` for workspace/symbol
-  during the first ~60s of indexing, and `documentSymbol` on the
-  fixture file lists method-level symbols without surfacing the
-  containing `KafkaClient` interface as a top-level entry. Both the
-  empty-workspace fallback and tier-2 fuzzy run cleanly; the symbol
-  simply isn't in jdtls's documentSymbol output. Likely fixture
-  positioning interacts poorly with jdtls's outline mode.
 
 ## Per-LSP cross-language adapter notes
 
@@ -246,124 +235,14 @@ default JSON-RPC + LSP framing:
   client linkSupport), or `null` / `[]` (lua-language-server's
   `includeDeclaration=false` no-match response).
 
-## Symbol-layer support (ADR-026, pass 22 — superseded)
-
-After pass-21 fixes A (cross-workspace URI swallow), B (legacy
-`SymbolInformation[]` decoder), C (fuzzy drill name match) committed
-in 9342897.
-
-| Lang | find_sym | overview | refs | edit | notes |
-|------|----------|----------|------|------|-------|
-| bash       | ✓ | ✓ | ✓ | ✓ | Fix B unlocked (was decode FAIL) |
-| clojure    | ✓ | ✓ | ✓ | ✓ | |
-| cpp        | ✓ | ✓ | ✓ | ✓ | Fix A unlocked (was cross-workspace FAIL) |
-| css        | ✓-NF | ✓ | F | F | `root` not in doc-symbol tree |
-| elixir     | F | ✓ | F | F | next-ls `-32603 Timeout` on workspace/symbol |
-| erlang     | ✓-NF | ✓ | F | F | fuzzy drill didn't catch — `main` not surfacing in workspace_symbol result |
-| gleam      | ✓ | ✓ | ✓ | ✓ | fallback active |
-| go         | ✓ | ✓ | ✓ | ✓ | (spawn flake from pass 21 cleared) |
-| haskell    | ✓ | ✓ | ✓ | ✓ | |
-| html       | ✓-NF | ✓ | F | F | `html` not in vscode-html doc-symbol output |
-| java       | ✓-NF | ✓ | F | F | jdtls doc-symbol naming pattern not yet covered |
-| json       | ✓ | ✓ | G | ✓ | refs GAP (legit cap absent) |
-| lua        | F | ✓ | F | F | **NEW**: response decode error: body is not valid UTF-8 |
-| markdown   | ✓-NF | ✓ | F | F | marksman names headings differently |
-| perl       | ✓ | ✓ | G | ✓ | Fix B unlocked; refs GAP (legit cap absent) |
-| python     | ✓ | ✓ | ✓ | ✓ | |
-| ruby       | ✓ | ✓ | F | ✓ | refs FAIL only — investigate |
-| rust       | ✓ | ✓ | ✓ | ✓ | |
-| scala      | F | ✓ | F | F | metals workspace/symbol still timing out |
-| terraform  | ✓-NF | ✓ | F | F | terraform-ls names blocks not covered by fuzzy match |
-| typescript | ✓ | ✓ | ✓ | ✓ | |
-| yaml       | ✓ | ✓ | G | ✓ | refs GAP (legit cap absent) |
-| zig        | ✓ | ✓ | ✓ | ✓ | |
-
-Legend: `✓` = OK. `✓-NF` = OK but `not_found` (downstream tools skip).
-`F` = FAIL. `G` = GAP (-32601, cap not advertised).
-
-**11/23 langs fully green** (was 9/23 in pass 21). +4 from fixes:
-bash, cpp, go, perl. perl/json/yaml return refs as legitimate
-capability GAP — useful UX signal, not a defect.
-
-**Outstanding follow-ups for next iteration:**
-
-1. **6 NF langs (css, erlang, html, java, markdown, terraform)** —
-   fuzzy drill didn't widen find_symbol's net. Either fixture's
-   `symbol_name_path` doesn't match how the LSP names that symbol in
-   either `workspace/symbol` or `documentSymbol` responses, or the
-   LSP indexes the fixture differently. Most likely a fixture-quality
-   issue per lang, not a layer bug.
-
-2. **lua UTF-8 decode error (new)** — `response decode error: body
-   is not valid UTF-8`. lua-language-server emitted bytes the JSON
-   framing layer rejected. Investigate whether the response is a
-   legitimate non-UTF-8 path or a framing-layer corruption.
-
-3. **ruby refs FAIL** — find_symbol PASSes but
-   find_referencing_symbols fails. Either ruby-lsp returns
-   references in a shape symbols.gleam doesn't decode, or the
-   handle's `selection_line/character` is off by one on
-   ruby-lsp's doc-symbol output.
-
-4. **3 LSP timeouts/spawns (elixir, lua, scala)** — separate
-   LSP-side issues. Track outside symbol-layer scope.
-
-## Symbol-layer support (ADR-026, pass 21 — superseded)
-
-Four tools: `find_symbol`, `get_symbols_overview`,
-`find_referencing_symbols`, `edit_at_symbol`. `find_symbol` falls back
-to single-file drill against `scope_uri` when the LSP does not
-advertise `workspaceSymbolProvider`.
-
-| Lang | find_sym | overview | refs | edit | notes |
-|------|----------|----------|------|------|-------|
-| bash       | F | F | F | F | bash-language-server returns legacy `SymbolInformation[]`; decoder rejects shape (real bug) |
-| clojure    | ✓ | ✓ | ✓ | ✓ | |
-| cpp        | F | ✓ | F | F | workspace/symbol returns `/usr/include/...`; drill fails to open URI outside fixture workspace (real bug) |
-| css        | ✓-NF | ✓ | F | F | find_symbol returns `not_found`; fixture `symbol_name_path` "root" doesn't match doc-symbol naming |
-| elixir     | F | ✓ | F | F | next-ls returned `-32603 Timeout` on workspace/symbol |
-| erlang     | ✓-NF | ✓ | F | F | ELP names functions `main/1` (arity-suffixed); fixture path "main" doesn't match exact |
-| gleam      | ✓ | ✓ | ✓ | ✓ | **fallback active** — gleam-lsp doesn't advertise `workspaceSymbolProvider` |
-| go         | F | ✓ | F | F | LSP spawn flaked: "initialize handshake failed: client transport failure" (separate issue) |
-| haskell    | ✓ | ✓ | ✓ | ✓ | |
-| html       | F | F | F | F | vscode-html-language-server documentSymbol shape — decode error like bash |
-| java       | ✓-NF | ✓ | F | F | jdtls names classes with kind suffix; fixture "KafkaClient" doesn't exact-match |
-| json       | ✓ | ✓ | G | ✓ | refs GAP: vscode-json doesn't advertise `referencesProvider` |
-| lua        | F | ✓ | F | F | LSP spawn flaked |
-| markdown   | ✓-NF | ✓ | F | F | fixture path doesn't match marksman doc-symbol naming |
-| perl       | F | F | F | F | perlnavigator legacy shape (like bash) |
-| python     | ✓ | ✓ | ✓ | ✓ | |
-| ruby       | F | ✓ | F | F | LSP spawn flaked |
-| rust       | ✓ | ✓ | ✓ | ✓ | |
-| scala      | F | ✓ | F | F | metals workspace/symbol timed out |
-| terraform  | ✓-NF | ✓ | F | F | terraform-ls names blocks with type prefix |
-| typescript | ✓ | ✓ | ✓ | ✓ | |
-| yaml       | ✓ | ✓ | G | ✓ | refs GAP: yaml-language-server doesn't advertise `referencesProvider` |
-| zig        | ✓ | ✓ | ✓ | ✓ | |
-
-Legend: `✓` = OK. `✓-NF` = OK but returned `not_found` (handle empty, downstream tools skip).
-`F` = FAIL. `G` = GAP (-32601, advertised). `—` = not measured.
-
-**9/23 langs fully green.** Three layer bugs surfaced for follow-up:
-1. Cross-workspace URI drill (cpp) — find_symbol should swallow
-   per-URI session failures and continue with the other URIs.
-2. Legacy `SymbolInformation[]` shape (bash, html, perl) — decoder
-   needs to try both modern and legacy shapes.
-3. Exact-name match in drill (erlang/java/elixir/markdown/terraform)
-   — strip arity/kind decorators when comparing. Alternative: tune
-   per-lang `symbol_name_path` fixtures.
-
-LSP-side flakes (go/lua/ruby spawn handshake) are not symbol-layer
-issues but worth tracking separately.
-
 ## Per-LSP notes
 
 - **jdtls (java)** — cold Gradle build of `kafka` fixture takes 5–10 min;
-  fixture carries `timeout_override_ms=600_000`.  `goto_type_definition`
-  reliably FAILs on the dogfood target (no type at the symbol's
-  position, jdtls error rather than -32601). `call_hierarchy_*` and
+  fixture carries `timeout_override_ms=600_000`. `call_hierarchy_*` and
   `type_hierarchy_supertypes/_subtypes` FAIL on the prepare result —
   jdtls's prepare returns items but the chained calls reject them.
+  ADR-029's `jdt://` flow (navigation into JAR dependencies) is
+  validated by the separate `bin/dogfood-adr-029.py` harness.
 - **gleam-lsp** — `workspace/symbol` and `textDocument/diagnostic`
   serialise the entire build (single-threaded), so on big fixtures both
   consistently timeout at 645s. Does not advertise
@@ -400,15 +279,29 @@ issues but worth tracking separately.
 
 After a `bin/dogfood-23lang.py` run:
 
-1. Parse each `## <lang> (N/M)` section's table into per-lang
-   `{tool → OK | GAP | FAIL}` dicts.
-2. Diff against the rows here; update any flipped cells.
-3. Note any newly-tuned `timeout_override_ms` from
+```bash
+PHAROS_TEST_BIN=burrito_out/pharos_linux_x64 \
+  python3 bin/dogfood-23lang.py --transport stdio --profile all \
+    --label pass-NN-context --out doc/dogfood-pass-NN.md
+
+bin/pass-to-matrix.py doc/dogfood-pass-NN.md
+```
+
+`bin/pass-to-matrix.py` emits both wide tables (per-language and
+symbol-layer) ready to drop into this doc. Then:
+
+1. Replace the body of "Per-language LSP tool support" and
+   "Symbol-layer support" sections with the script's output.
+2. Update the top-of-file pass number + score.
+3. Add a row to the [Score history](#score-history) table.
+4. Note any newly-tuned `timeout_override_ms` from
    `bin/dogfood-23lang.py`'s `TARGETS` list in the per-LSP notes.
-4. Re-run the symbol-cell rollout when new languages get
-   `symbol_name_path` fixtures.
 
 ## Score history
+
+Trend over time. Per-tool cells are NOT preserved per pass — those
+always reflect the current pass (top of file). This table is the
+audit trail for aggregate scores.
 
 | Pass | Date | Score | Note |
 |------|------|-------|------|
@@ -421,4 +314,4 @@ After a `bin/dogfood-23lang.py` run:
 | pass 24  | 2026-05-16 | 519/616 (84.3%) | Empty-ws fallback + LocationLink/null refs decoder + html/markdown fixture tunes (3a91eaf). **17/23 fully green + 3 refs-GAP-legit = 20/23 functional.** Remaining 3 are LSP-side issues. |
 | pass 24h | 2026-05-16 | 519/616 (84.3%) | Same as pass 24 over HTTP transport. **Perfect parity stdio↔http** across all 23 langs × 26 tools. |
 | pass 26  | 2026-05-17 | 536/633 (84.7%) | Post-`memory_audit` regression. 4-way parity: pharos-dev × Burrito-binary × stdio × http all return identical 536/633 with identical lang-level + tool-level failures. Memory probe 17/17 on every combination. |
-| pass 27  | 2026-05-25 | 565/656 (86.1%) | **Pre-v0.1.0 refresh.** First pass against the 0.1.0-stamped binary. +29 cells over pass 26 from `runtime_pid_info` + `runtime_lsp_state` global cells + extra memory-probe variants. 8 langs at 25/27 (clojure, cpp, erlang, haskell, java, python, rust, typescript); 9 at 23/27; elixir lowest at 16/27 (next-ls -32603 Timeout on workspace/symbol, goto_definition, find_references, format_document — LSP-side, not pharos). ADR-029 jdt:// validated separately via `bin/dogfood-adr-029.py`. |
+| pass 27  | 2026-05-25 | 565/656 (86.1%) | **Pre-v0.1.0 refresh.** First pass against the 0.1.0-stamped binary. +29 cells over pass 26 from `runtime_pid_info` + `runtime_lsp_state` global cells + extra memory-probe variants. 21/23 fully symbol-layer green; the per-tool grid above is sourced from this pass. |
