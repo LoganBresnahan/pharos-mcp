@@ -150,7 +150,7 @@ jobs:
         include:
           - { os: ubuntu-latest,     target: linux-x64,     pkg: "@pharos-mcp/linux-x64",     bin: pharos }
           - { os: ubuntu-24.04-arm,  target: linux-arm64,   pkg: "@pharos-mcp/linux-arm64",   bin: pharos }
-          - { os: macos-13,          target: darwin-x64,    pkg: "@pharos-mcp/darwin-x64",    bin: pharos }
+          - { os: macos-15-intel,    target: darwin-x64,    pkg: "@pharos-mcp/darwin-x64",    bin: pharos }
           - { os: macos-latest,      target: darwin-arm64,  pkg: "@pharos-mcp/darwin-arm64",  bin: pharos }
           - { os: windows-latest,    target: win-x64,       pkg: "@pharos-mcp/win-x64",       bin: pharos.exe }
     runs-on: ${{ matrix.os }}
@@ -251,18 +251,35 @@ jobs:
             cp LICENSE "npm/$pkg/LICENSE"
           done
 
+      - name: Resolve npm dist-tag (prerelease → next, otherwise latest)
+        id: npm_tag
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if [[ "$VERSION" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+            echo "Prerelease version detected ($VERSION) → npm dist-tag = next"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "Stable version ($VERSION) → npm dist-tag = latest"
+          fi
+
       - name: Publish 5 platform packages (OIDC, with provenance)
+        env:
+          NPM_TAG: ${{ steps.npm_tag.outputs.tag }}
         run: |
           set -e
           for pkg in "@pharos-mcp/linux-x64" "@pharos-mcp/linux-arm64" "@pharos-mcp/darwin-x64" "@pharos-mcp/darwin-arm64" "@pharos-mcp/win-x64"; do
-            echo "==> Publishing $pkg"
-            (cd "npm/$pkg" && npm publish --provenance --access public)
+            echo "==> Publishing $pkg (tag=$NPM_TAG)"
+            (cd "npm/$pkg" && npm publish --provenance --access public --tag "$NPM_TAG")
           done
 
       - name: Publish main pharos-mcp package
+        env:
+          NPM_TAG: ${{ steps.npm_tag.outputs.tag }}
         run: |
           cd npm/pharos-mcp
-          npm publish --provenance --access public
+          npm publish --provenance --access public --tag "$NPM_TAG"
 
       - name: Create GitHub Release with raw binaries
         env:
@@ -271,9 +288,14 @@ jobs:
         run: |
           set -e
           ls -la burrito_out/
+          prerelease_flag=""
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease_flag="--prerelease"
+          fi
           gh release create "v$VERSION" \
             --title "v$VERSION" \
             --generate-notes \
+            $prerelease_flag \
             burrito_out/pharos_linux_x64 \
             burrito_out/pharos_linux_arm64 \
             burrito_out/pharos_darwin_x64 \
