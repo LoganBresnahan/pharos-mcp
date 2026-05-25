@@ -24,6 +24,7 @@
 
 const { spawn } = require("node:child_process");
 const path = require("node:path");
+const fs = require("node:fs");
 
 const PLATFORM_MAP = {
   "linux-x64": { pkg: "@pharos-mcp/linux-x64", bin: "pharos" },
@@ -73,7 +74,23 @@ function resolve_binary() {
   return path.join(path.dirname(pkg_json_path), "bin", entry.bin);
 }
 
-const child = spawn(resolve_binary(), process.argv.slice(2), {
+const binary_path = resolve_binary();
+
+// Defensive chmod +x. npm strips the executable bit from files not
+// declared in a `bin` field, and our platform sub-packages intentionally
+// don't declare one (the wrapper above is the CLI entrypoint). The
+// postinstall warmup chmod's once, but corp envs running with
+// --ignore-scripts skip postinstall — self-heal here on every launch.
+try {
+  const st = fs.statSync(binary_path);
+  if (!(st.mode & 0o111)) {
+    fs.chmodSync(binary_path, st.mode | 0o755);
+  }
+} catch (_) {
+  // If stat fails, fall through and let spawn surface the real error.
+}
+
+const child = spawn(binary_path, process.argv.slice(2), {
   stdio: "inherit",
   shell: false,
 });

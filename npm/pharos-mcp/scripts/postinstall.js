@@ -88,7 +88,19 @@ function resolve_binary() {
   try {
     const pkg_json_path = require.resolve(entry.pkg + "/package.json");
     const candidate = path.join(path.dirname(pkg_json_path), "bin", entry.bin);
-    return fs.existsSync(candidate) ? candidate : null;
+    if (!fs.existsSync(candidate)) return null;
+
+    // npm strips +x from files not in a `bin` field; platform sub-
+    // packages don't declare one. Set executable bit so the spawn
+    // below works instead of silently soft-failing.
+    try {
+      const st = fs.statSync(candidate);
+      if (!(st.mode & 0o111)) {
+        fs.chmodSync(candidate, st.mode | 0o755);
+      }
+    } catch (_) {}
+
+    return candidate;
   } catch (_err) {
     return null;
   }
