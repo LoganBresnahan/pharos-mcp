@@ -80,6 +80,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-otp28-elixir1.19-release-
 
+      - name: Install zig + xz (required by Burrito for cross-compile)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils
+          xz --version
+        # Burrito invokes zig as a C cross-compiler. Use setup-zig action below.
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2  # pinned to match deps/burrito/lib/burrito.ex @zig_version_expected
+
+      - name: Verify zig + xz on PATH
+        run: |
+          zig version
+          xz --version | head -1
+
       - name: Install mix_gleam archive
         run: mix archive.install --force github LoganBresnahan/mix_gleam
 
