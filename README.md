@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LoganBresnahan/pharos-mcp/main/assets/pharos.png" width="320" alt="pharos">
+</p>
+
 # pharos
 
 **Headless LSP-MCP bridge for AI agents.** Pharos hands the same language
