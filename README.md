@@ -1,14 +1,20 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/LoganBresnahan/pharos-mcp/main/assets/pharos.png" width="320" alt="pharos">
+  <img src="https://raw.githubusercontent.com/LoganBresnahan/pharos-mcp/main/assets/pharos.png" height="120px" alt="pharos" />
 </p>
 
-# pharos
+<h1 align="center">pharos</h1>
+<h2 align="center">v0.1.0</h2>
 
-**Headless LSP-MCP bridge for AI agents.** Pharos hands the same language
-servers your IDE uses (rust-analyzer, gopls, tsserver, pyright, jdtls,
-and 18 more) to any MCP-aware agent — Claude Code, Cursor, ChatGPT
-Desktop, or your own SDK app — so the model can ask about your codebase
-with type-aware navigation instead of grepping.
+<p align="center">
+  <strong>Headless LSP-MCP bridge for AI agents.</strong>
+  <br />
+  Hands the same language servers your IDE uses (rust-analyzer, gopls,
+  tsserver, pyright, jdtls, and 18 more) to any MCP-aware agent — Claude
+  Code, Cursor, ChatGPT Desktop, or your own SDK app — so the model can
+  ask about your codebase with type-aware navigation instead of grepping.
+</p>
+
+---
 
 ## At a glance — Phase 5 v1.0 final benchmark
 

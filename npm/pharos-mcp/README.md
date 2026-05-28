@@ -1,14 +1,19 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/LoganBresnahan/pharos-mcp/main/assets/pharos.png" width="320" alt="pharos">
+  <img src="https://raw.githubusercontent.com/LoganBresnahan/pharos-mcp/main/assets/pharos.png" height="120px" alt="pharos" />
 </p>
 
-# pharos-mcp
+<h1 align="center">pharos-mcp</h1>
+<h2 align="center">v0.1.0</h2>
 
-Headless LSP-MCP bridge for AI agents. Hands rust-analyzer, gopls,
-tsserver, pyright, jdtls, and 19 more language servers to any
-MCP-aware agent (Claude Code, Cursor, ChatGPT Desktop) — so the
-model can navigate your codebase with type-aware queries instead of
-grepping.
+<p align="center">
+  Headless LSP-MCP bridge for AI agents. Hands rust-analyzer, gopls,
+  tsserver, pyright, jdtls, and 19 more language servers to any
+  MCP-aware agent (Claude Code, Cursor, ChatGPT Desktop) — so the
+  model can navigate your codebase with type-aware queries instead of
+  grepping.
+</p>
+
+---
 
 ## Install
 
