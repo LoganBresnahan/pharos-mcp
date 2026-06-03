@@ -22,39 +22,56 @@ import pharos/lsp/instance_track
 import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/registry as lsp_registry
 
-const server_version: String = "0.1.1"
+const server_version: String = "0.1.2"
 
-/// Clear Burrito's extract-cache for pharos. Removes all installed
-/// versions under `<user_cache>/burrito_runtime/_/pharos/`. Returns
-/// the exit code main should propagate.
+/// Clear Burrito's extract-cache for pharos. Removes pharos's
+/// extracted release directories (`pharos_erts-<v>_<vsn>`) under
+/// Burrito's install root (`<XDG_DATA_HOME or ~/.local/share>/.burrito/`
+/// on Linux; `~/Library/Application Support/.burrito/` on macOS;
+/// `%LOCALAPPDATA%\.burrito\` on Windows). Other Burrito-packaged
+/// apps' caches (e.g. `next_ls_*`) are explicitly left untouched.
+/// Returns the exit code main should propagate.
 pub fn purge_cache() -> Int {
-  let path = burrito_cache_root()
-  let size_before = dir_size_bytes(path)
+  let root = burrito_cache_root()
+  let entries = list_pharos_extracts()
+  let total_bytes =
+    list.fold(entries, 0, fn(acc, entry) { acc + dir_size_bytes(entry) })
 
-  case size_before {
-    0 -> {
-      io.println("pharos --purge-cache: no Burrito cache at " <> path)
+  case entries {
+    [] -> {
+      io.println(
+        "pharos --purge-cache: no pharos extracts under " <> root,
+      )
       0
     }
-    bytes -> {
+    _ -> {
       io.println(
         "pharos --purge-cache: removing "
-          <> mb_str(bytes)
-          <> " from "
-          <> path,
+          <> int.to_string(list.length(entries))
+          <> " pharos extract(s) ("
+          <> mb_str(total_bytes)
+          <> ") from "
+          <> root,
       )
-      case rm_rf(path) {
-        Ok(_) -> {
+      let failures =
+        list.fold(entries, 0, fn(acc, entry) {
+          case rm_rf(entry) {
+            Ok(_) -> acc
+            Error(reason) -> {
+              io.println("error: rm -rf " <> entry <> " failed: " <> reason)
+              acc + 1
+            }
+          }
+        })
+      case failures {
+        0 -> {
           io.println(
             "Cleared. Next run will re-extract the Burrito payload "
               <> "(adds ~1-3s to first invocation).",
           )
           0
         }
-        Error(reason) -> {
-          io.println("error: rm -rf failed: " <> reason)
-          2
-        }
+        _ -> 2
       }
     }
   }
@@ -78,9 +95,17 @@ pub fn doctor() -> Int {
   io.println("ERTS version:        " <> beam.erts)
 
   let cache_path = burrito_cache_root()
-  let cache_size = dir_size_bytes(cache_path)
+  let extracts = list_pharos_extracts()
+  let cache_size =
+    list.fold(extracts, 0, fn(acc, entry) { acc + dir_size_bytes(entry) })
   io.println("Burrito cache:       " <> cache_path)
-  io.println("Burrito cache size:  " <> mb_str(cache_size))
+  io.println(
+    "Burrito cache size:  "
+      <> mb_str(cache_size)
+      <> " across "
+      <> int.to_string(list.length(extracts))
+      <> " pharos extract(s)",
+  )
   io.println("")
 
   // Section: resolved Config
@@ -446,6 +471,15 @@ fn beam_version_info() -> BeamInfo {
 
 @external(erlang, "pharos_runtime_ffi", "burrito_cache_root")
 fn burrito_cache_root() -> String
+
+/// Enumerate pharos's per-version Burrito extract directories under
+/// the shared `.burrito` root. Returns absolute paths as a Gleam list
+/// of strings. Empty list if the root does not exist OR contains no
+/// `pharos_*` entries (e.g. running under `mix start` or after a
+/// purge). Filters out sibling apps' caches (`next_ls_*` etc.) by
+/// construction.
+@external(erlang, "pharos_runtime_ffi", "list_pharos_extracts")
+fn list_pharos_extracts() -> List(String)
 
 @external(erlang, "pharos_fs_ffi", "rm_rf")
 fn rm_rf(path: String) -> Result(Nil, String)

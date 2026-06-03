@@ -339,3 +339,82 @@ fn explicit_exit() -> Int
 @external(erlang, "pharos_runtime_ffi", "wildcard")
 fn wildcard_atom() -> Dynamic
 
+// -- Burrito cache path FFI (v0.1.2 fix) ---------------------------------
+//
+// Pin the path-shape contract burrito_cache_root/0 + list_pharos_extracts/0
+// must satisfy. The pre-v0.1.2 FFI used filename:basedir(user_cache, ...)
+// joined with "burrito_runtime/_/pharos" — a path Burrito never creates.
+// These tests fail loudly if anyone reintroduces that bug class.
+
+@external(erlang, "pharos_runtime_ffi", "burrito_cache_root")
+fn burrito_cache_root() -> String
+
+@external(erlang, "pharos_runtime_ffi", "list_pharos_extracts")
+fn list_pharos_extracts() -> List(String)
+
+@external(erlang, "pharos_fs_ffi", "setenv")
+fn setenv(key: String, value: String) -> Nil
+
+@external(erlang, "pharos_fs_ffi", "mkdir_p")
+fn mkdir_p(path: String) -> Result(Nil, String)
+
+@external(erlang, "pharos_fs_ffi", "rm_rf")
+fn rm_rf(path: String) -> Result(Nil, String)
+
+@external(erlang, "pharos_fs_ffi", "atomic_write_text")
+fn atomic_write_text(path: String, text: String) -> Result(Nil, String)
+
+pub fn burrito_cache_root_shape_test() {
+  // Must end with ".burrito" and must never reference the old buggy
+  // segments anywhere in the path.
+  let path = burrito_cache_root()
+  string.ends_with(path, ".burrito") |> should.be_true
+  string.contains(path, "burrito_runtime") |> should.be_false
+  string.contains(path, "_/pharos") |> should.be_false
+  string.contains(path, ".cache/.burrito") |> should.be_false
+}
+
+pub fn burrito_cache_root_honors_pharos_install_dir_test() {
+  // Override should win unconditionally.
+  setenv("PHAROS_INSTALL_DIR", "/tmp/pharos-test-override")
+  let path = burrito_cache_root()
+  should.equal(path, "/tmp/pharos-test-override/.burrito")
+  // Empty-string env should fall back to default (same semantics as
+  // unset, per the FFI's contract).
+  setenv("PHAROS_INSTALL_DIR", "")
+  let default_path = burrito_cache_root()
+  string.contains(default_path, "/tmp/pharos-test-override") |> should.be_false
+  string.ends_with(default_path, ".burrito") |> should.be_true
+}
+
+pub fn list_pharos_extracts_missing_root_test() {
+  // Point at a path that does not exist; expect empty list, no crash.
+  setenv("PHAROS_INSTALL_DIR", "/tmp/pharos-test-does-not-exist-xyz")
+  let extracts = list_pharos_extracts()
+  should.equal(list.length(extracts), 0)
+  setenv("PHAROS_INSTALL_DIR", "")
+}
+
+pub fn list_pharos_extracts_filters_test() {
+  // Stage a scratch .burrito root with two pharos_* dirs, one sibling
+  // app dir, and one stray regular file. Confirm list_pharos_extracts
+  // returns only the two pharos_* directories.
+  let scratch_root = "/tmp/pharos-test-list-filter"
+  let burrito_dir = scratch_root <> "/.burrito"
+  let _ = rm_rf(scratch_root)
+  let assert Ok(_) = mkdir_p(burrito_dir <> "/pharos_erts-16.1_0.1.2")
+  let assert Ok(_) = mkdir_p(burrito_dir <> "/pharos_erts-16.1_0.1.1")
+  let assert Ok(_) = mkdir_p(burrito_dir <> "/next_ls_erts-15.2_0.23.4")
+  let assert Ok(_) = atomic_write_text(burrito_dir <> "/stray.txt", "")
+
+  setenv("PHAROS_INSTALL_DIR", scratch_root)
+  let extracts = list_pharos_extracts()
+  should.equal(list.length(extracts), 2)
+  list.each(extracts, fn(p) {
+    string.starts_with(p, burrito_dir <> "/pharos_") |> should.be_true
+  })
+
+  setenv("PHAROS_INSTALL_DIR", "")
+  let _ = rm_rf(scratch_root)
+}
+

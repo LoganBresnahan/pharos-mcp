@@ -5,7 +5,7 @@
 # does not consult Mix's env-scoped deps when classifying imports).
 
 name = "pharos"
-version = "0.1.1"
+version = "0.1.2"
 target = "erlang"
 description = "MCP server bridging LLMs to LSP servers."
 licences = ["AGPL-3.0-only"]

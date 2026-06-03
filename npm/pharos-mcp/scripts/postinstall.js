@@ -107,14 +107,42 @@ function resolve_binary() {
 }
 
 function cache_root() {
-  // Mirrors Burrito's default `<user_cache>/.burrito` location.
-  // Linux/macOS: $XDG_DATA_HOME or ~/.local/share. Windows: %APPDATA%.
+  // Mirrors Burrito's per-platform install location (Zig 0.13's
+  // fs.getAppDataDir(".burrito") — see
+  // deps/burrito/src/wrapper.zig get_base_install_dir).
+  //
+  //   Linux  : $XDG_DATA_HOME/.burrito  or  ~/.local/share/.burrito
+  //   macOS  : ~/Library/Application Support/.burrito
+  //   Windows: %LOCALAPPDATA%\.burrito   (NOT %APPDATA% — Zig reads LOCALAPPDATA)
+  //
+  // Honors PHAROS_INSTALL_DIR like Burrito's wrapper.zig
+  // {UPPER_RELEASE_NAME}_INSTALL_DIR override.
+  const override = process.env.PHAROS_INSTALL_DIR;
+  if (override) return path.join(override, ".burrito");
+
   if (process.platform === "win32") {
-    const appdata = process.env.APPDATA;
-    if (!appdata) return null;
-    return path.join(appdata, ".burrito");
+    // LOCALAPPDATA = %USERPROFILE%\AppData\Local on Windows. Fall back
+    // to deriving it from USERPROFILE if unset, NOT to APPDATA (which
+    // is %USERPROFILE%\AppData\Roaming — wrong dir).
+    const localAppData =
+      process.env.LOCALAPPDATA ||
+      (process.env.USERPROFILE &&
+        path.join(process.env.USERPROFILE, "AppData", "Local"));
+    if (!localAppData) return null;
+    return path.join(localAppData, ".burrito");
   }
 
+  if (process.platform === "darwin") {
+    return path.join(
+      os.homedir(),
+      "Library",
+      "Application Support",
+      ".burrito"
+    );
+  }
+
+  // Linux + other unix-likes: XDG Base Directory Specification.
+  // Treat empty XDG_DATA_HOME as unset.
   const xdg = process.env.XDG_DATA_HOME;
   if (xdg) return path.join(xdg, ".burrito");
   return path.join(os.homedir(), ".local", "share", ".burrito");

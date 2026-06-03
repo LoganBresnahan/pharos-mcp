@@ -48,7 +48,7 @@ import pharos/supervisor as root_supervisor
 import pharos/tools/session
 import pharos/workspace_root
 
-const server_version: String = "0.1.1"
+const server_version: String = "0.1.2"
 
 pub fn main() -> Nil {
   // Set ERL_CRASH_DUMP target before anything else so a BEAM-level

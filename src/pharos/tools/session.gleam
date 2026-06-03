@@ -984,7 +984,7 @@ fn build_initialize_params(
       "clientInfo",
       json.object([
         #("name", json.string("pharos")),
-        #("version", json.string("0.1.1")),
+        #("version", json.string("0.1.2")),
       ]),
     ),
     #("initializationOptions", server.initialization_options),

@@ -20,7 +20,7 @@ defmodule Pharos.MixProject do
   # silently reuses the first build's extracted beam files — a known
   # foot-gun that bit us once during ADR-029 dogfood. Suffixing the
   # version per build forces a fresh extract automatically.
-  @version_base "0.1.1"
+  @version_base "0.1.2"
 
   defp version do
     case System.get_env("PHAROS_RELEASE") do

@@ -61,6 +61,7 @@
     session_overrides_load/0,
     argv/0,
     burrito_cache_root/0,
+    list_pharos_extracts/0,
     beam_version_info/0,
     self_mailbox_len/0,
     pool_diag/1,
@@ -952,22 +953,96 @@ session_overrides_load() ->
 argv() ->
     [unicode:characters_to_binary(A) || A <- init:get_plain_arguments()].
 
-%% Burrito's per-app extract-cache root: `<user_cache>/burrito_runtime/_/pharos`
-%% covers every installed version. Used by `pharos --purge-cache` to
-%% clean up extracted ERTS+BEAM payloads from prior runs.
+%% Burrito's install base directory: the `.burrito` root that
+%% contains versioned per-app extract dirs like
+%% `pharos_erts-16.1_0.1.2`. SHARED with other Burrito apps
+%% (e.g. next_ls_erts-...), so callers MUST narrow operations to
+%% `pharos_*` children — see list_pharos_extracts/0.
 %%
-%% On Linux: ~/.cache/burrito_runtime/_/pharos/
-%% On macOS: ~/Library/Caches/burrito_runtime/_/pharos/
-%% On Windows: <LOCALAPPDATA>\burrito_runtime\_\pharos\
+%% Mirrors the path resolution in deps/burrito/src/wrapper.zig
+%% get_base_install_dir, which on each platform calls Zig 0.13's
+%% fs.getAppDataDir(".burrito"):
 %%
-%% Returns the path as a binary even when the directory does not yet
-%% exist (e.g. running under `mix start` rather than the wrapped
+%%   Linux  : $XDG_DATA_HOME/.burrito  or  $HOME/.local/share/.burrito
+%%   macOS  : $HOME/Library/Application Support/.burrito
+%%   Windows: %LOCALAPPDATA%\.burrito   (NOT %APPDATA%; Zig reads LOCALAPPDATA)
+%%
+%% Env override: if PHAROS_INSTALL_DIR is set non-empty, returns
+%% `<PHAROS_INSTALL_DIR>/.burrito`. Matches the
+%% `{UPPER_RELEASE_NAME}_INSTALL_DIR` env var Burrito's wrapper.zig
+%% honors (deps/burrito/src/wrapper.zig:139).
+%%
+%% Returns the path as a binary even when the directory does not
+%% yet exist (e.g. running under `mix start` rather than the wrapped
 %% binary). Caller is expected to check `filelib:is_dir/1` before
-%% trying to delete.
+%% sizing or deleting.
 burrito_cache_root() ->
-    Base = filename:basedir(user_cache, "burrito_runtime"),
-    Path = filename:join([Base, "_", "pharos"]),
-    list_to_binary(Path).
+    Base = case os:getenv("PHAROS_INSTALL_DIR") of
+        false    -> default_burrito_base();
+        ""       -> default_burrito_base();
+        Override -> Override
+    end,
+    list_to_binary(filename:join(Base, ".burrito")).
+
+default_burrito_base() ->
+    case os:type() of
+        {win32, _} ->
+            %% Burrito on Windows reads LOCALAPPDATA (Local), not APPDATA
+            %% (Roaming) — via Zig 0.13's getAppDataDir.windows branch.
+            case os:getenv("LOCALAPPDATA") of
+                false ->
+                    %% LOCALAPPDATA unset is rare; fall back to
+                    %% %USERPROFILE%\AppData\Local rather than %APPDATA%
+                    %% (which is the wrong dir).
+                    case os:getenv("USERPROFILE") of
+                        false -> "";
+                        UserProfile ->
+                            filename:join([UserProfile, "AppData", "Local"])
+                    end;
+                Local -> Local
+            end;
+        {unix, darwin} ->
+            case os:getenv("HOME") of
+                false -> "";
+                Home  -> filename:join([Home, "Library", "Application Support"])
+            end;
+        {unix, _} ->
+            %% Linux + BSDs etc.: XDG Base Directory Specification.
+            %% Treat empty XDG_DATA_HOME as unset (Zig 0.13 actually joins
+            %% "" + ".burrito" -> "/.burrito"; we deliberately diverge —
+            %% the diagnostic surface is better served by the default).
+            case os:getenv("XDG_DATA_HOME") of
+                false   -> linux_default_data_home();
+                ""      -> linux_default_data_home();
+                XdgData -> XdgData
+            end
+    end.
+
+linux_default_data_home() ->
+    case os:getenv("HOME") of
+        false -> "";
+        Home  -> filename:join([Home, ".local", "share"])
+    end.
+
+%% Enumerate pharos's per-version extract directories under the
+%% Burrito cache root. Burrito names these `<release>_erts-<v>_<v>`,
+%% e.g. `pharos_erts-16.1_0.1.2` (deps/burrito/src/wrapper.zig:163).
+%% Other Burrito apps (e.g. next_ls_erts-...) sit alongside as
+%% siblings — NEVER rm -rf the parent; only entries from this list.
+%%
+%% Returns a list of absolute-path binaries. Empty list if the cache
+%% root does not exist OR contains no pharos_* entries.
+list_pharos_extracts() ->
+    RootBin = burrito_cache_root(),
+    RootStr = binary_to_list(RootBin),
+    case file:list_dir(RootStr) of
+        {error, _} -> [];
+        {ok, Names} ->
+            [ list_to_binary(filename:join(RootStr, N))
+              || N <- Names,
+                 lists:prefix("pharos_", N),
+                 filelib:is_dir(filename:join(RootStr, N)) ]
+    end.
 
 %% BEAM + ERTS version snapshot for `pharos --doctor`. Every value
 %% is a binary so the Gleam side can render without atom-to-string

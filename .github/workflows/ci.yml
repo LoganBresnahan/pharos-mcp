@@ -74,6 +74,18 @@ jobs:
           fossil_grep '\.rs files;'                     'hardcoded file-type message — use "unsupported file type:" instead'
           fossil_grep 'file:///home/user/project/src/main\.rs'  'specific rust example URI in a tool description — use file:///path/to/file'
 
+          # v0.1.2 fix: burrito_cache_root used the wrong XDG dir AND
+          # wrong subdir scheme. Forbid the bug class explicitly.
+          fossil_grep 'filename:basedir\(user_cache'    'wrong XDG var for the Burrito cache path — Burrito uses user_data (XDG_DATA_HOME), not user_cache (XDG_CACHE_HOME)'
+          fossil_grep 'burrito_runtime'                 'fossil path segment — Burrito does not use a `burrito_runtime` subdir'
+
+          # Postinstall.js Windows branch: must read LOCALAPPDATA, not
+          # APPDATA. Allow bare `process.env.APPDATA` to appear nowhere.
+          if grep -nE 'process\.env\.APPDATA([^_A-Z]|$)' npm/pharos-mcp/scripts/postinstall.js 2>/dev/null ; then
+            echo "::error::postinstall.js references process.env.APPDATA — Burrito uses LOCALAPPDATA on Windows. Switch the var."
+            fail=1
+          fi
+
           if [ "$fail" -ne 0 ]; then
             exit 1
           fi

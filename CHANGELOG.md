@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-03
+
+Bug-fix patch release. Repairs `pharos --doctor` and
+`pharos --purge-cache`, both of which silently pointed at a path
+Burrito never creates on every supported platform. No tool-surface
+or MCP-protocol changes.
+
+### Fixed
+
+- **`pharos --doctor`** now reports the real Burrito cache root
+  (`$XDG_DATA_HOME/.burrito` or `~/.local/share/.burrito` on Linux,
+  `~/Library/Application Support/.burrito` on macOS,
+  `%LOCALAPPDATA%\.burrito` on Windows) and a non-zero cache size
+  after a warm run. Previously printed
+  `~/.cache/burrito_runtime/_/pharos` (a directory Burrito never
+  creates) and always reported `0 bytes`, regardless of how warm the
+  real cache was. The doctor line is the operator-facing diagnostic
+  for cache state, so the old output was the worst kind of cosmetic
+  bug — it confidently lied.
+- **`pharos --purge-cache`** actually deletes pharos's extracted
+  release directories now. Previously no-op'd against the same
+  phantom path while the real ~50 MB cache persisted untouched, with
+  output that looked like success (`no Burrito cache at ...; exit 0`).
+- **Cross-app isolation guarantee on purge:** `--purge-cache` now
+  scopes its `rm -rf` to entries starting with `pharos_` under the
+  shared `.burrito` root. Caches belonging to other Burrito-packaged
+  tools (`next_ls_*`, etc.) are explicitly left alone. Stray
+  non-directory files in the shared root also survive purge.
+- **`npm/pharos-mcp/scripts/postinstall.js` `cache_root()`** now
+  matches the FFI on every platform: adds a macOS branch (was falling
+  through to the Linux path, so every macOS install was looking at
+  the wrong dir for the cache-warmed check), and switches Windows
+  from `%APPDATA%` (Roaming) to `%LOCALAPPDATA%` (Local) to match Zig
+  0.13's `fs.getAppDataDir`, which is what Burrito's `wrapper.zig`
+  actually calls.
+
+### Added
+
+- `pharos_runtime_ffi:list_pharos_extracts/0` — enumerates
+  pharos-only entries under the shared Burrito root so callers can
+  size/clean only this app's extracts. Honors the
+  `PHAROS_INSTALL_DIR` env override (matches Burrito's
+  `{UPPER_RELEASE_NAME}_INSTALL_DIR` convention from
+  `deps/burrito/src/wrapper.zig`).
+- Unit tests in `test/runtime_ffi_test.gleam` pinning the cache-root
+  path shape (must end with `.burrito`, must not contain
+  `burrito_runtime`), the `PHAROS_INSTALL_DIR` override semantics,
+  the missing-root behavior (empty list, no crash), and the
+  `list_pharos_extracts` filtering (accepts `pharos_*` directories,
+  rejects sibling-app directories like `next_ls_*`, rejects stray
+  files).
+- CI grep-guard step forbidding the bug-class patterns
+  `filename:basedir(user_cache, …)` and `burrito_runtime` anywhere in
+  source, plus bare `process.env.APPDATA` in postinstall. Catches the
+  whole fossil class on re-entry, not just the literal old strings.
+
+### Internal
+
+- `pharos_runtime_ffi:burrito_cache_root/0` rewritten to mirror
+  Burrito's `deps/burrito/src/wrapper.zig` byte-for-byte across all
+  three platforms. Platform branches use `os:type/0` directly rather
+  than `filename:basedir/2`, because Erlang's `user_data` returns
+  `%APPDATA%` on Windows while Zig 0.13 (and therefore Burrito) reads
+  `%LOCALAPPDATA%`.
+- Bumped `@version_base` (mix.exs), `gleam.toml`, the four
+  `server_version` constants (src/pharos.gleam, src/pharos/cli.gleam,
+  src/pharos/mcp/server.gleam, plus inline literals in
+  src/pharos/smoke.gleam and src/pharos/tools/session.gleam) from
+  `0.1.1` to `0.1.2`.
+
 ## [0.1.1] — 2026-06-03
 
 Fossil-fix patch release. No behavior changes; only error-message
@@ -120,6 +190,7 @@ Initial public release. Headless LSP↔MCP bridge for AI agents.
   project; pass explicit languages (`pharos warm rust go`) for
   precise control.
 
-[Unreleased]: https://github.com/LoganBresnahan/pharos-mcp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/LoganBresnahan/pharos-mcp/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.1.2
 [0.1.1]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.1.0
