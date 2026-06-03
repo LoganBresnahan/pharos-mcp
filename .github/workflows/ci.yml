@@ -34,9 +34,9 @@ jobs:
             deps
             _build
             build
-          key: ${{ runner.os }}-otp28-elixir1.19-mix-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-otp28-elixir1.19-gleam1.17-mix-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-otp28-elixir1.19-mix-
+            ${{ runner.os }}-otp28-elixir1.19-gleam1.17-mix-
 
       - name: Install mix_gleam archive (LoganBresnahan/mix_gleam fork)
         run: mix archive.install --force github LoganBresnahan/mix_gleam

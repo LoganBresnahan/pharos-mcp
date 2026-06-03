@@ -76,9 +76,9 @@ jobs:
             deps
             _build
             build
-          key: ${{ runner.os }}-otp28-elixir1.19-release-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-otp28-elixir1.19-gleam1.17-release-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-otp28-elixir1.19-release-
+            ${{ runner.os }}-otp28-elixir1.19-gleam1.17-release-
 
       - name: Install zig + xz (required by Burrito for cross-compile)
         run: |
