@@ -47,6 +47,38 @@ jobs:
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors
 
+      - name: Fossil guard — fail if v0.1-era hardcoded strings creep back in
+        run: |
+          # Guards against the specific fossil phrases removed in v0.1.1.
+          # rust-analyzer, .rs, etc. appear legitimately throughout the
+          # codebase (rust IS one of the wrapped LSPs); we only forbid the
+          # known-bad phrases that were user-visible language assumptions.
+          set -e
+          fail=0
+          fossil_grep() {
+            local pattern="$1"
+            local hint="$2"
+            local hits
+            hits=$(grep -rEn --include='*.gleam' --include='*.erl' --include='*.ex' \
+                --exclude-dir=deps --exclude-dir=_build --exclude-dir=build \
+                "$pattern" src/ lib/ 2>/dev/null || true)
+            if [ -n "$hits" ]; then
+              echo "::error::Forbidden fossil pattern '$pattern' — $hint"
+              echo "$hits"
+              fail=1
+            fi
+          }
+          fossil_grep '"rust-analyzer failed'           'hardcoded server name in user-visible error message — use "LSP spawn failed:" instead'
+          fossil_grep 'v0\.1 only'                      'version-gated capability claim — drop the v0.1 qualifier from user-visible strings'
+          fossil_grep '"v0\.1 '                         'v0.1-era framing in a user-visible string literal — make it version-neutral'
+          fossil_grep '\.rs files;'                     'hardcoded file-type message — use "unsupported file type:" instead'
+          fossil_grep 'file:///home/user/project/src/main\.rs'  'specific rust example URI in a tool description — use file:///path/to/file'
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Fossil guard passed."
+
       - name: Run tests
         run: mix gleam.test
 

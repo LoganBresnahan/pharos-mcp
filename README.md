@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">pharos</h1>
-<h2 align="center">v0.1.0</h2>
+<h2 align="center">v0.1.1</h2>
 
 <p align="center">
   <strong>Headless LSP-MCP bridge for AI agents.</strong>
@@ -106,7 +106,7 @@ chmod +x ~/.local/bin/pharos
 Or via the GitHub CLI:
 
 ```bash
-gh release download v0.1.0 --repo LoganBresnahan/pharos-mcp -p 'pharos_linux_x64'
+gh release download v0.1.1 --repo LoganBresnahan/pharos-mcp -p 'pharos_linux_x64'
 chmod +x pharos_linux_x64
 ```
 

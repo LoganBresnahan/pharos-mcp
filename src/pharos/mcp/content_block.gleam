@@ -1,8 +1,8 @@
 //// MCP content blocks.
 ////
 //// Content blocks are the unit of tool output. The MCP spec defines
-//// `text`, `image`, and `resource` variants. v0.1 only emits text;
-//// the other variants are added when a tool needs them.
+//// `text`, `image`, and `resource` variants. Pharos currently emits
+//// only text; the other variants are added when a tool needs them.
 
 import gleam/json.{type Json}
 

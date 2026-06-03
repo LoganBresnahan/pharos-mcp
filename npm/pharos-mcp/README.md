@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">pharos-mcp</h1>
-<h2 align="center">v0.1.0</h2>
+<h2 align="center">v0.1.1</h2>
 
 <p align="center">
   Headless LSP-MCP bridge for AI agents. Hands rust-analyzer, gopls,

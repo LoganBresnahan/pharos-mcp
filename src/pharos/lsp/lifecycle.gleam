@@ -57,9 +57,10 @@ pub type InitializeError =
 /// raw `result` value the server responded with — typically the
 /// server's capabilities object.
 ///
-/// `request_id` should be a number the caller knows is unused. v0.1
-/// senders pass 0 because no other request has been sent on the
-/// connection yet.
+/// `request_id` should be a number the caller knows is unused.
+/// Callers typically pass 0 because `initialize` is the first
+/// request on the connection; any id the caller knows is unused
+/// works.
 ///
 /// `init_params` is the JSON object to send as `params`. Build it
 /// with `gleam/json.object(...)` to include `processId`, `rootUri`,

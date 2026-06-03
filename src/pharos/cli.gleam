@@ -22,7 +22,7 @@ import pharos/lsp/instance_track
 import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/registry as lsp_registry
 
-const server_version: String = "0.1.0"
+const server_version: String = "0.1.1"
 
 /// Clear Burrito's extract-cache for pharos. Removes all installed
 /// versions under `<user_cache>/burrito_runtime/_/pharos/`. Returns

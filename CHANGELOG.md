@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-06-03
+
+Fossil-fix patch release. No behavior changes; only error-message
+and tool-description wording. The v0.1.0 → v0.1.1 ship gates
+defined in `doc/m14-test-plan.md` (Gate 1 dogfood-23lang + Gate 2
+owner MCP-host dogfood) were waived for this release because the
+patch is strictly wording.
+
+### Fixed
+
+- `get_diagnostics` and other tools routed through
+  `describe_diagnostics_error` no longer say
+  `rust-analyzer failed to spawn:` when a non-Rust LSP fails to
+  start. The message is now language-neutral:
+  `LSP spawn failed: <reason>`. Matches the wording already used by
+  `describe_session_error` in `src/pharos/tools/session.gleam`.
+- `get_diagnostics` no longer claims
+  `v0.1 only supports .rs files; got: <uri>` when called on a URI
+  whose extension has no registered language. Replaced with the
+  neutral `unsupported file type: <uri>` used elsewhere.
+- Tool JSON-schema descriptions for `goto_definition`,
+  `get_diagnostics`, and one sibling tool no longer use
+  `file:///home/user/project/src/main.rs` as the example file URI;
+  replaced with the language-neutral `file:///path/to/file`.
+- `timeout_ms` description on `get_diagnostics` no longer singles
+  out `gopls and rust-analyzer` as the slow LSPs.
+- Internal doc comments in `src/pharos/lsp/lifecycle.gleam`,
+  `src/pharos/mcp/content_block.gleam`, and
+  `src/pharos/lsp/framing.gleam` no longer frame their conventions
+  as "v0.1 only" behaviors.
+
+### Added
+
+- CI grep-guard that fails the build if a non-test source file
+  introduces hardcoded `rust-analyzer` / `v0.1 ` / `main.rs`
+  outside an allowlist. Prevents the fossil class from returning.
+- Unit tests under `test/mcp/server_error_messages_test.gleam`
+  pinning the language-neutral wording so it cannot regress
+  silently.
+
+### Internal
+
+- `describe_diagnostics_error` is now `pub` so the new test module
+  can import it. Error rendering is part of the public MCP-client
+  contract anyway.
+- Bumped `@version_base` (mix.exs), `gleam.toml`, the four
+  `server_version` constants (src/pharos.gleam, src/pharos/cli.gleam,
+  src/pharos/mcp/server.gleam, plus matching inline literals in
+  src/pharos/smoke.gleam and src/pharos/tools/session.gleam) from
+  `0.1.0` to `0.1.1`.
+
 ## [0.1.0] — 2026-05-25
 
 Initial public release. Headless LSP↔MCP bridge for AI agents.
@@ -69,5 +120,6 @@ Initial public release. Headless LSP↔MCP bridge for AI agents.
   project; pass explicit languages (`pharos warm rust go`) for
   precise control.
 
-[Unreleased]: https://github.com/LoganBresnahan/pharos-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/LoganBresnahan/pharos-mcp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.1.0

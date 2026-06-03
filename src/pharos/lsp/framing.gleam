@@ -9,8 +9,8 @@
 //// ```
 ////
 //// Other headers (Content-Type, etc.) may appear between
-//// `Content-Length` and the empty line; v0.1 reads `Content-Length`
-//// and ignores everything else gracefully.
+//// `Content-Length` and the empty line; the parser reads
+//// `Content-Length` and ignores everything else gracefully.
 ////
 //// The parser is byte-buffer based: caller maintains a `BitArray`
 //// buffer, appends each new chunk read from the LSP's stdout, and

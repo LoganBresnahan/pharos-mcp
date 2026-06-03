@@ -59,7 +59,7 @@ const protocol_version: String = "2024-11-05"
 
 const server_name: String = "pharos"
 
-const server_version: String = "0.1.0"
+const server_version: String = "0.1.1"
 
 /// JSON-RPC request id — string or integer per spec.
 pub type Id {
@@ -431,7 +431,7 @@ fn position_arg_schema() -> Json {
               "description",
               json.string(
                 "file:// URI of the source file. Example: "
-                  <> "file:///home/user/project/src/main.rs",
+                  <> "file:///path/to/file",
               ),
             ),
           ]),
@@ -726,7 +726,7 @@ fn get_diagnostics_tool_definition() -> Json {
                   "description",
                   json.string(
                     "file:// URI of the source file to inspect. "
-                      <> "Example: file:///home/user/project/src/main.rs",
+                      <> "Example: file:///path/to/file",
                   ),
                 ),
               ]),
@@ -740,9 +740,8 @@ fn get_diagnostics_tool_definition() -> Json {
                   json.string(
                     "Optional. How long to wait for diagnostics after the "
                       <> "LSP initialize handshake. Defaults to 20000ms — "
-                      <> "gopls and rust-analyzer commonly take 10-15s on "
-                      <> "cold workspaces before they emit the first "
-                      <> "publishDiagnostics.",
+                      <> "cold LSP workspaces commonly take 10-15s before "
+                      <> "they emit the first publishDiagnostics.",
                   ),
                 ),
               ]),
@@ -1804,7 +1803,7 @@ fn goto_implementation_tool_definition() -> Json {
                   "description",
                   json.string(
                     "file:// URI of the source file. Example: "
-                    <> "file:///home/user/project/src/main.rs",
+                    <> "file:///path/to/file",
                   ),
                 ),
               ]),
@@ -3033,19 +3032,19 @@ fn decode_workspace_symbols_arguments(
   }
 }
 
-fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
+pub fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
   case err {
     diagnostics.NotAFileUri(uri) -> "uri must start with file:// — got: " <> uri
     diagnostics.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     diagnostics.SpawnFailed(reason) ->
-      "rust-analyzer failed to spawn: " <> reason
+      "LSP spawn failed: " <> reason
     diagnostics.HandshakeFailed(reason) ->
       "LSP initialize handshake failed: " <> reason
     diagnostics.TransportFailed(reason) ->
       "LSP transport error: " <> reason
     diagnostics.UnsupportedFileType(uri) ->
-      "v0.1 only supports .rs files; got: " <> uri
+      "unsupported file type: " <> uri
     diagnostics.UnknownCustomUriScheme(uri) ->
       "custom URI scheme not registered for any language: " <> uri
     diagnostics.NoActiveSessionForLanguage(uri, language) ->
