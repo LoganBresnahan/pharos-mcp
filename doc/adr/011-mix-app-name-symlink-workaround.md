@@ -1,6 +1,9 @@
 # 011. Local Mix.Task workaround for hex package name vs OTP application name mismatch
 
-**Status:** Accepted
+**Status:** Accepted; upstream fix landed in Gleam 1.17.0
+([gleam-lang/gleam#5702](https://github.com/gleam-lang/gleam/pull/5702),
+merged 2026-05-11). Workaround stays until `mist` / `glisten` /
+`gramps` republish under Gleam ≥1.17.0 (see "Retirement" below).
 **Date:** 2026-05-04
 
 ## Context
@@ -168,3 +171,42 @@ shells out to a fresh `mix` should strip the parent env.
 - **Hardcoded list of `hpack_erl` instead of dynamic detection.** Considered. Marginally simpler code; loses zero-maintenance behavior when ecosystem evolves. Dynamic detection has equivalent runtime cost (filesystem walk is microseconds) and is more robust.
 - **Hook on `deps.loadpaths` instead of `deps.compile`.** Considered. `deps.loadpaths` runs validation that we are trying to satisfy; hooking earlier risks ordering issues with deps that have not yet been compiled on a fresh build. `deps.compile` is the natural seam.
 - **Hook as a Burrito `releases` step instead of a Mix alias.** Considered. Would only fire on `mix release`, leaving `mix compile` and `mix test` broken in dev/CI. Insufficient coverage.
+
+## Retirement
+
+Added 2026-06-03. The upstream root cause is fixed in **Gleam
+1.17.0** via [gleam-lang/gleam#5702](https://github.com/gleam-lang/gleam/pull/5702)
+(*"Fix gleam publish writing wrong OTP app name in metadata"*).
+Pharos's CI/release toolchain is pinned to Gleam 1.17.0 as of this
+revision, but the workaround in `lib/mix/tasks/pharos/fix_app_names.ex`
+must stay in place until the **published Hex tarballs** for our
+transitive deps are republished under Gleam ≥1.17.0. The bad
+metadata is baked into the Hex registry entries for
+`mist 6.0.3` / `glisten 9.0.1` / `gramps 6.x`; bumping the pharos
+toolchain alone does not rewrite those tarballs.
+
+Retirement steps, in order, once any of `mist` / `glisten` /
+`gramps` publishes a fresh version on Gleam ≥1.17.0:
+
+1. Bump the affected dep in `mix.exs` and `gleam.toml`; run
+   `mix deps.get` and inspect `mix.lock` — the `[hex: :hpack_erl, ...]`
+   entries become `[hex: :hpack, ...]` (or the dep stops carrying
+   the broken metadata at all).
+2. Comment out `&fix_app_names/1` in the `deps.compile` alias in
+   `mix.exs`. Run `mix compile` from a fresh `_build/`. If it
+   succeeds, the workaround is no longer load-bearing for this
+   dep set.
+3. Delete `lib/mix/tasks/pharos/fix_app_names.ex` (~50 LOC) and
+   the alias entry that referenced it.
+4. Drop the `LoganBresnahan/mix_gleam` archive override in
+   `.github/workflows/ci.yml` and `.github/workflows/release.yml`;
+   switch the `mix archive.install` lines to upstream
+   `mix_gleam`.
+5. Update this ADR's `Status:` to
+   `Superseded by gleam-lang/gleam#5702 (released in Gleam 1.17.0);
+   workaround removed 20XX-XX-XX`.
+
+Retirement is not load-bearing for any pharos release; it only
+removes dead code once the ecosystem catches up. Track it on the
+v0.2.0+ backlog rather than blocking on any single mist/glisten/gramps
+release.
