@@ -72,4 +72,4 @@ To skip warmup (e.g. in CI): set `PHAROS_SKIP_POSTINSTALL=1`.
 
 ## License
 
-AGPL-3.0-only. Commercial licensing available — see [COMMERCIAL.md](https://github.com/LoganBresnahan/pharos-mcp/blob/main/COMMERCIAL.md).
+Apache-2.0. See [LICENSE](https://github.com/LoganBresnahan/pharos-mcp/blob/main/LICENSE).

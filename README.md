@@ -857,26 +857,20 @@ bench/crash-repro/run-all.sh
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR flow, including
-the CLA.
+DCO sign-off.
 
 [↑ top](#pharos)
 
 ## License
 
-Pharos is dual-licensed.
+[Apache License 2.0](LICENSE) © 2026 Logan Bresnahan. Use, modify,
+embed, and redistribute pharos freely — including inside
+closed-source and commercial products — provided you retain the
+license and attribution notices. The license carries an express
+patent grant.
 
-**Open-source**: [AGPL-3.0-only](LICENSE). Use, modify, and self-host
-pharos freely under the AGPL. Network use counts as distribution — if
-you operate pharos as part of a service offered to others, you must
-offer the corresponding source under the same license.
-
-**Commercial**: if the AGPL's terms don't work for your deployment
-(shipping pharos inside a closed-source product, operating it inside
-a managed-service offering where you can't release source), a
-commercial license is available. See [COMMERCIAL.md](COMMERCIAL.md).
-
-Contributors sign a [CLA](CONTRIBUTING.md#contributor-license-agreement)
-so the project can offer both license tracks. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the full flow.
+Contributions are accepted under the same license via a
+[Developer Certificate of Origin](DCO) sign-off (`git commit -s`);
+see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 [↑ top](#pharos)

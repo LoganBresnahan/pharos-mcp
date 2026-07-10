@@ -1,7 +1,7 @@
 <!--
 Thanks for contributing to Pharos. Please fill out the sections
-below. The CLA bot will leave a separate comment with a signing
-link — your PR can't merge until that's signed.
+below. A DCO check runs automatically — every commit must be
+signed off (`git commit -s`) before this PR can merge.
 -->
 
 ## Summary
@@ -30,12 +30,12 @@ is more useful than the "what" — the diff carries the what. -->
 but for tool changes please describe the dogfood / scenario you
 ran. -->
 
-## CLA
+## Sign-off
 
-- [ ] I have signed the CLA (see
-  [CONTRIBUTING.md](../CONTRIBUTING.md#contributor-license-agreement)).
-  The CLA Assistant Lite bot will confirm this automatically once
-  this PR is opened.
+- [ ] Every commit is signed off with `git commit -s` (see
+  [CONTRIBUTING.md](../CONTRIBUTING.md#developer-certificate-of-origin)).
+  The DCO check will confirm this automatically once this PR is
+  opened.
 
 ## Notes for the reviewer
 

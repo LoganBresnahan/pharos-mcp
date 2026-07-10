@@ -1,0 +1,64 @@
+name: DCO
+
+# Developer Certificate of Origin check. Every commit in a PR must
+# carry a `Signed-off-by:` trailer matching its author (add it with
+# `git commit -s`). This is the lightweight successor to the old CLA:
+# pharos is Apache-2.0, whose Section 5 already licenses inbound
+# contributions under the same terms, so all the project needs from
+# a contributor is provenance sign-off — not a copyright grant.
+#
+# Self-contained: uses the first-party actions/github-script with the
+# default GITHUB_TOKEN. No SaaS app, no signature store, no PAT.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    name: Developer Certificate of Origin
+    steps:
+      - name: Verify Signed-off-by on every commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commits = await github.paginate(
+              github.rest.pulls.listCommits,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              }
+            );
+
+            const failures = [];
+            for (const c of commits) {
+              // Bots (dependabot etc.) don't sign off; skip them.
+              const login = c.author && c.author.login;
+              if (login && /\[bot\]$/.test(login)) continue;
+
+              const { name, email } = c.commit.author;
+              const expected = `Signed-off-by: ${name} <${email}>`;
+              if (!c.commit.message.includes(expected)) {
+                failures.push(`  ${c.sha.slice(0, 7)}  expected "${expected}"`);
+              }
+            }
+
+            if (failures.length) {
+              core.setFailed(
+                `DCO check failed — ${failures.length} commit(s) missing a ` +
+                `matching Signed-off-by line:\n\n${failures.join('\n')}\n\n` +
+                `Sign off future commits with \`git commit -s\`, or fix the ` +
+                `whole branch with:\n\n` +
+                `  git rebase --signoff <base>\n` +
+                `  git push --force-with-lease\n`
+              );
+            } else {
+              core.info(`All ${commits.length} commit(s) signed off. Thanks!`);
+            }

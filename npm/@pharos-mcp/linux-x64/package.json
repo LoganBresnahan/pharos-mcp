@@ -2,7 +2,7 @@
   "name": "@pharos-mcp/linux-x64",
   "version": "0.1.0",
   "description": "Linux x86-64 binary for pharos-mcp. Do not install directly — install pharos-mcp instead; this package is pulled in automatically as an optionalDependency.",
-  "license": "AGPL-3.0-only",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/LoganBresnahan/pharos-mcp",
   "repository": {
     "type": "git",

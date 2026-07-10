@@ -27,7 +27,7 @@
     "erlang",
     "beam"
   ],
-  "license": "AGPL-3.0-only",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/LoganBresnahan/pharos-mcp",
   "repository": {
     "type": "git",

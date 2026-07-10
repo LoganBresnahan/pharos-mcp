@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-07-10
+
+### Changed
+
+- **License: relicensed from AGPL-3.0-only to Apache-2.0.** Pharos
+  is now permissively licensed — free to embed and ship inside
+  closed-source and commercial products, with an express patent
+  grant and no network-use source-disclosure obligation. The former
+  dual-license commercial track (`COMMERCIAL.md`) is retired, and
+  the Contributor License Agreement is replaced by a lightweight
+  [Developer Certificate of Origin](DCO) sign-off (`git commit -s`),
+  enforced by a new DCO check in CI.
+
 ## [0.1.2] — 2026-06-03
 
 Bug-fix patch release. Repairs `pharos --doctor` and

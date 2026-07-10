@@ -2,7 +2,7 @@
 
 Thanks for considering a contribution. Pharos is a one-maintainer
 project today; clear PRs with focused scope land fastest. This
-file documents the contribution flow, the CLA requirement, and
+file documents the contribution flow, the DCO sign-off, and
 the conventions the codebase already follows.
 
 ## Scope
@@ -36,30 +36,30 @@ For anything bigger than a typo fix, please open a GitHub Issue
 or Discussion first. A short note describing what you want to
 build saves both sides the cost of a wrong-direction PR.
 
-## Contributor License Agreement
+## Developer Certificate of Origin
 
-**Every PR needs a signed CLA before it can be merged.** Pharos
-is dual-licensed (AGPL-3.0 open-source + commercial), and the
-CLA gives the project the rights it needs to offer both tracks.
+**Every commit needs a `Signed-off-by` line before it can be
+merged.** Pharos is [Apache-2.0](LICENSE) licensed; Section 5 of
+that license already places inbound contributions under the same
+terms, so all the project asks of you is a sign-off certifying you
+have the right to submit the code — no copyright assignment, no
+CLA.
 
-The agreement text lives at [CLA.md](CLA.md) — an Apache-style
-Individual CLA adapted for pharos's dual-license model. Signatures
-are collected by [CLA Assistant Lite][cla-lite] (a GitHub Action,
-not a SaaS) and stored in this repository at
-`signatures/version1/cla.json`. When you open your first PR, the
-bot comments with the agreement link and asks you to reply with:
+Sign off by adding `-s` to your commits:
 
-> I have read the CLA Document and I hereby sign the CLA
+```
+git commit -s -m "fix(scope): ..."
+```
 
-Signing is a one-time action and applies to all future PRs from
-the same GitHub account.
+That appends a line matching your Git author identity:
 
-For corporate contributions (where your employer holds copyright
-on the work you contribute on company time), reach out via the
-contact in [COMMERCIAL.md](COMMERCIAL.md) — we'll arrange a
-corporate-flavored grant instead of the individual CLA.
+> Signed-off-by: Your Name <you@example.com>
 
-[cla-lite]: https://github.com/contributor-assistant/github-action
+which certifies your agreement to the [Developer Certificate of
+Origin](DCO) (a short, standard statement — reproduced verbatim in
+that file). A GitHub Action checks every commit in the PR; if you
+forget on one, `git rebase --signoff <base>` followed by a
+force-push-with-lease signs off the whole branch at once.
 
 ## Local development
 
@@ -125,10 +125,11 @@ When you open a PR, the template prompts for:
 2. Brief summary of the change (the "why", not the "what" — the
    diff carries the what)
 3. Test plan
-4. CLA signature confirmation (CLA Assistant Lite bot will gate this)
+4. Confirmation that every commit is signed off (the DCO check
+   gates this)
 
-A failed CLA check is the most common reason a PR isn't merged
-quickly. Sign it once; the bot handles the rest.
+A failed DCO check is a common reason a PR stalls. Add `-s` to
+your commits (or rebase with `--signoff`) and the check clears.
 
 ## Reporting bugs
 
