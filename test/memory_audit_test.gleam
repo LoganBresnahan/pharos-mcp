@@ -26,6 +26,9 @@ fn mkdir_p(path: String) -> Result(Nil, String)
 @external(erlang, "erlang", "unique_integer")
 fn unique_int() -> Int
 
+@external(erlang, "pharos_fs_ffi", "now_iso8601")
+fn now_iso8601() -> String
+
 fn unique_suffix() -> String {
   int.to_string(unique_int())
   |> string_drop_dash
@@ -114,14 +117,17 @@ pub fn audit_flags_stale_entry_beyond_threshold_test() {
 
 pub fn audit_does_not_flag_fresh_entry_test() {
   let roots = setup()
-  // Save via the public API so the timestamp is "now".
+  // Stamp last_accessed with the live wall-clock time (same source
+  // production uses) so the 30-day audit sees the entry as fresh no
+  // matter what the calendar date is when the suite runs. A hardcoded
+  // date here is a time bomb: it silently goes stale 30 days later.
   case memory.save(
     "fresh-thing",
     "project",
     "recent note",
     "body",
     False,
-    "2026-05-17T00:00:00Z",
+    now_iso8601(),
   ) {
     Ok(_) -> Nil
     Error(_) -> should.fail()
