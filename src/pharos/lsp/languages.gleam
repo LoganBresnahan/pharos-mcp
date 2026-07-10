@@ -547,14 +547,8 @@ fn typescript_section_settings() -> Json {
         #("experimental", json.object([])),
       ]),
     ),
-    #(
-      "implementationsCodeLens",
-      json.object([#("enabled", json.bool(True))]),
-    ),
-    #(
-      "referencesCodeLens",
-      json.object([#("enabled", json.bool(True))]),
-    ),
+    #("implementationsCodeLens", json.object([#("enabled", json.bool(True))])),
+    #("referencesCodeLens", json.object([#("enabled", json.bool(True))])),
   ])
 }
 
@@ -655,8 +649,8 @@ fn cpp() -> LanguageConfig {
     // compile_commands.json (or .clangd config).
     file_extensions: [".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"],
     root_markers: [
-      "compile_commands.json", "compile_flags.txt", ".clangd",
-      "CMakeLists.txt", ".git",
+      "compile_commands.json", "compile_flags.txt", ".clangd", "CMakeLists.txt",
+      ".git",
     ],
     root_promotion: NoPromotion,
     servers: [
@@ -731,8 +725,8 @@ fn clojure() -> LanguageConfig {
     id: "clojure",
     file_extensions: [".clj", ".cljs", ".cljc", ".edn"],
     root_markers: [
-      "deps.edn", "project.clj", "shadow-cljs.edn", "build.boot",
-      "bb.edn", ".git",
+      "deps.edn", "project.clj", "shadow-cljs.edn", "build.boot", "bb.edn",
+      ".git",
     ],
     root_promotion: NoPromotion,
     servers: [
@@ -791,9 +785,7 @@ fn perl() -> LanguageConfig {
   LanguageConfig(
     id: "perl",
     file_extensions: [".pl", ".pm", ".t", ".pod"],
-    root_markers: [
-      "Makefile.PL", "Build.PL", "cpanfile", "dist.ini", ".git",
-    ],
+    root_markers: ["Makefile.PL", "Build.PL", "cpanfile", "dist.ini", ".git"],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(

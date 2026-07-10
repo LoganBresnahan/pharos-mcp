@@ -21,9 +21,9 @@
 //// interleaving line-atomicity hazards.
 
 import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
 import gleam/json
-import gleam/dynamic/decode
 import gleam/otp/actor
 
 import pharos/log
@@ -173,10 +173,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
 /// a complete line (dispatch via `dispatch_line`), a partial line
 /// (no eol — discard for now; lines >65535 bytes don't occur in
 /// practice for MCP), or EOF (transition to drain).
-fn handle_port_event(
-  state: State,
-  payload: Dynamic,
-) -> actor.Next(State, Msg) {
+fn handle_port_event(state: State, payload: Dynamic) -> actor.Next(State, Msg) {
   case decode_port_event(payload) {
     PortLine(line) -> {
       case line {
@@ -271,8 +268,7 @@ fn dispatch_line(state: State, body: String) -> Nil {
           request_workers.send_reply(writer, WriteResponse(json))
         server.ProtocolError(json) ->
           request_workers.send_reply(writer, WriteResponse(json))
-        server.NoReply ->
-          request_workers.send_reply(writer, WorkerDone)
+        server.NoReply -> request_workers.send_reply(writer, WorkerDone)
       }
       request_workers.delete(mcp_id)
     })

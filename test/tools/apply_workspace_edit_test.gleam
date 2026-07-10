@@ -39,10 +39,10 @@ pub fn splice_multi_descending_test() {
   // Two non-overlapping edits on same line. FFI sorts descending so
   // splice order does not matter for the caller.
   let assert Ok(out) =
-    apply_text_edits(
-      <<"foo bar baz\n":utf8>>,
-      [#(0, 4, 0, 7, "BAR"), #(0, 8, 0, 11, "BAZ")],
-    )
+    apply_text_edits(<<"foo bar baz\n":utf8>>, [
+      #(0, 4, 0, 7, "BAR"),
+      #(0, 8, 0, 11, "BAZ"),
+    ])
   out
   |> should.equal(<<"foo BAR BAZ\n":utf8>>)
 }
@@ -74,10 +74,10 @@ pub fn splice_append_at_eof_test() {
 
 pub fn splice_overlap_rejected_test() {
   let assert Error(_) =
-    apply_text_edits(
-      <<"hello world\n":utf8>>,
-      [#(0, 0, 0, 5, "X"), #(0, 3, 0, 8, "Y")],
-    )
+    apply_text_edits(<<"hello world\n":utf8>>, [
+      #(0, 0, 0, 5, "X"),
+      #(0, 3, 0, 8, "Y"),
+    ])
 }
 
 // -- end-to-end handle/2 over disk ---------------------------------------

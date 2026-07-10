@@ -74,10 +74,7 @@ pub fn init() -> Nil
 /// Predicate against a raw `InitializeResult.capabilities` Dynamic.
 /// Exposed for unit tests; production code goes through
 /// `check/2`.
-pub fn supports_method(
-  capabilities: Dynamic,
-  lsp_method: String,
-) -> Bool {
+pub fn supports_method(capabilities: Dynamic, lsp_method: String) -> Bool {
   case capability_path(lsp_method) {
     option.None ->
       // Method not in the static map — be conservative and assume
@@ -103,36 +100,27 @@ fn capability_path(lsp_method: String) -> Option(List(String)) {
       option.Some(["semanticTokensProvider"])
     "textDocument/prepareTypeHierarchy" ->
       option.Some(["typeHierarchyProvider"])
-    "typeHierarchy/supertypes" ->
-      option.Some(["typeHierarchyProvider"])
-    "typeHierarchy/subtypes" ->
-      option.Some(["typeHierarchyProvider"])
+    "typeHierarchy/supertypes" -> option.Some(["typeHierarchyProvider"])
+    "typeHierarchy/subtypes" -> option.Some(["typeHierarchyProvider"])
     "textDocument/prepareCallHierarchy" ->
       option.Some(["callHierarchyProvider"])
-    "callHierarchy/incomingCalls" ->
-      option.Some(["callHierarchyProvider"])
-    "callHierarchy/outgoingCalls" ->
-      option.Some(["callHierarchyProvider"])
+    "callHierarchy/incomingCalls" -> option.Some(["callHierarchyProvider"])
+    "callHierarchy/outgoingCalls" -> option.Some(["callHierarchyProvider"])
     "textDocument/codeAction" -> option.Some(["codeActionProvider"])
     "textDocument/rename" -> option.Some(["renameProvider"])
     "textDocument/prepareRename" -> option.Some(["renameProvider"])
-    "textDocument/formatting" ->
-      option.Some(["documentFormattingProvider"])
+    "textDocument/formatting" -> option.Some(["documentFormattingProvider"])
     "textDocument/rangeFormatting" ->
       option.Some(["documentRangeFormattingProvider"])
     "textDocument/onTypeFormatting" ->
       option.Some(["documentOnTypeFormattingProvider"])
-    "textDocument/signatureHelp" ->
-      option.Some(["signatureHelpProvider"])
-    "textDocument/documentSymbol" ->
-      option.Some(["documentSymbolProvider"])
+    "textDocument/signatureHelp" -> option.Some(["signatureHelpProvider"])
+    "textDocument/documentSymbol" -> option.Some(["documentSymbolProvider"])
     "workspace/symbol" -> option.Some(["workspaceSymbolProvider"])
     "textDocument/references" -> option.Some(["referencesProvider"])
     "textDocument/definition" -> option.Some(["definitionProvider"])
-    "textDocument/typeDefinition" ->
-      option.Some(["typeDefinitionProvider"])
-    "textDocument/implementation" ->
-      option.Some(["implementationProvider"])
+    "textDocument/typeDefinition" -> option.Some(["typeDefinitionProvider"])
+    "textDocument/implementation" -> option.Some(["implementationProvider"])
     "textDocument/hover" -> option.Some(["hoverProvider"])
     _ -> option.None
   }
@@ -148,7 +136,9 @@ fn walk_path(value: Dynamic, path: List(String)) -> Bool {
   case path {
     [] -> truthy(value)
     [key, ..rest] ->
-      case decode.run(value, decode.field(key, decode.dynamic, decode.success)) {
+      case
+        decode.run(value, decode.field(key, decode.dynamic, decode.success))
+      {
         Ok(nested) -> walk_path(nested, rest)
         Error(_) -> False
       }

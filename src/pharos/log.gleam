@@ -18,9 +18,7 @@
 //// dispatch.
 
 import gleam/option.{type Option, None, Some}
-import pharos/log/entry.{
-  type Level, Critical, Debug, Info, LogEntry, Warn,
-}
+import pharos/log/entry.{type Level, Critical, Debug, Info, LogEntry, Warn}
 import pharos/log/ring
 import pharos/log/writer
 
@@ -142,10 +140,7 @@ pub fn set_target_level(
 /// filtered to lines containing `substring_filter`. Returns the
 /// raw `(level, line)` tuples ready for serialization. Empty
 /// `substring_filter` disables filtering.
-pub fn ring_tail(
-  n: Int,
-  substring_filter: String,
-) -> List(#(Level, String)) {
+pub fn ring_tail(n: Int, substring_filter: String) -> List(#(Level, String)) {
   ring.tail(n, substring_filter)
 }
 

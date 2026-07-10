@@ -14,10 +14,7 @@ import gleam/otp/actor
 
 /// Spawn (or attach to) the Erlang supervisor and return the
 /// `actor.Started` shape gleam_otp's child specs consume.
-pub fn start_link_supervised() -> Result(
-  actor.Started(Nil),
-  actor.StartError,
-) {
+pub fn start_link_supervised() -> Result(actor.Started(Nil), actor.StartError) {
   case raw_start_link() {
     Ok(pid) -> Ok(actor.Started(pid: pid, data: Nil))
     Error(reason) -> Error(actor.InitFailed(reason))

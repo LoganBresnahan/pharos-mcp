@@ -27,7 +27,8 @@ pub fn parse_name_path_single_segment_test() {
 
 pub fn parse_name_path_two_segments_test() {
   case symbols.parse_name_path("User/authenticate") {
-    Ok(np) -> should.equal(symbols.name_path_parts(np), ["User", "authenticate"])
+    Ok(np) ->
+      should.equal(symbols.name_path_parts(np), ["User", "authenticate"])
     Error(_) -> should.fail()
   }
 }
@@ -42,14 +43,16 @@ pub fn parse_name_path_three_segments_test() {
 
 pub fn parse_name_path_strips_leading_slash_test() {
   case symbols.parse_name_path("/User/authenticate") {
-    Ok(np) -> should.equal(symbols.name_path_parts(np), ["User", "authenticate"])
+    Ok(np) ->
+      should.equal(symbols.name_path_parts(np), ["User", "authenticate"])
     Error(_) -> should.fail()
   }
 }
 
 pub fn parse_name_path_strips_trailing_slash_test() {
   case symbols.parse_name_path("User/authenticate/") {
-    Ok(np) -> should.equal(symbols.name_path_parts(np), ["User", "authenticate"])
+    Ok(np) ->
+      should.equal(symbols.name_path_parts(np), ["User", "authenticate"])
     Error(_) -> should.fail()
   }
 }
@@ -64,7 +67,8 @@ pub fn parse_name_path_collapses_double_slash_test() {
 
 pub fn parse_name_path_trims_whitespace_test() {
   case symbols.parse_name_path("  User / authenticate  ") {
-    Ok(np) -> should.equal(symbols.name_path_parts(np), ["User", "authenticate"])
+    Ok(np) ->
+      should.equal(symbols.name_path_parts(np), ["User", "authenticate"])
     Error(_) -> should.fail()
   }
 }
@@ -157,8 +161,7 @@ pub fn resolution_single_json_includes_status_test() {
       body_hash: "",
     )
   // Wrap into Single and convert.
-  let json_text =
-    symbols.resolution_to_json(Single(m)) |> json.to_string
+  let json_text = symbols.resolution_to_json(Single(m)) |> json.to_string
   should.equal(string.contains(json_text, "\"status\":\"single\""), True)
   should.equal(string.contains(json_text, "\"name\":\"authenticate\""), True)
   // The handle the LLM will pass back for edit_at_symbol must be
@@ -196,8 +199,7 @@ pub fn symbol_handle_round_trip_through_json_test() {
       kind: 6,
       body_hash: "deadbeef",
     )
-  let json_text =
-    symbols.symbol_handle_to_json(original) |> json.to_string
+  let json_text = symbols.symbol_handle_to_json(original) |> json.to_string
   // Decode back via the public decoder. Mirrors what the MCP layer
   // does when an LLM passes a handle to edit_at_symbol.
   let dyn = json_to_dynamic(json_text)

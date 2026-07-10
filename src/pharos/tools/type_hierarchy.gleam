@@ -22,11 +22,11 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -108,13 +108,10 @@ fn call_with_item(
 ) -> Result(String, TypeHierarchyError) {
   case decode.run(item, item_uri_decoder()) {
     Error(_) ->
-      Error(InvalidItem(
-        "type hierarchy item missing or non-string `uri` field",
-      ))
+      Error(InvalidItem("type hierarchy item missing or non-string `uri` field"))
 
     Ok(file_uri) -> {
-      let params_text =
-        "{\"item\":" <> tool_helpers.json_encode(item) <> "}"
+      let params_text = "{\"item\":" <> tool_helpers.json_encode(item) <> "}"
 
       case
         session.with_session_and_retry(pool, file_uri, fn(lsp) {

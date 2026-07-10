@@ -46,9 +46,8 @@ import pharos/lsp/registry_toml
 import pharos/mcp/request_workers
 import pharos/supervisor as root_supervisor
 import pharos/tools/session
+import pharos/version
 import pharos/workspace_root
-
-const server_version: String = "0.1.2"
 
 pub fn main() -> Nil {
   // Set ERL_CRASH_DUMP target before anything else so a BEAM-level
@@ -71,8 +70,8 @@ pub fn main() -> Nil {
           let cfg = config.cached()
           log.info(
             "pharos starting (transport="
-              <> transport_label(cfg.transport)
-              <> ")",
+            <> transport_label(cfg.transport)
+            <> ")",
           )
           // ADR-024 + `pharos warm <lang>...` subcommand:
           // `post_boot_dispatch/0` looks at argv to decide between
@@ -246,13 +245,10 @@ fn build_log_filter(cfg: Config) -> filter.Filter {
   case cfg.lsp.trace {
     False -> parsed
     True ->
-      filter.Filter(
-        default: parsed.default,
-        overrides: [
-          filter.Override("pharos/lsp/trace", Some(entry.Debug)),
-          ..parsed.overrides
-        ],
-      )
+      filter.Filter(default: parsed.default, overrides: [
+        filter.Override("pharos/lsp/trace", Some(entry.Debug)),
+        ..parsed.overrides
+      ])
   }
 }
 
@@ -269,7 +265,7 @@ fn handle_meta_flags(args: List(String)) -> MetaOutcome {
   case match_meta(args) {
     None -> Continue
     Some(VersionRequested) -> {
-      io.println("pharos " <> server_version)
+      io.println("pharos " <> version.current())
       Handled
     }
     Some(HelpRequested) -> {
@@ -342,8 +338,7 @@ fn match_print_language_config(args: List(String)) -> Option(MetaFlag) {
       Some(PrintLanguageConfig(language))
     [first, ..rest] ->
       case string.starts_with(first, "--print-language-config=") {
-        True ->
-          Some(PrintLanguageConfig(string.drop_start(first, 24)))
+        True -> Some(PrintLanguageConfig(string.drop_start(first, 24)))
         False -> match_print_language_config(rest)
       }
     [] -> None
@@ -514,12 +509,10 @@ fn init_stop() -> Nil
 fn warm_one(pool_handle: pool.Pool, lang: String) -> Nil {
   case registry_for_language(lang) {
     Error(reason) -> {
-      log.fields_at(
-        "pharos/lsp/pool",
-        entry.Warn,
-        "warm: skipping language",
-        [#("language", lang), #("reason", reason)],
-      )
+      log.fields_at("pharos/lsp/pool", entry.Warn, "warm: skipping language", [
+        #("language", lang),
+        #("reason", reason),
+      ])
       Nil
     }
     Ok(config) ->
@@ -534,7 +527,12 @@ fn warm_one(pool_handle: pool.Pool, lang: String) -> Nil {
           Nil
         }
         Ok(server) -> {
-          case workspace_root.discover_from_dir(cwd_for_warmup(), config.root_markers) {
+          case
+            workspace_root.discover_from_dir(
+              cwd_for_warmup(),
+              config.root_markers,
+            )
+          {
             Error(_) -> {
               log.fields_at(
                 "pharos/lsp/pool",
@@ -590,7 +588,9 @@ fn describe_get_error(err: pool.GetError) -> String {
   }
 }
 
-fn registry_for_language(lang: String) -> Result(languages.LanguageConfig, String) {
+fn registry_for_language(
+  lang: String,
+) -> Result(languages.LanguageConfig, String) {
   let r = registry.cached()
   case dict.get(r, lang) {
     Ok(config) -> Ok(config)

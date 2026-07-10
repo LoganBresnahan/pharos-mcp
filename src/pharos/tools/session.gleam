@@ -25,12 +25,14 @@ import gleam/string
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
-  type CustomUriScheme, type LanguageConfig, CargoWorkspacePromotion, NoPromotion,
+  type CustomUriScheme, type LanguageConfig, CargoWorkspacePromotion,
+  NoPromotion,
 }
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/registry
+import pharos/version
 import pharos/workspace_root
 
 const content_modified_code: Int = -32_801
@@ -129,9 +131,7 @@ fn retry_loop(
 ) -> Result(a, lifecycle.RequestError) {
   let result = request()
   case result {
-    Error(lifecycle.ServerError(code, _))
-      if code == content_modified_code
-    ->
+    Error(lifecycle.ServerError(code, _)) if code == content_modified_code ->
       case remaining_delays {
         // Out of retries — surface the last -32801.
         [] -> result
@@ -384,7 +384,9 @@ fn retry_workspace_for_language_after_evict(
         Ok(raw_workspace) -> {
           let workspace = promote_root(raw_workspace, config)
           pool.evict_all_servers(pool, config.id, workspace)
-          case prepare_workspace_for_language(pool, language, workspace_uri_hint) {
+          case
+            prepare_workspace_for_language(pool, language, workspace_uri_hint)
+          {
             Error(err) -> Error(RetrySessionError(err))
             Ok(lsp) ->
               case body(lsp) {
@@ -641,12 +643,12 @@ fn prepare_for_method_from_file_uri(
     Error(_) ->
       Error(SpawnFailed(
         "no server in language `"
-          <> config.id
-          <> "` claims method `"
-          <> method
-          <> "` (check pharos.toml [languages."
-          <> config.id
-          <> "])",
+        <> config.id
+        <> "` claims method `"
+        <> method
+        <> "` (check pharos.toml [languages."
+        <> config.id
+        <> "])",
       ))
     Ok(server) ->
       // Mirror the M11 merge-path order fix (c001c4d): pool.ensure_open
@@ -958,8 +960,8 @@ fn get_lsp(
     Error(_) ->
       Error(SpawnFailed(
         "language `"
-          <> config.id
-          <> "` has no servers configured (check pharos.toml)",
+        <> config.id
+        <> "` has no servers configured (check pharos.toml)",
       ))
     Ok(server) -> {
       let spec = build_spawn_spec(workspace, config, server)
@@ -984,7 +986,7 @@ fn build_initialize_params(
       "clientInfo",
       json.object([
         #("name", json.string("pharos")),
-        #("version", json.string("0.1.2")),
+        #("version", json.string(version.current())),
       ]),
     ),
     #("initializationOptions", server.initialization_options),
@@ -1035,10 +1037,7 @@ fn workspace_capabilities() -> json.Json {
       json.object([#("dynamicRegistration", json.bool(False))]),
     ),
     #("configuration", json.bool(True)),
-    #(
-      "symbol",
-      json.object([#("dynamicRegistration", json.bool(False))]),
-    ),
+    #("symbol", json.object([#("dynamicRegistration", json.bool(False))])),
   ])
 }
 
@@ -1081,18 +1080,9 @@ fn text_document_capabilities() -> json.Json {
         ),
       ]),
     ),
-    #(
-      "definition",
-      json.object([#("linkSupport", json.bool(True))]),
-    ),
-    #(
-      "typeDefinition",
-      json.object([#("linkSupport", json.bool(True))]),
-    ),
-    #(
-      "implementation",
-      json.object([#("linkSupport", json.bool(True))]),
-    ),
+    #("definition", json.object([#("linkSupport", json.bool(True))])),
+    #("typeDefinition", json.object([#("linkSupport", json.bool(True))])),
+    #("implementation", json.object([#("linkSupport", json.bool(True))])),
     #("references", json.object([])),
     #(
       "documentSymbol",
@@ -1100,14 +1090,8 @@ fn text_document_capabilities() -> json.Json {
         #("hierarchicalDocumentSymbolSupport", json.bool(True)),
       ]),
     ),
-    #(
-      "formatting",
-      json.object([#("dynamicRegistration", json.bool(False))]),
-    ),
-    #(
-      "rename",
-      json.object([#("prepareSupport", json.bool(False))]),
-    ),
+    #("formatting", json.object([#("dynamicRegistration", json.bool(False))])),
+    #("rename", json.object([#("prepareSupport", json.bool(False))])),
     #(
       "codeAction",
       json.object([
@@ -1144,14 +1128,8 @@ fn text_document_capabilities() -> json.Json {
       "publishDiagnostics",
       json.object([#("versionSupport", json.bool(False))]),
     ),
-    #(
-      "diagnostic",
-      json.object([#("dynamicRegistration", json.bool(False))]),
-    ),
-    #(
-      "inlayHint",
-      json.object([#("dynamicRegistration", json.bool(False))]),
-    ),
+    #("diagnostic", json.object([#("dynamicRegistration", json.bool(False))])),
+    #("inlayHint", json.object([#("dynamicRegistration", json.bool(False))])),
   ])
 }
 

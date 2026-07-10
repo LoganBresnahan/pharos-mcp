@@ -21,11 +21,11 @@
 //// case any caller has surfaced.
 
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -83,18 +83,13 @@ pub fn handle(
   }
 
   case
-    session.with_session_and_retry_for_method(
-      pool,
-      file_uri,
-      method,
-      fn(lsp) {
-        tool_helpers.with_capability_gate(lsp, method, fn() {
-          session.request_with_content_modified_retry(fn() {
-            proc.request(lsp, method, params, timeout_ms)
-          })
+    session.with_session_and_retry_for_method(pool, file_uri, method, fn(lsp) {
+      tool_helpers.with_capability_gate(lsp, method, fn() {
+        session.request_with_content_modified_retry(fn() {
+          proc.request(lsp, method, params, timeout_ms)
         })
-      },
-    )
+      })
+    })
   {
     Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))
     Error(session.RetrySessionError(err)) ->

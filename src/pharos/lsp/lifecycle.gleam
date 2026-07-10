@@ -72,11 +72,7 @@ pub fn initialize(
   init_params: Json,
   timeout_ms: Int,
 ) -> Result(#(Client, Dynamic), RequestError) {
-  use Nil <- result.try(send_initialize_request(
-    client,
-    request_id,
-    init_params,
-  ))
+  use Nil <- result.try(send_initialize_request(client, request_id, init_params))
 
   use #(client, result_value) <- result.try(wait_for_response(
     client,
@@ -102,12 +98,7 @@ pub fn request(
   request_id: Int,
   timeout_ms: Int,
 ) -> Result(#(Client, Dynamic), RequestError) {
-  use Nil <- result.try(send_method_request(
-    client,
-    method,
-    params,
-    request_id,
-  ))
+  use Nil <- result.try(send_method_request(client, method, params, request_id))
 
   wait_for_response(client, request_id, timeout_ms)
 }
@@ -140,9 +131,7 @@ fn send_method_request(
   |> result.map_error(ClientFailure)
 }
 
-fn send_initialized_notification(
-  client: Client,
-) -> Result(Nil, RequestError) {
+fn send_initialized_notification(client: Client) -> Result(Nil, RequestError) {
   let body =
     json.object([
       #("jsonrpc", json.string("2.0")),
@@ -318,20 +307,9 @@ fn handle_progress(
             remaining_ms - read_window_ms,
           )
         _ ->
-          drain_until_ready(
-            client,
-            token,
-            phase,
-            remaining_ms - read_window_ms,
-          )
+          drain_until_ready(client, token, phase, remaining_ms - read_window_ms)
       }
-    _ ->
-      drain_until_ready(
-        client,
-        token,
-        phase,
-        remaining_ms - read_window_ms,
-      )
+    _ -> drain_until_ready(client, token, phase, remaining_ms - read_window_ms)
   }
 }
 
@@ -389,8 +367,7 @@ fn cache_publish_diagnostics(
   case method {
     "textDocument/publishDiagnostics" ->
       case decode.run(params, publish_diagnostics_uri_decoder()) {
-        Ok(uri) ->
-          diagnostics_cache.put(uri, client.server_id(client), params)
+        Ok(uri) -> diagnostics_cache.put(uri, client.server_id(client), params)
         Error(_) -> Nil
       }
     _ -> Nil
@@ -712,8 +689,7 @@ fn classify_dynamic(value: Dynamic) -> Classified {
     // through to a synthetic notification with no method so the
     // wait_for_response loop drains it as it would any other
     // unrecognized server message.
-    Error(_) ->
-      Notification(method: "", params: dynamic.nil())
+    Error(_) -> Notification(method: "", params: dynamic.nil())
   }
 }
 

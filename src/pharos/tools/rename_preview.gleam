@@ -22,13 +22,13 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/lsp/server_request_handlers
 import pharos/tools/session
 import pharos/tools/tool_helpers
 import pharos/tools/workspace_edit
-import gleam/string
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -68,16 +68,11 @@ pub fn handle(
   let request_result =
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
       tool_helpers.with_capability_gate(lsp, "textDocument/rename", fn() {
-        proc.with_handler(
-          lsp,
-          "workspace/applyEdit",
-          capture_handler,
-          fn() {
-            session.request_with_content_modified_retry(fn() {
-              proc.request(lsp, "textDocument/rename", params, timeout_ms)
-            })
-          },
-        )
+        proc.with_handler(lsp, "workspace/applyEdit", capture_handler, fn() {
+          session.request_with_content_modified_retry(fn() {
+            proc.request(lsp, "textDocument/rename", params, timeout_ms)
+          })
+        })
       })
     })
 
@@ -119,9 +114,7 @@ fn edit_field_decoder() -> decode.Decoder(Dynamic) {
   decode.field("edit", decode.dynamic, decode.success)
 }
 
-fn render_workspace_edit(
-  value: Dynamic,
-) -> Result(String, RenamePreviewError) {
+fn render_workspace_edit(value: Dynamic) -> Result(String, RenamePreviewError) {
   // Lenient: LSPs return `null` / `{}` for "no rename target here".
   // Render that as the empty-edit summary rather than a shape error.
   Ok(workspace_edit.render_lenient(value))

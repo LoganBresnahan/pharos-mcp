@@ -111,10 +111,7 @@ fn parse_fields(
                   case list.contains(required_fields, key_trim) {
                     False -> Error(UnknownField(key_trim))
                     True ->
-                      parse_fields(
-                        rest,
-                        dict.insert(acc, key_trim, value_trim),
-                      )
+                      parse_fields(rest, dict.insert(acc, key_trim, value_trim))
                   }
                 }
               }
@@ -145,10 +142,12 @@ fn validate_line_shape(line: String) -> Result(Nil, String) {
             Ok(#(_, raw_value)) -> {
               let v = string.trim(raw_value)
               let fully_double_quoted =
-                string.starts_with(v, "\"") && string.ends_with(v, "\"")
+                string.starts_with(v, "\"")
+                && string.ends_with(v, "\"")
                 && string.length(v) >= 2
               let fully_single_quoted =
-                string.starts_with(v, "'") && string.ends_with(v, "'")
+                string.starts_with(v, "'")
+                && string.ends_with(v, "'")
                 && string.length(v) >= 2
               let is_flow =
                 string.starts_with(v, "[") || string.starts_with(v, "{")
@@ -210,11 +209,21 @@ fn materialize(raw: Dict(String, String)) -> Result(Frontmatter, ParseError) {
 /// Output is always strict-shape-compliant — `parse` will accept it.
 pub fn serialize(fm: Frontmatter, body: String) -> String {
   "---\n"
-  <> "name: " <> fm.name <> "\n"
-  <> "type: " <> fm.type_ <> "\n"
-  <> "description: " <> fm.description <> "\n"
-  <> "created: " <> fm.created <> "\n"
-  <> "last_accessed: " <> fm.last_accessed <> "\n"
+  <> "name: "
+  <> fm.name
+  <> "\n"
+  <> "type: "
+  <> fm.type_
+  <> "\n"
+  <> "description: "
+  <> fm.description
+  <> "\n"
+  <> "created: "
+  <> fm.created
+  <> "\n"
+  <> "last_accessed: "
+  <> fm.last_accessed
+  <> "\n"
   <> "---\n"
   <> body
 }
@@ -225,7 +234,9 @@ pub fn describe_error(err: ParseError) -> String {
     MissingClosingFence -> "frontmatter must end with `---`"
     MissingRequiredField(f) -> "missing required field: " <> f
     UnknownField(f) ->
-      "unknown frontmatter field: " <> f <> " (allowed: name, type, "
+      "unknown frontmatter field: "
+      <> f
+      <> " (allowed: name, type, "
       <> "description, created, last_accessed)"
     InvalidLineFormat(l) -> "malformed line (expected `key: value`): " <> l
     ForbiddenShape(r) -> "frontmatter shape rejected: " <> r

@@ -73,11 +73,21 @@ fn seed(
   let path = dir <> "/" <> name <> ".md"
   let body =
     "---\n"
-    <> "name: " <> name <> "\n"
-    <> "type: " <> type_ <> "\n"
-    <> "description: " <> description <> "\n"
-    <> "created: " <> last_accessed <> "\n"
-    <> "last_accessed: " <> last_accessed <> "\n"
+    <> "name: "
+    <> name
+    <> "\n"
+    <> "type: "
+    <> type_
+    <> "\n"
+    <> "description: "
+    <> description
+    <> "\n"
+    <> "created: "
+    <> last_accessed
+    <> "\n"
+    <> "last_accessed: "
+    <> last_accessed
+    <> "\n"
     <> "---\n"
     <> "body\n"
   let _ = atomic_write(path, body)
@@ -100,7 +110,13 @@ pub fn audit_flags_stale_entry_beyond_threshold_test() {
   let roots = setup()
   let #(project_root, _) = roots
   // Year 2020 — far older than any plausible threshold.
-  seed(project_root, "project", "old-thing", "ancient note", "2020-01-01T00:00:00Z")
+  seed(
+    project_root,
+    "project",
+    "old-thing",
+    "ancient note",
+    "2020-01-01T00:00:00Z",
+  )
   case memory.audit(30, False) {
     Ok(report) -> {
       should.equal(list.length(report.stale), 1)
@@ -121,14 +137,16 @@ pub fn audit_does_not_flag_fresh_entry_test() {
   // production uses) so the 30-day audit sees the entry as fresh no
   // matter what the calendar date is when the suite runs. A hardcoded
   // date here is a time bomb: it silently goes stale 30 days later.
-  case memory.save(
-    "fresh-thing",
-    "project",
-    "recent note",
-    "body",
-    False,
-    now_iso8601(),
-  ) {
+  case
+    memory.save(
+      "fresh-thing",
+      "project",
+      "recent note",
+      "body",
+      False,
+      now_iso8601(),
+    )
+  {
     Ok(_) -> Nil
     Error(_) -> should.fail()
   }
@@ -274,13 +292,7 @@ pub fn audit_walks_both_layers_test() {
   let roots = setup()
   let #(project_root, user_root) = roots
   // Stale in project layer.
-  seed(
-    project_root,
-    "project",
-    "proj-stale",
-    "x",
-    "2020-01-01T00:00:00Z",
-  )
+  seed(project_root, "project", "proj-stale", "x", "2020-01-01T00:00:00Z")
   // Stale in user layer.
   seed(user_root, "user", "user-stale", "y", "2020-01-01T00:00:00Z")
   case memory.audit(30, False) {
@@ -324,10 +336,8 @@ pub fn audit_pair_ordering_is_deterministic_test() {
   let second_run = memory.audit(100_000, True)
   case first_run, second_run {
     Ok(a), Ok(b) -> {
-      let names_a =
-        list.map(a.duplicates, fn(p) { p.a <> "|" <> p.b })
-      let names_b =
-        list.map(b.duplicates, fn(p) { p.a <> "|" <> p.b })
+      let names_a = list.map(a.duplicates, fn(p) { p.a <> "|" <> p.b })
+      let names_b = list.map(b.duplicates, fn(p) { p.a <> "|" <> p.b })
       should.equal(names_a, names_b)
       // 3 entries → 3 unordered pairs.
       should.equal(list.length(a.duplicates), 3)

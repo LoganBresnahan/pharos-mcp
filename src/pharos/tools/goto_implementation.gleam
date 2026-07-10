@@ -9,12 +9,12 @@
 
 import gleam/int
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/clip
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 // Bumped from 5s to 30s for parity with hover/document_symbols.
 // The proc actor serializes concurrent requests; tighter timeouts
@@ -74,7 +74,6 @@ pub fn handle(
       Error(RequestFailed(tool_helpers.describe_request_error(err)))
   }
 }
-
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {

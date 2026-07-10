@@ -10,8 +10,8 @@ import gleam/dynamic.{type Dynamic}
 import pharos/lsp/capabilities
 import pharos/lsp/client
 import pharos/lsp/lifecycle
-import pharos/lsp/proc.{type Proc}
 import pharos/lsp/port
+import pharos/lsp/proc.{type Proc}
 
 @external(erlang, "erlang", "system_time")
 fn system_time(unit: ErlangTimeUnit) -> Int
@@ -54,8 +54,7 @@ pub fn json_encode(value: Dynamic) -> String
 pub fn describe_request_error(err: lifecycle.RequestError) -> String {
   case err {
     lifecycle.ClientFailure(client_err) -> describe_client_error(client_err)
-    lifecycle.ResponseDecodeError(reason) ->
-      "response decode error: " <> reason
+    lifecycle.ResponseDecodeError(reason) -> "response decode error: " <> reason
     lifecycle.ServerError(code, message) ->
       "server error " <> int_to_string(code) <> ": " <> message
     lifecycle.ActorCallPanic(reason) ->
@@ -80,8 +79,7 @@ fn describe_client_error(err: client.Error) -> String {
       "LSP process exited unexpectedly (send failed; transport closed)"
     client.FramingError(_) ->
       "LSP protocol framing error (malformed message from server)"
-    client.SpawnError(_) ->
-      "LSP spawn error (subprocess could not start)"
+    client.SpawnError(_) -> "LSP spawn error (subprocess could not start)"
   }
 }
 

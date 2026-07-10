@@ -58,7 +58,9 @@ pub type SupervisedNode {
 pub fn list_processes(limit: Int) -> List(ProcessSummary)
 
 @external(erlang, "pharos_runtime_ffi", "process_info_for")
-pub fn process_info_for(pid_text: String) -> Result(List(#(String, String)), Nil)
+pub fn process_info_for(
+  pid_text: String,
+) -> Result(List(#(String, String)), Nil)
 
 @external(erlang, "pharos_runtime_ffi", "list_ets_tables")
 pub fn list_ets_tables() -> List(EtsTable)

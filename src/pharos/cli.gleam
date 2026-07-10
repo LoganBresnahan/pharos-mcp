@@ -21,8 +21,7 @@ import pharos/config
 import pharos/lsp/instance_track
 import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/registry as lsp_registry
-
-const server_version: String = "0.1.2"
+import pharos/version
 
 /// Clear Burrito's extract-cache for pharos. Removes pharos's
 /// extracted release directories (`pharos_erts-<v>_<vsn>`) under
@@ -39,19 +38,17 @@ pub fn purge_cache() -> Int {
 
   case entries {
     [] -> {
-      io.println(
-        "pharos --purge-cache: no pharos extracts under " <> root,
-      )
+      io.println("pharos --purge-cache: no pharos extracts under " <> root)
       0
     }
     _ -> {
       io.println(
         "pharos --purge-cache: removing "
-          <> int.to_string(list.length(entries))
-          <> " pharos extract(s) ("
-          <> mb_str(total_bytes)
-          <> ") from "
-          <> root,
+        <> int.to_string(list.length(entries))
+        <> " pharos extract(s) ("
+        <> mb_str(total_bytes)
+        <> ") from "
+        <> root,
       )
       let failures =
         list.fold(entries, 0, fn(acc, entry) {
@@ -67,7 +64,7 @@ pub fn purge_cache() -> Int {
         0 -> {
           io.println(
             "Cleared. Next run will re-extract the Burrito payload "
-              <> "(adds ~1-3s to first invocation).",
+            <> "(adds ~1-3s to first invocation).",
           )
           0
         }
@@ -90,7 +87,7 @@ pub fn doctor() -> Int {
 
   // Section: build / runtime
   let beam = beam_version_info()
-  io.println("pharos version:      " <> server_version)
+  io.println("pharos version:      " <> version.current())
   io.println("OTP release:         " <> beam.otp)
   io.println("ERTS version:        " <> beam.erts)
 
@@ -101,10 +98,10 @@ pub fn doctor() -> Int {
   io.println("Burrito cache:       " <> cache_path)
   io.println(
     "Burrito cache size:  "
-      <> mb_str(cache_size)
-      <> " across "
-      <> int.to_string(list.length(extracts))
-      <> " pharos extract(s)",
+    <> mb_str(cache_size)
+    <> " across "
+    <> int.to_string(list.length(extracts))
+    <> " pharos extract(s)",
   )
   io.println("")
 
@@ -114,15 +111,18 @@ pub fn doctor() -> Int {
   io.println("---------------")
   io.println("transport:           " <> transport_label(cfg.transport))
   io.println(
-    "http.bind:port:      " <> cfg.http.bind <> ":" <> int.to_string(cfg.http.port),
+    "http.bind:port:      "
+    <> cfg.http.bind
+    <> ":"
+    <> int.to_string(cfg.http.port),
   )
   io.println("http.port_file:      " <> opt_str(cfg.http.port_file, "(unset)"))
   io.println(
     "log.filter:          "
-      <> case cfg.log.filter_spec {
-        "" -> "(default: info)"
-        s -> s
-      },
+    <> case cfg.log.filter_spec {
+      "" -> "(default: info)"
+      s -> s
+    },
   )
   io.println("log.file:            " <> opt_str(cfg.log.file, "(stderr only)"))
   io.println("log.ring_enabled:    " <> bool_str(cfg.log.ring_enabled))
@@ -131,19 +131,23 @@ pub fn doctor() -> Int {
   io.println(
     "runtime.trace_calls: " <> bool_str(cfg.runtime.trace_calls_enabled),
   )
-  io.println("tools.filter:        [" <> string.join(cfg.tools.entries, ", ") <> "]")
+  io.println(
+    "tools.filter:        [" <> string.join(cfg.tools.entries, ", ") <> "]",
+  )
   io.println("")
 
   // Section: language registry — probe each server's command on PATH
   let langs = languages_dict_to_list()
   let total_servers =
-    list.fold(langs, 0, fn(acc, entry) { acc + list.length({ entry.1 }.servers) })
+    list.fold(langs, 0, fn(acc, entry) {
+      acc + list.length({ entry.1 }.servers)
+    })
   io.println(
     "Language registry ("
-      <> int.to_string(list.length(langs))
-      <> " languages, "
-      <> int.to_string(total_servers)
-      <> " server(s))",
+    <> int.to_string(list.length(langs))
+    <> " languages, "
+    <> int.to_string(total_servers)
+    <> " server(s))",
   )
   io.println(string.repeat("-", 60))
 
@@ -155,23 +159,23 @@ pub fn doctor() -> Int {
           Ok(resolved) -> {
             io.println(
               pad_right(id <> "/" <> server.id, 28)
-                <> "  ok     "
-                <> server.command
-                <> case resolved == server.command {
-                  True -> ""
-                  False -> " → " <> resolved
-                },
+              <> "  ok     "
+              <> server.command
+              <> case resolved == server.command {
+                True -> ""
+                False -> " → " <> resolved
+              },
             )
             inner_failures
           }
           Error(_) -> {
             io.println(
               pad_right(id <> "/" <> server.id, 28)
-                <> "  MISSING  "
-                <> server.command
-                <> " (not on PATH; install it or override [languages."
-                <> id
-                <> "] command)",
+              <> "  MISSING  "
+              <> server.command
+              <> " (not on PATH; install it or override [languages."
+              <> id
+              <> "] command)",
             )
             inner_failures + 1
           }
@@ -192,13 +196,13 @@ pub fn doctor() -> Int {
     n -> {
       io.println(
         int.to_string(n)
-          <> " language server binar"
-          <> case n {
-            1 -> "y"
-            _ -> "ies"
-          }
-          <> " missing. Install per the README install table or "
-          <> "override the command in pharos.toml.",
+        <> " language server binar"
+        <> case n {
+          1 -> "y"
+          _ -> "ies"
+        }
+        <> " missing. Install per the README install table or "
+        <> "override the command in pharos.toml.",
       )
       1
     }
@@ -292,17 +296,13 @@ pub fn cleanup(apply: Bool, grace_ms: Int) -> Int {
             True -> #(found_orphans, alive + 1)
             False -> {
               let pid_files = instance_track.list_pid_files(dir_path)
-              #(
-                [#(owner_pid, dir_path, pid_files), ..found_orphans],
-                alive,
-              )
+              #([#(owner_pid, dir_path, pid_files), ..found_orphans], alive)
             }
           }
         })
 
       io.println(
-        "alive pharos instances (skipped): "
-        <> int.to_string(alive_count),
+        "alive pharos instances (skipped): " <> int.to_string(alive_count),
       )
       case orphans {
         [] -> {
@@ -312,8 +312,7 @@ pub fn cleanup(apply: Bool, grace_ms: Int) -> Int {
         _ -> {
           let n_orphans = list.length(orphans)
           io.println(
-            "orphan instances (owner PID dead): "
-            <> int.to_string(n_orphans),
+            "orphan instances (owner PID dead): " <> int.to_string(n_orphans),
           )
           io.println("")
           list.each(orphans, fn(orphan) {
@@ -330,9 +329,7 @@ pub fn cleanup(apply: Bool, grace_ms: Int) -> Int {
                   let meta = instance_track.read_pid_file(file_path)
                   let binary = lookup_meta(meta, "lsp_binary")
                   let server_id = lookup_meta(meta, "server_id")
-                  let alive_marker = case
-                    instance_track.is_pid_alive(lsp_pid)
-                  {
+                  let alive_marker = case instance_track.is_pid_alive(lsp_pid) {
                     True -> "alive"
                     False -> "gone"
                   }
@@ -403,9 +400,7 @@ fn reap_orphan(
 
   // Phase 1: SIGTERM every LSP whose PID is still alive.
   let alive_lsps =
-    list.filter(pid_files, fn(pf) {
-      instance_track.is_pid_alive(pf.0)
-    })
+    list.filter(pid_files, fn(pf) { instance_track.is_pid_alive(pf.0) })
   list.each(alive_lsps, fn(pf) {
     let #(lsp_pid, _path) = pf
     io.println(
@@ -432,9 +427,7 @@ fn reap_orphan(
         False -> acc
         True -> {
           io.println(
-            "  SIGKILL lsp="
-            <> int.to_string(lsp_pid)
-            <> " (survived TERM)",
+            "  SIGKILL lsp=" <> int.to_string(lsp_pid) <> " (survived TERM)",
           )
           case instance_track.signal_pid(lsp_pid, "KILL") {
             Ok(_) -> acc

@@ -123,8 +123,7 @@ pub fn reject_invalid_type_test() {
 }
 
 pub fn reject_missing_required_field_test() {
-  let bad =
-    "---\nname: foo\ntype: user\ndescription: x\ncreated: a\n---\n"
+  let bad = "---\nname: foo\ntype: user\ndescription: x\ncreated: a\n---\n"
   case memory_frontmatter.parse(bad) {
     Error(MissingRequiredField("last_accessed")) -> should.equal(1, 1)
     _ -> should.fail()

@@ -24,7 +24,8 @@ pub fn clip_equal_to_limit_keeps_everything_test() {
 }
 
 pub fn clip_larger_than_limit_trims_test() {
-  let assert Ok(value) = json.parse("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]", decode.dynamic)
+  let assert Ok(value) =
+    json.parse("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]", decode.dynamic)
   let result = clip.clip_array(value, 3)
 
   result.json_text |> should.equal("[1,2,3]")
@@ -32,10 +33,11 @@ pub fn clip_larger_than_limit_trims_test() {
 }
 
 pub fn clip_objects_in_array_test() {
-  let assert Ok(value) = json.parse(
-    "[{\"name\":\"a\"}, {\"name\":\"b\"}, {\"name\":\"c\"}]",
-    decode.dynamic,
-  )
+  let assert Ok(value) =
+    json.parse(
+      "[{\"name\":\"a\"}, {\"name\":\"b\"}, {\"name\":\"c\"}]",
+      decode.dynamic,
+    )
   let result = clip.clip_array(value, 2)
 
   result.json_text |> should.equal("[{\"name\":\"a\"},{\"name\":\"b\"}]")

@@ -15,11 +15,11 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 // Bumped from 5s to 30s for parity with hover/document_symbols.
 // The proc actor serializes concurrent requests; tighter timeouts
@@ -104,15 +104,12 @@ fn call_with_item(
 ) -> Result(String, CallHierarchyError) {
   case decode.run(item, item_uri_decoder()) {
     Error(_) ->
-      Error(InvalidItem(
-        "call hierarchy item missing or non-string `uri` field",
-      ))
+      Error(InvalidItem("call hierarchy item missing or non-string `uri` field"))
 
     Ok(file_uri) -> {
       // Build params text manually: {"item": <verbatim item>}.
       // tool_helpers.json_encode round-trips the Dynamic to JSON.
-      let params_text =
-        "{\"item\":" <> tool_helpers.json_encode(item) <> "}"
+      let params_text = "{\"item\":" <> tool_helpers.json_encode(item) <> "}"
 
       case
         session.with_session_and_retry(pool, file_uri, fn(lsp) {

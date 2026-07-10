@@ -18,14 +18,14 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
+import gleam/string
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/lifecycle
-import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -73,20 +73,23 @@ pub fn handle(
       ),
     ])
 
-  case session.prepare_all_for_method(pool, file_uri, "textDocument/codeAction") {
+  case
+    session.prepare_all_for_method(pool, file_uri, "textDocument/codeAction")
+  {
     Error(err) -> Error(SessionFailed(describe_session_error(err)))
     Ok([]) ->
       Error(SessionFailed(
         "no LSP server in the language registry claims "
-          <> "textDocument/codeAction for this file",
+        <> "textDocument/codeAction for this file",
       ))
     Ok(servers) -> {
       let responses =
         list.map(servers, fn(entry) {
           let #(server_id, lsp) = entry
-          let result = session.request_with_content_modified_retry(fn() {
-            proc.request(lsp, "textDocument/codeAction", params, timeout_ms)
-          })
+          let result =
+            session.request_with_content_modified_retry(fn() {
+              proc.request(lsp, "textDocument/codeAction", params, timeout_ms)
+            })
           #(server_id, result)
         })
       Ok(merge_responses(responses))

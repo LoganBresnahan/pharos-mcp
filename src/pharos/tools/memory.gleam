@@ -115,10 +115,12 @@ pub fn save(
   let path = entry_path(dir, name)
   use _ <- result.try(ensure_dir(dir))
   use existing_count <- result.try(count_in_dir(dir))
-  use _ <- result.try(case existing_count >= quota_for(type_) && !already_exists(path) {
-    True -> Error(QuotaExceeded(type_: type_, cap: quota_for(type_)))
-    False -> Ok(Nil)
-  })
+  use _ <- result.try(
+    case existing_count >= quota_for(type_) && !already_exists(path) {
+      True -> Error(QuotaExceeded(type_: type_, cap: quota_for(type_)))
+      False -> Ok(Nil)
+    },
+  )
   let created = case overwrite {
     True ->
       case read_entry_raw(path) {
@@ -224,8 +226,7 @@ pub fn audit(
   stale_threshold_days: Int,
   include_duplicates: Bool,
 ) -> Result(AuditReport, MemoryError) {
-  let entries =
-    list.append(collect_layer("project"), collect_layer("user"))
+  let entries = list.append(collect_layer("project"), collect_layer("user"))
   let stale =
     entries
     |> list.filter_map(fn(e) {
@@ -242,7 +243,9 @@ pub fn audit(
           ))
       }
     })
-    |> list.sort(fn(a, b) { int.compare(b.days_since_access, a.days_since_access) })
+    |> list.sort(fn(a, b) {
+      int.compare(b.days_since_access, a.days_since_access)
+    })
   let duplicates = case include_duplicates {
     False -> []
     True -> compute_duplicates(entries)
@@ -269,13 +272,20 @@ pub fn describe_error(err: MemoryError) -> String {
     InvalidType(t) ->
       "invalid type '" <> t <> "' (must be user|project|feedback|reference)"
     InvalidDescription(r) -> "invalid description: " <> r
-    Conflict(n) ->
-      "memory '" <> n <> "' exists; pass overwrite=true to replace"
+    Conflict(n) -> "memory '" <> n <> "' exists; pass overwrite=true to replace"
     NotFound(n, []) -> "memory not found: " <> n
     NotFound(n, near) ->
-      "memory not found: " <> n <> " (near misses: " <> string.join(near, ", ") <> ")"
+      "memory not found: "
+      <> n
+      <> " (near misses: "
+      <> string.join(near, ", ")
+      <> ")"
     QuotaExceeded(t, cap) ->
-      "quota exceeded: type '" <> t <> "' cap=" <> int.to_string(cap) <> "; memory_prune to free"
+      "quota exceeded: type '"
+      <> t
+      <> "' cap="
+      <> int.to_string(cap)
+      <> "; memory_prune to free"
     StorageError(r) -> "storage error: " <> r
     FrontmatterError(r) -> "frontmatter error: " <> r
   }
@@ -310,7 +320,8 @@ fn is_kebab_case(s: String) -> Bool {
       "-" -> True
       _ -> {
         let is_lower =
-          string.lowercase(g) == g && string.uppercase(g) != g
+          string.lowercase(g) == g
+          && string.uppercase(g) != g
           && string.length(g) == 1
         let is_digit = case int.parse(g) {
           Ok(_) -> True
@@ -429,9 +440,7 @@ fn already_exists(path: String) -> Bool {
   is_regular_file_ffi(path)
 }
 
-fn read_entry_raw(
-  path: String,
-) -> Result(#(Frontmatter, String), MemoryError) {
+fn read_entry_raw(path: String) -> Result(#(Frontmatter, String), MemoryError) {
   case read_file_ffi(path) {
     Error(reason) -> Error(StorageError(reason))
     Ok(bytes) ->
@@ -575,8 +584,7 @@ fn compute_duplicates(entries: List(MemoryEntry)) -> List(DuplicatePair) {
       case i < j {
         False -> Error(Nil)
         True -> {
-          let name_sim =
-            jaccard(tokenize_name(a.name), tokenize_name(b.name))
+          let name_sim = jaccard(tokenize_name(a.name), tokenize_name(b.name))
           let desc_sim =
             jaccard(tokenize_text(a.description), tokenize_text(b.description))
           let sim = float.max(name_sim, desc_sim)
@@ -641,8 +649,7 @@ fn is_alnum(g: String) -> Bool {
   case string.length(g) == 1 {
     False -> False
     True -> {
-      let is_letter =
-        string.lowercase(g) != string.uppercase(g)
+      let is_letter = string.lowercase(g) != string.uppercase(g)
       let is_digit = case int.parse(g) {
         Ok(_) -> True
         Error(_) -> False

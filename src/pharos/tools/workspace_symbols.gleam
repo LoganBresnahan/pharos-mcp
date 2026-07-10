@@ -26,8 +26,8 @@ import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
-import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/clip
 import pharos/tools/session
 import pharos/tools/tool_helpers
@@ -61,22 +61,26 @@ pub fn handle(
         clip.clip_array(value, limit)
       case is_empty_array(value) {
         False ->
-          Ok(format_response(
-            matches_json: matches_json,
-            truncated_by: truncated_by,
-            retried_with: None,
-            near_misses: [],
-          ))
+          Ok(
+            format_response(
+              matches_json: matches_json,
+              truncated_by: truncated_by,
+              retried_with: None,
+              near_misses: [],
+            ),
+          )
 
         True ->
           case variant_for(query) {
             None ->
-              Ok(format_response(
-                matches_json: matches_json,
-                truncated_by: truncated_by,
-                retried_with: None,
-                near_misses: [],
-              ))
+              Ok(
+                format_response(
+                  matches_json: matches_json,
+                  truncated_by: truncated_by,
+                  retried_with: None,
+                  near_misses: [],
+                ),
+              )
 
             Some(variant) -> {
               // Retry once with the alternate-convention query. Treat
@@ -156,12 +160,9 @@ fn format_response(
   near_misses near_misses: List(String),
 ) -> String {
   let near_misses_json =
-    json.to_string(
-      json.preprocessed_array(list.map(near_misses, json.string)),
-    )
+    json.to_string(json.preprocessed_array(list.map(near_misses, json.string)))
   let retried_field = case retried_with {
-    Some(v) ->
-      ",\"retried_with\":" <> json.to_string(json.string(v))
+    Some(v) -> ",\"retried_with\":" <> json.to_string(json.string(v))
     None -> ""
   }
   "{\"matches\":"
@@ -273,9 +274,7 @@ fn snake_to_camel(query: String) -> String {
       let camel_tail =
         list.map(tail, fn(part) {
           case string.first(part) {
-            Ok(first) ->
-              string.uppercase(first)
-              <> string.drop_start(part, 1)
+            Ok(first) -> string.uppercase(first) <> string.drop_start(part, 1)
             Error(_) -> part
           }
         })

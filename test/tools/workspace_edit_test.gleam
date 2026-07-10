@@ -16,9 +16,7 @@ pub fn render_single_changes_edit_test() {
   let assert Ok(rendered) = workspace_edit.render(value)
 
   rendered
-  |> should.equal(
-    "=== file:///foo.rs ===\n@@ 10:4-10:7 @@\n+ bar",
-  )
+  |> should.equal("=== file:///foo.rs ===\n@@ 10:4-10:7 @@\n+ bar")
 }
 
 // -- documentChanges form -------------------------------------------------
@@ -31,9 +29,7 @@ pub fn render_document_changes_form_test() {
   let assert Ok(rendered) = workspace_edit.render(value)
 
   rendered
-  |> should.equal(
-    "=== file:///bar.rs ===\n@@ 2:0-2:0 @@\n+ // added\n+ ",
-  )
+  |> should.equal("=== file:///bar.rs ===\n@@ 2:0-2:0 @@\n+ // added\n+ ")
 }
 
 // -- empty WorkspaceEdit (rust-analyzer no-op rename) --------------------

@@ -12,12 +12,12 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
 import pharos/tools/workspace_edit
-import gleam/string
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -96,12 +96,7 @@ fn render_workspace_edit(
   file_uri: String,
   edits_text: String,
 ) -> Result(String, FormatDocumentError) {
-  let synthetic =
-    "{\"changes\":{\""
-    <> file_uri
-    <> "\":"
-    <> edits_text
-    <> "}}"
+  let synthetic = "{\"changes\":{\"" <> file_uri <> "\":" <> edits_text <> "}}"
 
   case json_parse_dynamic(synthetic) {
     Error(reason) -> Error(RenderFailed(reason))

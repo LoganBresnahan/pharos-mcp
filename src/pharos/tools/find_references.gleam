@@ -24,11 +24,11 @@
 //// future use; rely on the retry path here.
 
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 pub const default_timeout_ms: Int = 60_000
 
@@ -68,10 +68,7 @@ fn build_params(
   include_declaration: Bool,
 ) -> json.Json {
   json.object([
-    #(
-      "textDocument",
-      json.object([#("uri", json.string(file_uri))]),
-    ),
+    #("textDocument", json.object([#("uri", json.string(file_uri))])),
     #(
       "position",
       json.object([

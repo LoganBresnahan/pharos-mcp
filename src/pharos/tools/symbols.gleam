@@ -33,8 +33,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import pharos/lsp/capabilities
-import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
@@ -240,12 +240,7 @@ pub fn edit_mode_from_string(s: String) -> Result(EditMode, SymbolsError) {
 /// `WorkspaceEdit` shape plus a rendered before/after summary; the
 /// LLM reviews and calls `apply_workspace_edit` separately.
 pub type EditPreview {
-  EditPreview(
-    uri: String,
-    range: Range,
-    new_text: String,
-    rendered: String,
-  )
+  EditPreview(uri: String, range: Range, new_text: String, rendered: String)
 }
 
 pub type SymbolsError {
@@ -280,10 +275,7 @@ pub fn find_symbol(
       // burning the per-call budget on a method that will never
       // respond — and still gives the LLM a usable handle for the
       // common "edit a symbol I know lives in this file" workflow.
-      use ws_supported <- result.try(workspace_symbol_supported(
-        pool,
-        scope_uri,
-      ))
+      use ws_supported <- result.try(workspace_symbol_supported(pool, scope_uri))
       use unique_uris <- result.try(case ws_supported {
         False -> Ok([scope_uri])
         True -> {
@@ -339,12 +331,14 @@ pub fn find_symbol(
             Error(other) -> Error(other)
           }
         })
-        |> result.map(list.filter_map(_, fn(o) {
-          case o {
-            Some(pair) -> Ok(pair)
-            None -> Error(Nil)
-          }
-        })),
+        |> result.map(
+          list.filter_map(_, fn(o) {
+            case o {
+              Some(pair) -> Ok(pair)
+              None -> Error(Nil)
+            }
+          }),
+        ),
       )
       let strict =
         list.flat_map(trees, fn(pair) {
@@ -511,10 +505,7 @@ fn name_match_strategy_with_fuzzy(
 ///
 /// Returns `Some(strategy)` on a hit, `None` otherwise. Drill's
 /// caller treats `None` as "no match, do not include this candidate."
-fn name_match_strategy(
-  symbol_name: String,
-  query: String,
-) -> Option(String) {
+fn name_match_strategy(symbol_name: String, query: String) -> Option(String) {
   let is_exact = symbol_name == query
   let is_arity = strip_arity_suffix(symbol_name) == query
   let is_kind = strip_kind_suffix(symbol_name) == query
@@ -562,10 +553,23 @@ fn strip_kind_suffix(name: String) -> String {
   case string.split(name, " ") {
     [base, kind_word] ->
       case kind_word {
-        "class" | "interface" | "struct" | "enum" | "trait"
-        | "object" | "module" | "namespace" | "function"
-        | "method" | "field" | "property" | "type"
-        | "macro" | "constant" | "variable" | "constructor" -> base
+        "class"
+        | "interface"
+        | "struct"
+        | "enum"
+        | "trait"
+        | "object"
+        | "module"
+        | "namespace"
+        | "function"
+        | "method"
+        | "field"
+        | "property"
+        | "type"
+        | "macro"
+        | "constant"
+        | "variable"
+        | "constructor" -> base
         _ -> name
       }
     _ -> name
@@ -674,11 +678,7 @@ pub fn find_referencing_symbols(
   pool: Pool,
   handle: SymbolHandle,
 ) -> Result(List(SymbolMatch), SymbolsError) {
-  use locations <- result.try(references_query(
-    pool,
-    handle,
-    default_timeout_ms,
-  ))
+  use locations <- result.try(references_query(pool, handle, default_timeout_ms))
   // For each reference location, fetch the documentSymbol tree of
   // its file and find the smallest symbol whose `range` contains the
   // reference position. That symbol is the "owner" of the reference.
@@ -700,12 +700,14 @@ pub fn find_referencing_symbols(
         Error(other) -> Error(other)
       }
     })
-    |> result.map(list.filter_map(_, fn(o) {
-      case o {
-        Some(pair) -> Ok(pair)
-        None -> Error(Nil)
-      }
-    })),
+    |> result.map(
+      list.filter_map(_, fn(o) {
+        case o {
+          Some(pair) -> Ok(pair)
+          None -> Error(Nil)
+        }
+      }),
+    ),
   )
   let tree_map: Dict(String, List(DocumentSymbolDecoded)) =
     dict.from_list(trees_by_uri)
@@ -747,12 +749,7 @@ fn smallest_containing(
             body_hash: "",
           ))
         let nested =
-          smallest_containing(
-            sym.children,
-            pos,
-            [sym.name, ..path_so_far],
-            uri,
-          )
+          smallest_containing(sym.children, pos, [sym.name, ..path_so_far], uri)
         case nested {
           Some(_) -> nested
           None ->
@@ -773,8 +770,7 @@ fn smallest_containing(
 fn range_contains(r: Range, p: Position) -> Bool {
   let after_start = case p.line > r.start.line {
     True -> True
-    False ->
-      p.line == r.start.line && p.character >= r.start.character
+    False -> p.line == r.start.line && p.character >= r.start.character
   }
   let before_end = case p.line < r.end.line {
     True -> True
@@ -814,11 +810,7 @@ pub fn containing_symbol(
   line: Int,
   character: Int,
 ) -> Result(Option(SymbolMatch), SymbolsError) {
-  use tree <- result.try(document_symbol_query(
-    pool,
-    uri,
-    default_timeout_ms,
-  ))
+  use tree <- result.try(document_symbol_query(pool, uri, default_timeout_ms))
   Ok(smallest_containing(
     tree,
     Position(line: line, character: character),
@@ -971,10 +963,7 @@ fn body_range_of(sym: DocumentSymbolDecoded) -> Range {
     True -> sym.range
     False ->
       Range(
-        start: Position(
-          line: sym.selection_range.end.line + 1,
-          character: 0,
-        ),
+        start: Position(line: sym.selection_range.end.line + 1, character: 0),
         end: sym.range.end,
       )
   }
@@ -1006,9 +995,10 @@ fn render_preview(
     <> int.to_string(range.end.character)
   let preview_body = case string.length(new_text) > 400 {
     True ->
-      string.slice(new_text, 0, 400) <> "\n…(" <> int.to_string(
-        string.length(new_text) - 400,
-      ) <> " more chars)"
+      string.slice(new_text, 0, 400)
+      <> "\n…("
+      <> int.to_string(string.length(new_text) - 400)
+      <> " more chars)"
     False -> new_text
   }
   header <> "\n---\n" <> preview_body
@@ -1059,9 +1049,7 @@ fn fs_read_file(path: String) -> Result(BitArray, String)
 /// resolution. Called by `find_symbol` after drill so the JSON
 /// response carries hashes the caller can later present back via
 /// edit_at_symbol.
-fn enrich_with_body_hashes(
-  matches: List(SymbolMatch),
-) -> List(SymbolMatch) {
+fn enrich_with_body_hashes(matches: List(SymbolMatch)) -> List(SymbolMatch) {
   let unique_uris =
     matches
     |> list.map(fn(m) { m.uri })
@@ -1076,7 +1064,8 @@ fn enrich_with_body_hashes(
   list.map(matches, fn(m) {
     case dict.get(file_cache, m.uri) {
       Error(_) -> SymbolMatch(..m, body_hash: "")
-      Ok(lines) -> SymbolMatch(..m, body_hash: hash_lines_at_range(lines, m.range))
+      Ok(lines) ->
+        SymbolMatch(..m, body_hash: hash_lines_at_range(lines, m.range))
     }
   })
 }
@@ -1176,7 +1165,9 @@ fn document_symbol_query(
     Ok(raw) ->
       decode.run(raw, decode.list(document_symbol_decoder()))
       |> result.map_error(fn(_) {
-        DecodeFailed("textDocument/documentSymbol returned an unrecognised shape")
+        DecodeFailed(
+          "textDocument/documentSymbol returned an unrecognised shape",
+        )
       })
     Error(session.RetrySessionError(err)) ->
       Error(SessionFailed(describe_session_error(err)))
@@ -1295,23 +1286,23 @@ fn modern_document_symbol_decoder() -> decode.Decoder(DocumentSymbolDecoded) {
 /// hierarchical container info from `containerName` is dropped
 /// (drill's shadow-recursion fallback still finds nested symbols
 /// because legacy servers return them all at the top level anyway).
-fn legacy_symbol_information_decoder() -> decode.Decoder(
-  DocumentSymbolDecoded,
-) {
+fn legacy_symbol_information_decoder() -> decode.Decoder(DocumentSymbolDecoded) {
   use name <- decode.field("name", decode.string)
   use kind <- decode.field("kind", decode.int)
   use range <- decode.field("location", {
     use r <- decode.field("range", range_decoder())
     decode.success(r)
   })
-  decode.success(DocumentSymbolDecoded(
-    name: name,
-    kind: kind,
-    range: range,
-    selection_range: range,
-    detail: None,
-    children: [],
-  ))
+  decode.success(
+    DocumentSymbolDecoded(
+      name: name,
+      kind: kind,
+      range: range,
+      selection_range: range,
+      detail: None,
+      children: [],
+    ),
+  )
 }
 
 fn reference_location_decoder() -> decode.Decoder(ReferenceLocation) {
@@ -1455,17 +1446,11 @@ pub fn symbol_match_to_json(m: SymbolMatch) -> json.Json {
     #("uri", json.string(m.uri)),
     #("range", range_to_json(m.range)),
     #("selection_range", range_to_json(m.selection_range)),
-    #(
-      "full_path",
-      json.preprocessed_array(list.map(m.full_path, json.string)),
-    ),
-    #(
-      "detail",
-      case m.detail {
-        Some(d) -> json.string(d)
-        None -> json.null()
-      },
-    ),
+    #("full_path", json.preprocessed_array(list.map(m.full_path, json.string))),
+    #("detail", case m.detail {
+      Some(d) -> json.string(d)
+      None -> json.null()
+    }),
     #("matched_via", json.string(m.matched_via)),
     #("handle", symbol_handle_to_json(symbol_handle_of_match(m))),
   ])
@@ -1534,13 +1519,10 @@ fn symbol_tree_node_to_json(n: SymbolTreeNode) -> json.Json {
     #("character", json.int(n.character)),
     #("end_line", json.int(n.end_line)),
     #("end_character", json.int(n.end_character)),
-    #(
-      "detail",
-      case n.detail {
-        Some(d) -> json.string(d)
-        None -> json.null()
-      },
-    ),
+    #("detail", case n.detail {
+      Some(d) -> json.string(d)
+      None -> json.null()
+    }),
     #(
       "children",
       json.preprocessed_array(list.map(n.children, symbol_tree_node_to_json)),

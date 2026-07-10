@@ -417,4 +417,3 @@ pub fn list_pharos_extracts_filters_test() {
   setenv("PHAROS_INSTALL_DIR", "")
   let _ = rm_rf(scratch_root)
 }
-

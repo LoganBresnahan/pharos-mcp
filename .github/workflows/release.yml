@@ -166,16 +166,35 @@ jobs:
 
       - name: Run --version + --doctor (Unix)
         if: runner.os != 'Windows'
+        env:
+          EXPECTED: ${{ needs.build.outputs.version }}
         run: |
           chmod +x "npm/${{ matrix.pkg }}/bin/${{ matrix.bin }}"
-          "./npm/${{ matrix.pkg }}/bin/${{ matrix.bin }}" --version
+          v=$("./npm/${{ matrix.pkg }}/bin/${{ matrix.bin }}" --version)
+          echo "$v"
+          # Drift guard: 0.1.3 shipped mislabelled as 0.1.2 because the
+          # runtime version was hardcoded and not bumped. Only a tagged
+          # release has a definitive expected version; dry-runs build
+          # from main and may legitimately differ, so they just print.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "$v" | grep -qx "pharos $EXPECTED" \
+              || { echo "::error::--version is '$v', expected 'pharos $EXPECTED'"; exit 1; }
+          fi
           "./npm/${{ matrix.pkg }}/bin/${{ matrix.bin }}" --doctor
 
       - name: Run --version + --doctor (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          EXPECTED: ${{ needs.build.outputs.version }}
         run: |
-          & "npm\${{ matrix.pkg }}\bin\${{ matrix.bin }}" --version
+          $v = (& "npm\${{ matrix.pkg }}\bin\${{ matrix.bin }}" --version | Out-String).Trim()
+          Write-Host $v
+          if ("${{ github.event_name }}" -eq "push") {
+            if ($v -notmatch "(?m)^pharos $([regex]::Escape($env:EXPECTED))$") {
+              Write-Error "--version is '$v', expected 'pharos $env:EXPECTED'"; exit 1
+            }
+          }
           & "npm\${{ matrix.pkg }}\bin\${{ matrix.bin }}" --doctor
 
       - name: MCP init+tools/list+echo handshake (Unix)

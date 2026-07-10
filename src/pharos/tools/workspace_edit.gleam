@@ -150,11 +150,7 @@ fn render_text_edit(edit: TextEdit) -> String {
 // -- Decoders -----------------------------------------------------------
 
 fn workspace_edit_decoder() -> decode.Decoder(List(FileEdits)) {
-  use changes <- decode.optional_field(
-    "changes",
-    [],
-    changes_decoder(),
-  )
+  use changes <- decode.optional_field("changes", [], changes_decoder())
   use document_changes <- decode.optional_field(
     "documentChanges",
     [],

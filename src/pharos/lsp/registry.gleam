@@ -43,8 +43,8 @@ import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
   type DiagnosticsMode, type LanguageConfig, type LookupError, type MethodScope,
-  type ServerConfig, All, LanguageConfig, NoPromotion, Only, ProbeWorkspaceSymbol,
-  Pull, Push, ServerConfig,
+  type ServerConfig, All, LanguageConfig, NoPromotion, Only,
+  ProbeWorkspaceSymbol, Pull, Push, ServerConfig,
 }
 
 /// Load the effective registry into `persistent_term`. Call once at
@@ -194,7 +194,10 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
 /// no match exists. Then the flat fields patch the resulting primary
 /// server's matching fields. Language-level fields
 /// (file_extensions, root_markers) replace the parent record's.
-fn merge_one(default: LanguageConfig, override: LanguageOverride) -> LanguageConfig {
+fn merge_one(
+  default: LanguageConfig,
+  override: LanguageOverride,
+) -> LanguageConfig {
   // Step 1: per-server array merge / append.
   let after_servers_array = case override.servers {
     None -> default.servers
@@ -288,10 +291,7 @@ fn apply_one_server_override(
 /// rely on the default; this module never lets a TOML override
 /// downgrade a server's scope from `Only` back to `All` because no
 /// real use case has surfaced.
-fn merge_server(
-  default: ServerConfig,
-  ovr: ServerOverride,
-) -> ServerConfig {
+fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
   ServerConfig(
     id: default.id,
     command: case ovr.command {
@@ -338,7 +338,10 @@ fn merge_server(
 /// an entry with no `command` still appears in the registry but will
 /// fail to spawn (visible via `pharos --doctor`). Methods default to
 /// `All`.
-fn server_from_override(target_id: String, ovr: ServerOverride) -> ServerConfig {
+fn server_from_override(
+  target_id: String,
+  ovr: ServerOverride,
+) -> ServerConfig {
   ServerConfig(
     id: target_id,
     command: option.unwrap(ovr.command, ""),
@@ -500,10 +503,9 @@ fn describe_json_decode_error(err: json.DecodeError) -> String {
 fn json_passthrough(text: String) -> Json
 
 @external(erlang, "pharos_json_passthrough_ffi", "parse_object_to_raw_pairs")
-fn workspace_config_pairs_ffi(text: String) -> Result(
-  List(#(String, String)),
-  WorkspaceConfigError,
-)
+fn workspace_config_pairs_ffi(
+  text: String,
+) -> Result(List(#(String, String)), WorkspaceConfigError)
 
 type WorkspaceConfigError {
   NotAnObject

@@ -111,8 +111,7 @@ pub fn extra_headers_are_ignored_test() {
 // -- Malformed input -----------------------------------------------------
 
 pub fn missing_content_length_header_errors_test() {
-  let buffer =
-    bit_array.from_string("Content-Type: text/plain\r\n\r\nbody")
+  let buffer = bit_array.from_string("Content-Type: text/plain\r\n\r\nbody")
 
   case framing.parse(buffer) {
     Error(framing.MissingContentLength) -> Nil

@@ -23,24 +23,24 @@ import gleam/bytes_tree
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http.{Get, Post}
-import gleam/int
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response, Response}
+import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/result
 import gleam/string
 import gleam/string_tree
+import mist
 import pharos/config
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/pool.{type Pool}
 import pharos/mcp/server
 import pharos/mcp/sessions.{type Sessions}
-import gleam/option.{None, Some}
-import mist
 
 /// Cap incoming bodies. A JSON-RPC message larger than this would
 /// represent either a misbehaving client or an attempted resource
@@ -100,12 +100,10 @@ fn build(
   |> mist.after_start(fn(bound_port, _scheme, _interface) {
     case port == bound_port {
       True ->
-        log.fields_at(
-          "pharos/mcp/http",
-          log_entry.Info,
-          "HTTP listener bound",
-          [#("bind", bind), #("port", int.to_string(bound_port))],
-        )
+        log.fields_at("pharos/mcp/http", log_entry.Info, "HTTP listener bound", [
+          #("bind", bind),
+          #("port", int.to_string(bound_port)),
+        ])
       False ->
         log.fields_at(
           "pharos/mcp/http",
@@ -139,7 +137,10 @@ fn handle_post(
 ) -> Response(mist.ResponseData) {
   case origin_allowed(req) {
     False -> {
-      log.warn_at("pharos/mcp/http", "rejecting POST /mcp with disallowed Origin header")
+      log.warn_at(
+        "pharos/mcp/http",
+        "rejecting POST /mcp with disallowed Origin header",
+      )
       forbidden()
     }
     True -> {
@@ -168,12 +169,9 @@ fn handle_session(
   case is_initialize(body_text) {
     True -> {
       let id = sessions.issue(sessions)
-      log.fields_at(
-        "pharos/mcp/http",
-        log_entry.Info,
-        "issued session",
-        [#("session_id", id)],
-      )
+      log.fields_at("pharos/mcp/http", log_entry.Info, "issued session", [
+        #("session_id", id),
+      ])
       with_session_id(dispatch(pool, body_text), id)
     }
 
@@ -218,12 +216,10 @@ fn write_port_file_if_configured(bound_port: Int) -> Nil {
     Some(path) ->
       case atomic_write_text(path, int.to_string(bound_port)) {
         Ok(_) ->
-          log.fields_at(
-            "pharos/mcp/http",
-            log_entry.Info,
-            "wrote bound port",
-            [#("port", int.to_string(bound_port)), #("path", path)],
-          )
+          log.fields_at("pharos/mcp/http", log_entry.Info, "wrote bound port", [
+            #("port", int.to_string(bound_port)),
+            #("path", path),
+          ])
         Error(reason) ->
           log.fields_at(
             "pharos/mcp/http",
@@ -248,7 +244,10 @@ fn handle_sse(
 ) -> Response(mist.ResponseData) {
   case origin_allowed(req) {
     False -> {
-      log.warn_at("pharos/mcp/http", "rejecting GET /mcp/events with disallowed Origin header")
+      log.warn_at(
+        "pharos/mcp/http",
+        "rejecting GET /mcp/events with disallowed Origin header",
+      )
       forbidden()
     }
     True ->
@@ -304,12 +303,9 @@ fn sse_init(
   session_id: String,
 ) -> SseState {
   let _ = sessions.attach_sse(sessions, session_id, self)
-  log.fields_at(
-    "pharos/mcp/http",
-    log_entry.Info,
-    "SSE attached for session",
-    [#("session_id", session_id)],
-  )
+  log.fields_at("pharos/mcp/http", log_entry.Info, "SSE attached for session", [
+    #("session_id", session_id),
+  ])
   schedule_heartbeat(self)
   SseState(sessions: sessions, session_id: session_id, self: self)
 }
@@ -354,7 +350,7 @@ fn sse_loop(
         mist.send_event(
           conn,
           mist.event(string_tree.from_string(""))
-          |> mist.event_name("heartbeat"),
+            |> mist.event_name("heartbeat"),
         )
       {
         Ok(_) -> {
@@ -389,7 +385,9 @@ fn schedule_heartbeat_self(state: SseState) -> Nil {
 
 // Lift a bytes_tree to a string_tree because mist.event takes the
 // latter. Trivial conversion via bit_array round-trip.
-fn bytes_tree_to_string_tree(tree: bytes_tree.BytesTree) -> string_tree.StringTree {
+fn bytes_tree_to_string_tree(
+  tree: bytes_tree.BytesTree,
+) -> string_tree.StringTree {
   tree
   |> bytes_tree.to_bit_array
   |> bit_array.to_string
@@ -467,9 +465,8 @@ fn is_local_origin(origin: String) -> Bool {
 
 fn local_origin_prefixes() -> List(String) {
   [
-    "http://localhost", "https://localhost",
-    "http://127.0.0.1", "https://127.0.0.1",
-    "http://[::1]", "https://[::1]",
+    "http://localhost", "https://localhost", "http://127.0.0.1",
+    "https://127.0.0.1", "http://[::1]", "https://[::1]",
   ]
 }
 
@@ -506,7 +503,10 @@ fn forbidden() -> Response(mist.ResponseData) {
 fn method_not_allowed() -> Response(mist.ResponseData) {
   Response(
     status: 405,
-    headers: [#("allow", "POST"), #("content-type", "text/plain; charset=utf-8")],
+    headers: [
+      #("allow", "POST"),
+      #("content-type", "text/plain; charset=utf-8"),
+    ],
     body: mist.Bytes(bytes_tree.from_string("method not allowed")),
   )
 }

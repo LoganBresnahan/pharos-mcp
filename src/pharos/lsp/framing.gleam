@@ -108,8 +108,7 @@ fn do_parse(
 
 fn parse_content_length(header_bytes: BitArray) -> Result(Int, ParseError) {
   case bit_array.to_string(header_bytes) {
-    Error(Nil) ->
-      Error(InvalidContentLength("header is not valid UTF-8"))
+    Error(Nil) -> Error(InvalidContentLength("header is not valid UTF-8"))
 
     Ok(header_string) -> {
       let lines = string.split(header_string, on: "\r\n")

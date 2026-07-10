@@ -54,4 +54,3 @@ pub fn boot_sweep() -> Nil {
   let _ = rotate_crash_dumps()
   Nil
 }
-

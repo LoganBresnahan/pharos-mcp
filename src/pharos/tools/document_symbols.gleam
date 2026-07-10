@@ -7,11 +7,11 @@
 //// Pass-through verbatim as JSON.
 
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 // Same headroom as hover/find_references — 5s is too tight when the
 // proc actor is mid-drain on cold start (M11 polish B1).

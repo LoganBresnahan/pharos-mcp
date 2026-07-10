@@ -92,9 +92,11 @@ pub fn handle(
   case session.config_for_uri(file_uri) {
     Error(err) -> Error(map_session_error(err))
     Ok(config) -> {
-      let covering = languages.servers_covering_method(config, diagnostic_method)
+      let covering =
+        languages.servers_covering_method(config, diagnostic_method)
       case covering {
-        [_single] -> attempt_single(pool, file_uri, config, timeout_ms, retries_left: 1)
+        [_single] ->
+          attempt_single(pool, file_uri, config, timeout_ms, retries_left: 1)
         _ -> attempt_merge(pool, file_uri, config, covering, timeout_ms)
       }
     }
@@ -390,8 +392,7 @@ fn byte_at(s: String, idx: Int) -> Int
 fn string_join(parts: List(String), sep: String) -> String {
   case parts {
     [] -> ""
-    [first, ..rest] ->
-      list.fold(rest, first, fn(acc, p) { acc <> sep <> p })
+    [first, ..rest] -> list.fold(rest, first, fn(acc, p) { acc <> sep <> p })
   }
 }
 
@@ -477,10 +478,7 @@ fn synthesize_publish_body(uri: String, items_json: String) -> String {
 
 // -- Cache + eviction (single-server only) -------------------------------
 
-fn lookup_cached(
-  file_uri: String,
-  server_id: String,
-) -> option.Option(String) {
+fn lookup_cached(file_uri: String, server_id: String) -> option.Option(String) {
   case diagnostics_cache.get(file_uri, server_id) {
     Error(_) -> option.None
     Ok(params_value) -> {
@@ -494,11 +492,7 @@ fn lookup_cached(
   }
 }
 
-fn evict_for_uri(
-  pool: Pool,
-  file_uri: String,
-  config: LanguageConfig,
-) -> Nil {
+fn evict_for_uri(pool: Pool, file_uri: String, config: LanguageConfig) -> Nil {
   case workspace_root.discover_from_uri(file_uri, config.root_markers) {
     Error(_) -> Nil
     Ok(raw_workspace) -> {

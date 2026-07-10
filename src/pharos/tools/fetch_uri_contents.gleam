@@ -29,8 +29,8 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/string
 import pharos/lsp/languages.{type CustomUriScheme}
-import pharos/lsp/proc
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
 

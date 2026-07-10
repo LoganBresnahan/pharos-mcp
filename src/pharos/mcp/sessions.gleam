@@ -178,10 +178,11 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let id = generate_session_id()
       let now = now_us()
       let table =
-        dict.insert(state.table, id, SessionState(
-          last_activity_us: now,
-          sse_subject: None,
-        ))
+        dict.insert(
+          state.table,
+          id,
+          SessionState(last_activity_us: now, sse_subject: None),
+        )
       process.send(reply, id)
       actor.continue(State(table: table))
     }
@@ -219,7 +220,8 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
           actor.continue(state)
         }
         Ok(existing) -> {
-          let updated = SessionState(..existing, sse_subject: option.Some(subject))
+          let updated =
+            SessionState(..existing, sse_subject: option.Some(subject))
           let table = dict.insert(state.table, session_id, updated)
           process.send(reply, True)
           actor.continue(State(table: table))

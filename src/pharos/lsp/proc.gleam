@@ -87,10 +87,7 @@ pub opaque type Msg {
     settings: Json,
     reply_to: Subject(Result(Nil, lifecycle.RequestError)),
   )
-  SendNotification(
-    body: BitArray,
-    reply_to: Subject(Result(Nil, client.Error)),
-  )
+  SendNotification(body: BitArray, reply_to: Subject(Result(Nil, client.Error)))
   WaitForPublish(
     target_uri: String,
     timeout_ms: Int,
@@ -141,7 +138,9 @@ pub fn start(
       Ok(c) ->
         case lifecycle.initialize(c, 0, init_params, initialize_timeout_ms) {
           Error(e) ->
-            Error("initialize handshake failed: " <> describe_lifecycle_error(e))
+            Error(
+              "initialize handshake failed: " <> describe_lifecycle_error(e),
+            )
           Ok(#(c, initialize_result)) -> {
             // Stash the server's advertised capabilities under the
             // actor's own pid so tools can short-circuit calls to
@@ -657,7 +656,8 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     }
 
     WaitForReady(maybe_token:, timeout_ms:, reply_to:) -> {
-      let result = lifecycle.wait_for_ready(state.client, maybe_token, timeout_ms)
+      let result =
+        lifecycle.wait_for_ready(state.client, maybe_token, timeout_ms)
       case result {
         Ok(updated_client) -> {
           process.send(reply_to, Ok(Nil))
@@ -715,8 +715,7 @@ fn handle_port_message(
       // Append raw bytes to the Client's framing buffer, parse out
       // any complete frames, and process each.
       let updated = client.feed_bytes(state.client, bytes)
-      let drained =
-        drain_buffered_frames(State(..state, client: updated))
+      let drained = drain_buffered_frames(State(..state, client: updated))
       actor.continue(drained)
     }
     Error(_) -> {
@@ -930,16 +929,22 @@ fn drain_loop(
               // cache_publish_diagnostics has updated the cache
               // for any publishDiagnostics frame; check the
               // cache for our target_uri to capture the body.
-              let updated_client =
-                case lifecycle.classify_and_dispatch(c, body) {
-                  Ok(uc) -> uc
-                  Error(_) -> c
-                }
+              let updated_client = case
+                lifecycle.classify_and_dispatch(c, body)
+              {
+                Ok(uc) -> uc
+                Error(_) -> c
+              }
               let next_latest = case latest {
                 Some(_) -> latest
                 None -> lookup_cached_envelope(target_uri, server_id)
               }
-              drain_loop(updated_client, target_uri, remaining_ms - drain_step_ms, next_latest)
+              drain_loop(
+                updated_client,
+                target_uri,
+                remaining_ms - drain_step_ms,
+                next_latest,
+              )
             }
           }
       }
@@ -967,4 +972,3 @@ fn lookup_cached_envelope(
 
 @external(erlang, "pharos_fs_ffi", "encode_json")
 fn tool_helpers_json_encode(value: Dynamic) -> String
-

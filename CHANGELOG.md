@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-07-10
+
+### Fixed
+
+- **`--version` and MCP `serverInfo` no longer drift from the release.**
+  pharos's own version was hardcoded as a string literal in five source
+  files; 0.1.3 bumped the package metadata but not those literals, so it
+  shipped identifying itself as `0.1.2` to every MCP client. The version
+  is now read once at runtime from the OTP application `vsn` (derived
+  from `mix.exs` / `gleam.toml`), and CI asserts `pharos --version`
+  matches the release tag so this can't recur.
+
 ## [0.1.3] — 2026-07-10
 
 ### Changed

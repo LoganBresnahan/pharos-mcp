@@ -38,7 +38,8 @@ pub fn render_language(config: LanguageConfig) -> String {
     "file_extensions = " <> render_string_list(config.file_extensions)
   let markers = "root_markers = " <> render_string_list(config.root_markers)
   let promotion_comment = case config.root_promotion {
-    languages.NoPromotion -> "# root_promotion is locked to NoPromotion (not user-overridable)"
+    languages.NoPromotion ->
+      "# root_promotion is locked to NoPromotion (not user-overridable)"
     languages.CargoWorkspacePromotion ->
       "# root_promotion is locked to CargoWorkspacePromotion (not user-overridable; ADR-015)"
   }
@@ -51,7 +52,8 @@ pub fn render_language(config: LanguageConfig) -> String {
     |> list.map(fn(server) { render_server(config.id, server) })
     |> string.join("\n\n")
 
-  let scheme_block = render_custom_uri_schemes(config.id, config.custom_uri_schemes)
+  let scheme_block =
+    render_custom_uri_schemes(config.id, config.custom_uri_schemes)
 
   let body = case config.servers {
     [] -> lang_block
@@ -75,7 +77,11 @@ fn render_custom_uri_schemes(
   |> list.map(fn(pair) {
     let #(scheme, meta) = pair
     let header =
-      "[languages." <> language_id <> ".custom_uri_schemes." <> render_scheme_key(scheme) <> "]"
+      "[languages."
+      <> language_id
+      <> ".custom_uri_schemes."
+      <> render_scheme_key(scheme)
+      <> "]"
     let lines = [
       header,
       "fetch_method = " <> render_string(meta.fetch_method),
@@ -106,11 +112,7 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "methods = " <> render_methods(server.methods),
     "diagnostics_mode = " <> render_diagnostics_mode(server.diagnostics_mode),
     "readiness_token = " <> render_optional_string(server.readiness_token),
-    render_optional_int(
-      "ready_timeout_ms",
-      server.ready_timeout_ms,
-      "60000",
-    ),
+    render_optional_int("ready_timeout_ms", server.ready_timeout_ms, "60000"),
     render_optional_int(
       "initialize_timeout_ms",
       server.initialize_timeout_ms,
@@ -153,14 +155,9 @@ fn render_optional_int(
   default_str: String,
 ) -> String {
   case value {
-    option.Some(n) ->
-      field_name <> " = " <> int_to_string(n)
+    option.Some(n) -> field_name <> " = " <> int_to_string(n)
     option.None ->
-      "# "
-      <> field_name
-      <> " uses bundled default ("
-      <> default_str
-      <> "ms)"
+      "# " <> field_name <> " uses bundled default (" <> default_str <> "ms)"
   }
 }
 

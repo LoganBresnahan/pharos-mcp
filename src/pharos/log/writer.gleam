@@ -16,9 +16,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
-import pharos/log/entry.{
-  type Level, type LogEntry, LogEntry, Warn,
-}
+import pharos/log/entry.{type Level, type LogEntry, LogEntry, Warn}
 import pharos/log/filter.{type Filter, Filter, Override}
 import pharos/log/ring
 
@@ -284,9 +282,7 @@ fn maybe_write_crash_dump() -> Nil {
   }
 }
 
-fn rows_to_binaries(
-  rows: List(#(entry.Level, String)),
-) -> List(String) {
+fn rows_to_binaries(rows: List(#(entry.Level, String))) -> List(String) {
   list.map(rows, fn(row) {
     let #(_level, line) = row
     line
@@ -363,14 +359,16 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
             0 -> actor.continue(after_fan)
             n -> {
               let drop_line =
-                entry.render(LogEntry(
-                  timestamp_ms: now_ms(),
-                  level: Warn,
-                  target: "pharos/log/writer",
-                  correlation_id: "",
-                  message: "log entries dropped due to backpressure",
-                  fields: [#("dropped", int_to_string(n))],
-                ))
+                entry.render(
+                  LogEntry(
+                    timestamp_ms: now_ms(),
+                    level: Warn,
+                    target: "pharos/log/writer",
+                    correlation_id: "",
+                    message: "log entries dropped due to backpressure",
+                    fields: [#("dropped", int_to_string(n))],
+                  ),
+                )
               let after_drop =
                 fan_out(after_fan, drop_line, Warn, "pharos/log/writer")
               actor.continue(State(..after_drop, dropped: 0))
@@ -379,11 +377,9 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         }
       }
 
-    NoteDrop ->
-      actor.continue(State(..state, dropped: state.dropped + 1))
+    NoteDrop -> actor.continue(State(..state, dropped: state.dropped + 1))
 
-    SetFilter(new_filter) ->
-      actor.continue(State(..state, filter: new_filter))
+    SetFilter(new_filter) -> actor.continue(State(..state, filter: new_filter))
 
     SetTargetSync(target_prefix, level, reply) -> {
       let new_filter = update_overrides(state.filter, target_prefix, level)
@@ -396,10 +392,11 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       // first emit (sync filter alone closed the in-actor race; this
       // closes the at-emitter race for high-volume paths). M10 fix.
       case target_prefix == trace_target {
-        True -> trace_filter_cache_set(case level {
-          Some(_) -> trace_cache_on
-          None -> trace_cache_off
-        })
+        True ->
+          trace_filter_cache_set(case level {
+            Some(_) -> trace_cache_on
+            None -> trace_cache_off
+          })
         False -> Nil
       }
       // Reply BEFORE actor.continue so the caller's `process.call` is
@@ -420,12 +417,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
-fn fan_out(
-  state: State,
-  line: String,
-  level: Level,
-  target: String,
-) -> State {
+fn fan_out(state: State, line: String, level: Level, target: String) -> State {
   case state.stderr_enabled {
     True -> direct_stderr(line)
     False -> Nil
@@ -448,10 +440,7 @@ fn fan_out(
       // file_sink_write appends `\n`; mirror that math here.
       let advance = byte_size(line) + 1
       let new_bytes = state.file_bytes_written + advance
-      maybe_rotate(
-        State(..state, file_bytes_written: new_bytes),
-        handle,
-      )
+      maybe_rotate(State(..state, file_bytes_written: new_bytes), handle)
     }
   }
 }
@@ -466,11 +455,7 @@ fn maybe_rotate(state: State, handle: FileHandle) -> State {
     Some(cap), Some(path) if state.file_bytes_written >= cap ->
       case file_sink_rotate(handle, path, state.file_keep_rotated) {
         Ok(new_handle) ->
-          State(
-            ..state,
-            file_handle: Some(new_handle),
-            file_bytes_written: 0,
-          )
+          State(..state, file_handle: Some(new_handle), file_bytes_written: 0)
         Error(reason) -> {
           direct_stderr(
             "[pharos/log] file sink rotation failed for "

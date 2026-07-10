@@ -109,7 +109,11 @@ pub fn defaults() -> Registry {
   |> insert("workspace/applyEdit", default_decline_apply_edit)
 }
 
-pub fn insert(registry: Registry, method: String, handler: Handler) -> Registry {
+pub fn insert(
+  registry: Registry,
+  method: String,
+  handler: Handler,
+) -> Registry {
   Registry(handlers: dict.insert(registry.handlers, method, handler))
 }
 
@@ -150,7 +154,10 @@ fn default_decline_apply_edit(_id: LspId, _params: Dynamic) -> HandlerResult {
 /// per-language config (Stage 0C), reply with an array of nulls of
 /// the same length so the spec's `result.length == items.length`
 /// invariant holds.
-fn default_workspace_configuration(_id: LspId, params: Dynamic) -> HandlerResult {
+fn default_workspace_configuration(
+  _id: LspId,
+  params: Dynamic,
+) -> HandlerResult {
   let item_count = case decode.run(params, configuration_items_decoder()) {
     Ok(items) -> list.length(items)
     Error(_) -> 0

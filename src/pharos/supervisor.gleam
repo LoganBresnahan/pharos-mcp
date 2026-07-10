@@ -78,16 +78,18 @@ pub fn start(
     supervisor.new(supervisor.RestForOne)
     |> supervisor.restart_tolerance(intensity: 5, period: 60)
     |> supervisor.add(supervision.worker(ring_keeper.start_supervised))
-    |> supervisor.add(supervision.worker(fn() {
-      writer.start_supervised(
-        config.log_filter,
-        config.log_ring_enabled,
-        config.log_stderr_enabled,
-        config.log_file_path,
-        config.log_file_max_bytes,
-        config.log_file_keep_rotated,
-      )
-    }))
+    |> supervisor.add(
+      supervision.worker(fn() {
+        writer.start_supervised(
+          config.log_filter,
+          config.log_ring_enabled,
+          config.log_stderr_enabled,
+          config.log_file_path,
+          config.log_file_max_bytes,
+          config.log_file_keep_rotated,
+        )
+      }),
+    )
 
   let pool_subtree =
     supervisor.new(supervisor.RestForOne)
@@ -98,8 +100,12 @@ pub fn start(
   let root =
     supervisor.new(supervisor.OneForOne)
     |> supervisor.restart_tolerance(intensity: 5, period: 60)
-    |> supervisor.add(supervision.supervisor(fn() { supervisor.start(log_subtree) }))
-    |> supervisor.add(supervision.supervisor(fn() { supervisor.start(pool_subtree) }))
+    |> supervisor.add(
+      supervision.supervisor(fn() { supervisor.start(log_subtree) }),
+    )
+    |> supervisor.add(
+      supervision.supervisor(fn() { supervisor.start(pool_subtree) }),
+    )
 
   // HTTP-only children (sessions + listener). Boot order matters:
   // sessions must register its global before the listener starts
@@ -109,13 +115,16 @@ pub fn start(
     Http | Both ->
       root
       |> supervisor.add(supervision.worker(sessions.start_supervised))
-      |> supervisor.add(supervision.worker(fn() {
-        case pool.global(), sessions.global() {
-          Ok(p), Ok(s) ->
-            http.start_supervised(p, s, config.http_port, config.http_bind)
-          _, _ -> Error(actor.InitFailed("pool/sessions global lookup failed"))
-        }
-      }))
+      |> supervisor.add(
+        supervision.worker(fn() {
+          case pool.global(), sessions.global() {
+            Ok(p), Ok(s) ->
+              http.start_supervised(p, s, config.http_port, config.http_bind)
+            _, _ ->
+              Error(actor.InitFailed("pool/sessions global lookup failed"))
+          }
+        }),
+      )
   }
 
   // stdio_worker is transient — stdin EOF returns actor.stop()
@@ -138,9 +147,7 @@ pub fn start(
 /// Convenience: shut the root supervisor down by sending it a
 /// normal exit. `pharos.main` calls this on stdin EOF (Stdio
 /// transport's clean-exit signal).
-pub fn shutdown(
-  root: actor.Started(supervisor.Supervisor),
-) -> Nil {
+pub fn shutdown(root: actor.Started(supervisor.Supervisor)) -> Nil {
   process.send_exit(root.pid)
 }
 

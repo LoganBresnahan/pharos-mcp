@@ -27,8 +27,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import pharos/config
-import pharos/tools/session_overrides
-import pharos/tools/tool_helpers
 import pharos/log
 import pharos/log/entry
 import pharos/log/trace_ring
@@ -37,6 +35,8 @@ import pharos/lsp/pool.{type Pool}
 import pharos/lsp/registry
 import pharos/lsp/registry_toml
 import pharos/runtime
+import pharos/tools/session_overrides
+import pharos/tools/tool_helpers
 
 const default_processes_limit: Int = 100
 
@@ -106,8 +106,7 @@ pub fn dispatch(
       Some(handle_effective_tool_config(arguments))
     "runtime_lsp_state" -> Some(handle_lsp_state(pool))
     "runtime_pool_recon" -> Some(handle_pool_recon(arguments))
-    "runtime_server_capabilities" ->
-      Some(handle_server_capabilities(pool))
+    "runtime_server_capabilities" -> Some(handle_server_capabilities(pool))
     _ -> None
   }
 }
@@ -121,9 +120,9 @@ fn runtime_processes_definition() -> Json {
       "description",
       json.string(
         "List the first N live BEAM processes with registered name, "
-          <> "current function, mailbox depth, memory, and status. "
-          <> "Use to spot stuck mailboxes or memory hot spots when "
-          <> "pharos itself is misbehaving.",
+        <> "current function, mailbox depth, memory, and status. "
+        <> "Use to spot stuck mailboxes or memory hot spots when "
+        <> "pharos itself is misbehaving.",
       ),
     ),
     #(
@@ -141,7 +140,7 @@ fn runtime_processes_definition() -> Json {
                   "description",
                   json.string(
                     "Cap on returned rows (default 100). Higher values "
-                      <> "may flood the LLM context.",
+                    <> "may flood the LLM context.",
                   ),
                 ),
               ]),
@@ -181,8 +180,8 @@ fn runtime_pid_info_definition() -> Json {
       "description",
       json.string(
         "Full erlang:process_info/1 dump for one pid (text form, "
-          <> "e.g. `<0.143.0>`). Pids change across restart; resolve "
-          <> "via runtime_processes first if unsure.",
+        <> "e.g. `<0.143.0>`). Pids change across restart; resolve "
+        <> "via runtime_processes first if unsure.",
       ),
     ),
     #(
@@ -234,14 +233,11 @@ fn runtime_supervision_tree_definition() -> Json {
       "description",
       json.string(
         "Snapshot of every supervised process under every running "
-          <> "OTP application. Each node carries pid, registered "
-          <> "name, current function, and supervisor/worker kind.",
+        <> "OTP application. Each node carries pid, registered "
+        <> "name, current function, and supervisor/worker kind.",
       ),
     ),
-    #(
-      "inputSchema",
-      json.object([#("type", json.string("object"))]),
-    ),
+    #("inputSchema", json.object([#("type", json.string("object"))])),
   ])
 }
 
@@ -268,8 +264,8 @@ fn runtime_ets_tables_definition() -> Json {
       "description",
       json.string(
         "All inspectable ETS tables with name, size, memory, owner "
-          <> "pid, type, and protection. Look here when memory or "
-          <> "table-not-found errors surface.",
+        <> "pid, type, and protection. Look here when memory or "
+        <> "table-not-found errors surface.",
       ),
     ),
     #("inputSchema", json.object([#("type", json.string("object"))])),
@@ -301,7 +297,7 @@ fn runtime_memory_definition() -> Json {
       "description",
       json.string(
         "erlang:memory() breakdown — total, processes, atom, binary, "
-          <> "ets, code, system. All values in bytes.",
+        <> "ets, code, system. All values in bytes.",
       ),
     ),
     #("inputSchema", json.object([#("type", json.string("object"))])),
@@ -325,9 +321,7 @@ fn runtime_applications_definition() -> Json {
     #("name", json.string("runtime_applications")),
     #(
       "description",
-      json.string(
-        "Running OTP applications with descriptions and versions.",
-      ),
+      json.string("Running OTP applications with descriptions and versions."),
     ),
     #("inputSchema", json.object([#("type", json.string("object"))])),
   ])
@@ -355,10 +349,10 @@ fn runtime_scheduler_util_definition() -> Json {
       "description",
       json.string(
         "scheduler:utilization sample over `interval_ms` (default "
-          <> "1000). Blocks for the duration. Returns one row per "
-          <> "scheduler plus aggregates. Sampling resolution is one "
-          <> "second — values are floor-divided by 1000 with a "
-          <> "minimum of 1s, so `interval_ms=500` samples for 1s.",
+        <> "1000). Blocks for the duration. Returns one row per "
+        <> "scheduler plus aggregates. Sampling resolution is one "
+        <> "second — values are floor-divided by 1000 with a "
+        <> "minimum of 1s, so `interval_ms=500` samples for 1s.",
       ),
     ),
     #(
@@ -410,8 +404,8 @@ fn runtime_log_tail_definition() -> Json {
       "description",
       json.string(
         "Read the last N entries from the in-memory log ring. "
-          <> "Optional substring filter narrows results (e.g. "
-          <> "`cid=42` to inspect one MCP request's flow).",
+        <> "Optional substring filter narrows results (e.g. "
+        <> "`cid=42` to inspect one MCP request's flow).",
       ),
     ),
     #(
@@ -425,7 +419,10 @@ fn runtime_log_tail_definition() -> Json {
               "n",
               json.object([
                 #("type", json.string("integer")),
-                #("description", json.string("Number of entries (default 200).")),
+                #(
+                  "description",
+                  json.string("Number of entries (default 200)."),
+                ),
               ]),
             ),
             #(
@@ -473,8 +470,8 @@ fn runtime_log_clear_definition() -> Json {
       "description",
       json.string(
         "Reset the in-memory log ring. Use before reproducing a "
-          <> "bug so a follow-up runtime_log_tail returns only the "
-          <> "relevant lines.",
+        <> "bug so a follow-up runtime_log_tail returns only the "
+        <> "relevant lines.",
       ),
     ),
     #("inputSchema", json.object([#("type", json.string("object"))])),
@@ -495,10 +492,10 @@ fn runtime_log_level_definition() -> Json {
       "description",
       json.string(
         "Override the log level for one target prefix at runtime. "
-          <> "`level` is `debug|info|warn|error|off`. Example: "
-          <> "`{ target: \"pharos/lsp/proc\", level: \"debug\" }` "
-          <> "to crank one module's verbosity for the rest of "
-          <> "the session.",
+        <> "`level` is `debug|info|warn|error|off`. Example: "
+        <> "`{ target: \"pharos/lsp/proc\", level: \"debug\" }` "
+        <> "to crank one module's verbosity for the rest of "
+        <> "the session.",
       ),
     ),
     #(
@@ -546,8 +543,8 @@ fn handle_log_level(args: Option(Dynamic)) -> ToolResult {
     Error(_) ->
       Error(
         "level must be one of debug|info|warn|error|off (got `"
-          <> level_text
-          <> "`)",
+        <> level_text
+        <> "`)",
       )
     Ok(opt) ->
       case log.set_target_level(target, opt) {
@@ -555,10 +552,10 @@ fn handle_log_level(args: Option(Dynamic)) -> ToolResult {
         Ok(Nil) ->
           Ok(
             "{\"target\":\""
-              <> target
-              <> "\",\"level\":\""
-              <> level_text
-              <> "\"}",
+            <> target
+            <> "\",\"level\":\""
+            <> level_text
+            <> "\"}",
           )
       }
   }
@@ -584,11 +581,11 @@ fn runtime_trace_lsp_definition() -> Json {
       "description",
       json.string(
         "Capture LSP wire bytes for a fixed window then return the "
-          <> "collected trace lines. Toggles the `pharos/lsp/trace` "
-          <> "filter on, sleeps `duration_ms`, snapshots the ring, "
-          <> "and restores the filter. Cap: "
-          <> int.to_string(trace_lsp_max_duration_ms)
-          <> "ms.",
+        <> "collected trace lines. Toggles the `pharos/lsp/trace` "
+        <> "filter on, sleeps `duration_ms`, snapshots the ring, "
+        <> "and restores the filter. Cap: "
+        <> int.to_string(trace_lsp_max_duration_ms)
+        <> "ms.",
       ),
     ),
     #(
@@ -606,8 +603,8 @@ fn runtime_trace_lsp_definition() -> Json {
                   "description",
                   json.string(
                     "How long to keep the tracer on (default 5000, max "
-                      <> int.to_string(trace_lsp_max_duration_ms)
-                      <> ").",
+                    <> int.to_string(trace_lsp_max_duration_ms)
+                    <> ").",
                   ),
                 ),
               ]),
@@ -672,12 +669,12 @@ fn runtime_kill_lsp_definition() -> Json {
       "description",
       json.string(
         "Terminate cached LSP worker(s). Routes through pool so the "
-          <> "next tool call re-spawns transparently — use when an "
-          <> "LSP appears stuck. Cannot kill anything other than the "
-          <> "supervised LSP workers. Pass `server_id` to target one "
-          <> "specific server when a language has multiple (per "
-          <> "ADR-019). Omit `server_id` to kill every server cached "
-          <> "for the (language, workspace) pair.",
+        <> "next tool call re-spawns transparently — use when an "
+        <> "LSP appears stuck. Cannot kill anything other than the "
+        <> "supervised LSP workers. Pass `server_id` to target one "
+        <> "specific server when a language has multiple (per "
+        <> "ADR-019). Omit `server_id` to kill every server cached "
+        <> "for the (language, workspace) pair.",
       ),
     ),
     #(
@@ -715,18 +712,15 @@ fn runtime_kill_lsp_definition() -> Json {
                   "description",
                   json.string(
                     "Optional. Per-language server id (e.g. `pyright`, "
-                      <> "`ruff`). Omit to kill every server cached for "
-                      <> "the language+workspace pair.",
+                    <> "`ruff`). Omit to kill every server cached for "
+                    <> "the language+workspace pair.",
                   ),
                 ),
               ]),
             ),
           ]),
         ),
-        #(
-          "required",
-          json.array(["language", "workspace"], of: json.string),
-        ),
+        #("required", json.array(["language", "workspace"], of: json.string)),
       ]),
     ),
   ])
@@ -739,36 +733,32 @@ fn handle_kill_lsp(pool: Pool, args: Option(Dynamic)) -> ToolResult {
   // one server. Empty string (the default) kills every server cached
   // for (language, workspace) — back-compat with single-server
   // languages where callers never thought about server_id.
-  use server_id <- result.try(decode_string_field_default(
-    args,
-    "server_id",
-    "",
-  ))
+  use server_id <- result.try(decode_string_field_default(args, "server_id", ""))
   case pool.kill_lsp(pool, language, workspace, server_id) {
     pool.Killed(count) ->
       Ok(
         "{\"killed\":true,\"count\":"
-          <> int.to_string(count)
-          <> ",\"language\":\""
-          <> language
-          <> "\",\"workspace\":\""
-          <> workspace
-          <> case server_id {
-            "" -> "\"}"
-            s -> "\",\"server_id\":\"" <> s <> "\"}"
-          },
+        <> int.to_string(count)
+        <> ",\"language\":\""
+        <> language
+        <> "\",\"workspace\":\""
+        <> workspace
+        <> case server_id {
+          "" -> "\"}"
+          s -> "\",\"server_id\":\"" <> s <> "\"}"
+        },
       )
     pool.NotFound ->
       Ok(
         "{\"killed\":false,\"reason\":\"no cached LSP for ("
-          <> language
-          <> ", "
-          <> workspace
-          <> case server_id {
-            "" -> ""
-            s -> ", " <> s
-          }
-          <> ")\"}",
+        <> language
+        <> ", "
+        <> workspace
+        <> case server_id {
+          "" -> ""
+          s -> ", " <> s
+        }
+        <> ")\"}",
       )
   }
 }
@@ -782,15 +772,15 @@ fn runtime_trace_calls_definition() -> Json {
       "description",
       json.string(
         "Capture function calls into one module via recon_trace. "
-          <> "Gated behind `[runtime] trace_calls_enabled = true` "
-          <> "(or PHAROS_RUNTIME_TRACE_ENABLED=1) — refuses otherwise. "
-          <> "Caps: "
-          <> int.to_string(trace_calls_max_duration_ms)
-          <> "ms duration, "
-          <> int.to_string(trace_calls_max_events)
-          <> " max events. Refuses to trace BEAM hot modules "
-          <> "(`erlang`, `ets`, `gleam@otp@actor`, "
-          <> "`gleam@erlang@process`).",
+        <> "Gated behind `[runtime] trace_calls_enabled = true` "
+        <> "(or PHAROS_RUNTIME_TRACE_ENABLED=1) — refuses otherwise. "
+        <> "Caps: "
+        <> int.to_string(trace_calls_max_duration_ms)
+        <> "ms duration, "
+        <> int.to_string(trace_calls_max_events)
+        <> " max events. Refuses to trace BEAM hot modules "
+        <> "(`erlang`, `ets`, `gleam@otp@actor`, "
+        <> "`gleam@erlang@process`).",
       ),
     ),
     #(
@@ -808,7 +798,7 @@ fn runtime_trace_calls_definition() -> Json {
                   "description",
                   json.string(
                     "Module to trace (Erlang atom name, e.g. "
-                      <> "`pharos@lsp@proc`).",
+                    <> "`pharos@lsp@proc`).",
                   ),
                 ),
               ]),
@@ -819,9 +809,7 @@ fn runtime_trace_calls_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string(
-                    "Function name; omit or `_` for any function.",
-                  ),
+                  json.string("Function name; omit or `_` for any function."),
                 ),
               ]),
             ),
@@ -843,8 +831,8 @@ fn runtime_trace_calls_definition() -> Json {
                   "description",
                   json.string(
                     "Trace window (default 3000, max "
-                      <> int.to_string(trace_calls_max_duration_ms)
-                      <> ").",
+                    <> int.to_string(trace_calls_max_duration_ms)
+                    <> ").",
                   ),
                 ),
               ]),
@@ -857,9 +845,9 @@ fn runtime_trace_calls_definition() -> Json {
                   "description",
                   json.string(
                     "Auto-stop after this many events (default 500, "
-                      <> "max "
-                      <> int.to_string(trace_calls_max_events)
-                      <> ").",
+                    <> "max "
+                    <> int.to_string(trace_calls_max_events)
+                    <> ").",
                   ),
                 ),
               ]),
@@ -878,8 +866,8 @@ fn handle_trace_calls(args: Option(Dynamic)) -> ToolResult {
     False ->
       Error(
         "runtime_trace_calls is disabled. Enable it in pharos.toml under "
-          <> "[runtime] trace_calls_enabled = true (or set "
-          <> "PHAROS_RUNTIME_TRACE_ENABLED=1) and restart pharos",
+        <> "[runtime] trace_calls_enabled = true (or set "
+        <> "PHAROS_RUNTIME_TRACE_ENABLED=1) and restart pharos",
       )
     True -> trace_calls_inner(args)
   }
@@ -891,8 +879,8 @@ fn trace_calls_inner(args: Option(Dynamic)) -> ToolResult {
     True ->
       Error(
         "refusing to trace hot module `"
-          <> module_text
-          <> "` — would overwhelm the BEAM scheduler",
+        <> module_text
+        <> "` — would overwhelm the BEAM scheduler",
       )
     False -> trace_calls_run(module_text, args)
   }
@@ -924,7 +912,9 @@ fn trace_calls_run(module_text: String, args: Option(Dynamic)) -> ToolResult {
     n -> int_dynamic(n)
   }
 
-  case runtime.trace_calls(module_dyn, function_dyn, arity_dyn, #(duration, events)) {
+  case
+    runtime.trace_calls(module_dyn, function_dyn, arity_dyn, #(duration, events))
+  {
     Error(reason) -> Error("recon_trace refused: " <> reason)
     Ok(lines) ->
       Ok(
@@ -1033,13 +1023,13 @@ fn runtime_language_config_definition() -> Json {
       "description",
       json.string(
         "Print the bundled-default registry entry for one language as "
-          <> "TOML. Output is paste-ready: copy into pharos.toml's "
-          <> "`[languages.<id>]` and `[[languages.<id>.servers]]` "
-          <> "blocks, edit one or more fields, save. Use when you need "
-          <> "to override `initialization_options_json` or "
-          <> "`workspace_configuration_json` (whole-blob replace) and "
-          <> "want the bundled default as a starting point. Mirrors "
-          <> "the `pharos --print-language-config <lang>` CLI flag.",
+        <> "TOML. Output is paste-ready: copy into pharos.toml's "
+        <> "`[languages.<id>]` and `[[languages.<id>.servers]]` "
+        <> "blocks, edit one or more fields, save. Use when you need "
+        <> "to override `initialization_options_json` or "
+        <> "`workspace_configuration_json` (whole-blob replace) and "
+        <> "want the bundled default as a starting point. Mirrors "
+        <> "the `pharos --print-language-config <lang>` CLI flag.",
       ),
     ),
     #(
@@ -1057,7 +1047,7 @@ fn runtime_language_config_definition() -> Json {
                   "description",
                   json.string(
                     "Language id, e.g. `rust`, `python`, `typescript`. "
-                      <> "Match against the registry's keys; case-sensitive.",
+                    <> "Match against the registry's keys; case-sensitive.",
                   ),
                 ),
               ]),
@@ -1072,8 +1062,7 @@ fn runtime_language_config_definition() -> Json {
 
 fn handle_language_config(args: Option(Dynamic)) -> ToolResult {
   case decode_string_field(args, "language") {
-    Error(reason) ->
-      Error("Invalid runtime_language_config params: " <> reason)
+    Error(reason) -> Error("Invalid runtime_language_config params: " <> reason)
     Ok(language) -> {
       let registry = registry.cached()
       case dict.get(registry, language) {
@@ -1114,14 +1103,14 @@ fn runtime_set_tool_timeout_definition() -> Json {
       "description",
       json.string(
         "Set a session-scoped `default_timeout_ms` for one MCP tool, "
-          <> "optionally narrowed to one language. Survives until "
-          <> "pharos restarts; takes precedence over `[tool_config.*]` "
-          <> "in pharos.toml. Use when an LSP timeout suggests the "
-          <> "default is too tight and you want every subsequent call "
-          <> "in this session to inherit the bump without passing "
-          <> "`timeout_ms` each time. Resolution stack: compile-time → "
-          <> "TOML per-tool → TOML per-tool×lang → THIS → per-call. "
-          <> "Returns the new effective configuration as JSON.",
+        <> "optionally narrowed to one language. Survives until "
+        <> "pharos restarts; takes precedence over `[tool_config.*]` "
+        <> "in pharos.toml. Use when an LSP timeout suggests the "
+        <> "default is too tight and you want every subsequent call "
+        <> "in this session to inherit the bump without passing "
+        <> "`timeout_ms` each time. Resolution stack: compile-time → "
+        <> "TOML per-tool → TOML per-tool×lang → THIS → per-call. "
+        <> "Returns the new effective configuration as JSON.",
       ),
     ),
     #(
@@ -1139,7 +1128,7 @@ fn runtime_set_tool_timeout_definition() -> Json {
                   "description",
                   json.string(
                     "MCP tool name (e.g. `find_references`, "
-                      <> "`format_document`, `hover`).",
+                    <> "`format_document`, `hover`).",
                   ),
                 ),
               ]),
@@ -1152,10 +1141,10 @@ fn runtime_set_tool_timeout_definition() -> Json {
                   "description",
                   json.string(
                     "Optional language id (e.g. `rust`, `java`, "
-                      <> "`scala`). Omit to set the per-tool global "
-                      <> "default. When supplied, the override only "
-                      <> "applies when pharos resolves a call's URI to "
-                      <> "this language.",
+                    <> "`scala`). Omit to set the per-tool global "
+                    <> "default. When supplied, the override only "
+                    <> "applies when pharos resolves a call's URI to "
+                    <> "this language.",
                   ),
                 ),
               ]),
@@ -1191,7 +1180,8 @@ fn handle_set_tool_timeout(args: Option(Dynamic)) -> ToolResult {
   use timeout_ms <- result.try(decode_required_int(args, "timeout_ms"))
   use lang <- result.try(decode_optional_string(args, "language"))
   case timeout_ms > 0 {
-    False -> Error("timeout_ms must be > 0 (got " <> int.to_string(timeout_ms) <> ")")
+    False ->
+      Error("timeout_ms must be > 0 (got " <> int.to_string(timeout_ms) <> ")")
     True -> {
       session_overrides.set(tool, lang, timeout_ms)
       let lang_text = case lang {
@@ -1212,15 +1202,15 @@ fn handle_set_tool_timeout(args: Option(Dynamic)) -> ToolResult {
       )
       Ok(
         "{\"tool\":\""
-          <> tool
-          <> "\",\"language\":"
-          <> case lang {
-            Some(l) -> "\"" <> l <> "\""
-            None -> "null"
-          }
-          <> ",\"timeout_ms\":"
-          <> int.to_string(timeout_ms)
-          <> ",\"scope\":\"session\"}",
+        <> tool
+        <> "\",\"language\":"
+        <> case lang {
+          Some(l) -> "\"" <> l <> "\""
+          None -> "null"
+        }
+        <> ",\"timeout_ms\":"
+        <> int.to_string(timeout_ms)
+        <> ",\"scope\":\"session\"}",
       )
     }
   }
@@ -1271,16 +1261,16 @@ fn runtime_effective_tool_config_definition() -> Json {
       "description",
       json.string(
         "Inspect the per-tool timeout configuration as resolved RIGHT "
-          <> "NOW. Returns three sections: `session_overrides` (set "
-          <> "this session via runtime_set_tool_timeout, lost on "
-          <> "restart), `toml_overrides` (loaded from "
-          <> "[tool_config.<name>] / [tool_config.<name>.<lang>] in "
-          <> "pharos.toml), and `effective_summary` for any (tool, "
-          <> "lang) combo the LLM passes. Useful when a tool times "
-          <> "out unexpectedly and you need to see which layer is "
-          <> "winning. Pass `tool` alone to scope the dump; pass both "
-          <> "`tool` and `language` to compute the resolved value "
-          <> "with source attribution.",
+        <> "NOW. Returns three sections: `session_overrides` (set "
+        <> "this session via runtime_set_tool_timeout, lost on "
+        <> "restart), `toml_overrides` (loaded from "
+        <> "[tool_config.<name>] / [tool_config.<name>.<lang>] in "
+        <> "pharos.toml), and `effective_summary` for any (tool, "
+        <> "lang) combo the LLM passes. Useful when a tool times "
+        <> "out unexpectedly and you need to see which layer is "
+        <> "winning. Pass `tool` alone to scope the dump; pass both "
+        <> "`tool` and `language` to compute the resolved value "
+        <> "with source attribution.",
       ),
     ),
     #(
@@ -1298,7 +1288,7 @@ fn runtime_effective_tool_config_definition() -> Json {
                   "description",
                   json.string(
                     "Optional tool name. If omitted, every tool with "
-                      <> "any override is included.",
+                    <> "any override is included.",
                   ),
                 ),
               ]),
@@ -1311,9 +1301,9 @@ fn runtime_effective_tool_config_definition() -> Json {
                   "description",
                   json.string(
                     "Optional language id. When supplied alongside "
-                      <> "`tool`, the response includes an "
-                      <> "`effective_summary` resolving the timeout "
-                      <> "for that combo with source attribution.",
+                    <> "`tool`, the response includes an "
+                    <> "`effective_summary` resolving the timeout "
+                    <> "for that combo with source attribution.",
                   ),
                 ),
               ]),
@@ -1332,8 +1322,7 @@ fn handle_effective_tool_config(args: Option(Dynamic)) -> ToolResult {
   let session_snapshot = session_overrides.snapshot()
   let toml_snapshot = config.cached().tool_config
 
-  let session_section =
-    render_session_overrides(session_snapshot, tool_filter)
+  let session_section = render_session_overrides(session_snapshot, tool_filter)
   let toml_section = render_toml_overrides(toml_snapshot, tool_filter)
   let summary_section = case tool_filter, language_filter {
     Some(t), Some(l) ->
@@ -1347,11 +1336,11 @@ fn handle_effective_tool_config(args: Option(Dynamic)) -> ToolResult {
 
   Ok(
     "{\"session_overrides\":"
-      <> session_section
-      <> ",\"toml_overrides\":"
-      <> toml_section
-      <> summary_section
-      <> "}",
+    <> session_section
+    <> ",\"toml_overrides\":"
+    <> toml_section
+    <> summary_section
+    <> "}",
   )
 }
 
@@ -1499,12 +1488,12 @@ fn runtime_lsp_state_definition() -> Json {
       "description",
       json.string(
         "Snapshot every LSP pharos is tracking — both in-flight spawns "
-          <> "(Spawning / Probing) and finished entries (Ready / Failed). "
-          <> "ADR-024. Per cache key `(language, workspace, server_id)` "
-          <> "returns the current state, spawn timestamp, probe attempt "
-          <> "count, and last probe error if any. Useful for diagnosing "
-          <> "slow first calls (is the LSP still warming?) or stuck "
-          <> "spawners (Failed with a reason). No side effects.",
+        <> "(Spawning / Probing) and finished entries (Ready / Failed). "
+        <> "ADR-024. Per cache key `(language, workspace, server_id)` "
+        <> "returns the current state, spawn timestamp, probe attempt "
+        <> "count, and last probe error if any. Useful for diagnosing "
+        <> "slow first calls (is the LSP still warming?) or stuck "
+        <> "spawners (Failed with a reason). No side effects.",
       ),
     ),
     #(
@@ -1602,12 +1591,12 @@ fn runtime_pool_recon_definition() -> Json {
       "description",
       json.string(
         "Pool-actor BEAM-level diagnostics. Returns the pool process's "
-          <> "current mailbox depth, memory, current_function, and "
-          <> "(best-effort) sys:get_state dump; plus the top-N BEAM "
-          <> "processes by mailbox length and stacktraces for every "
-          <> "in-flight spawn worker. Use to diagnose pool-blocked "
-          <> "spawn cascades and to see where spawners are parked "
-          <> "when many gets queue. ADR-024 follow-up. Read-only.",
+        <> "current mailbox depth, memory, current_function, and "
+        <> "(best-effort) sys:get_state dump; plus the top-N BEAM "
+        <> "processes by mailbox length and stacktraces for every "
+        <> "in-flight spawn worker. Use to diagnose pool-blocked "
+        <> "spawn cascades and to see where spawners are parked "
+        <> "when many gets queue. ADR-024 follow-up. Read-only.",
       ),
     ),
     #(
@@ -1698,8 +1687,12 @@ type PoolDiag {
 fn ffi_pool_diag(top_n: Int) -> PoolDiag
 
 fn pool_diag_to_json(d: PoolDiag) -> String {
-  let PoolDiag(pool: p, top_mailboxes: top, pool_state_dump: dump, spawners: spawners) =
-    d
+  let PoolDiag(
+    pool: p,
+    top_mailboxes: top,
+    pool_state_dump: dump,
+    spawners: spawners,
+  ) = d
   json.object([
     #("pool", pool_info_to_json(p)),
     #("top_mailboxes", json.array(top, of: top_proc_to_json)),
@@ -1763,16 +1756,16 @@ fn runtime_server_capabilities_definition() -> Json {
       "description",
       json.string(
         "Snapshot the LSP `ServerCapabilities` for every Ready session "
-          <> "pharos is tracking. Per active `(language, workspace, "
-          <> "server_id)`, returns the verbatim `capabilities` object the "
-          <> "server advertised during `initialize` — the canonical record "
-          <> "of which standard LSP methods this server implements "
-          <> "(hoverProvider, callHierarchyProvider, codeActionProvider, "
-          <> "etc.). Use to discover whether a method is reachable via "
-          <> "`lsp_request_raw` before constructing the call. Server-"
-          <> "specific extension methods (e.g. `rust-analyzer/expandMacro`, "
-          <> "`java/classFileContents`) are NOT advertised here — they "
-          <> "exist outside the LSP capability schema. Read-only.",
+        <> "pharos is tracking. Per active `(language, workspace, "
+        <> "server_id)`, returns the verbatim `capabilities` object the "
+        <> "server advertised during `initialize` — the canonical record "
+        <> "of which standard LSP methods this server implements "
+        <> "(hoverProvider, callHierarchyProvider, codeActionProvider, "
+        <> "etc.). Use to discover whether a method is reachable via "
+        <> "`lsp_request_raw` before constructing the call. Server-"
+        <> "specific extension methods (e.g. `rust-analyzer/expandMacro`, "
+        <> "`java/classFileContents`) are NOT advertised here — they "
+        <> "exist outside the LSP capability schema. Read-only.",
       ),
     ),
     #(

@@ -25,10 +25,11 @@ import gleam/dynamic.{type Dynamic}
 import gleam/int
 import gleam/json
 import gleam/string
-import pharos/lsp/client
-import pharos/lsp/lifecycle
 import pharos/log
 import pharos/log/entry as log_entry
+import pharos/lsp/client
+import pharos/lsp/lifecycle
+import pharos/version
 
 const rust_analyzer_path: String = "/home/oof/.cargo/bin/rust-analyzer"
 
@@ -37,21 +38,15 @@ const initialize_timeout_ms: Int = 30_000
 const drain_window_ms: Int = 5000
 
 pub fn run(workspace_path: String) -> Nil {
-  log.fields_at(
-    "pharos",
-    log_entry.Info,
-    "smoke: spawning rust-analyzer",
-    [#("workspace", workspace_path)],
-  )
+  log.fields_at("pharos", log_entry.Info, "smoke: spawning rust-analyzer", [
+    #("workspace", workspace_path),
+  ])
 
   case client.start(rust_analyzer_path, [], workspace_path, "rust-analyzer") {
     Error(err) -> {
-      log.fields_at(
-        "pharos",
-        log_entry.Critical,
-        "smoke: spawn failed",
-        [#("reason", describe_error(err))],
-      )
+      log.fields_at("pharos", log_entry.Critical, "smoke: spawn failed", [
+        #("reason", describe_error(err)),
+      ])
       Nil
     }
 
@@ -105,12 +100,9 @@ pub fn run(workspace_path: String) -> Nil {
 
         Ok(#(client, capabilities)) -> {
           log.info("smoke: initialize OK")
-          log.fields_at(
-            "pharos",
-            log_entry.Info,
-            "smoke: server capabilities",
-            [#("capabilities", dynamic_to_string(capabilities))],
-          )
+          log.fields_at("pharos", log_entry.Info, "smoke: server capabilities", [
+            #("capabilities", dynamic_to_string(capabilities)),
+          ])
           drain_notifications(client, drain_window_ms)
           client.close(client)
           log.info("smoke: shut down")
@@ -126,16 +118,13 @@ fn build_initialize_params(workspace_path: String) -> json.Json {
   json.object([
     #("processId", json.null()),
     #("rootUri", json.string(root_uri)),
-    #(
-      "rootPath",
-      json.string(workspace_path),
-    ),
+    #("rootPath", json.string(workspace_path)),
     #("capabilities", json.object([])),
     #(
       "clientInfo",
       json.object([
         #("name", json.string("pharos-smoke")),
-        #("version", json.string("0.1.2")),
+        #("version", json.string(version.current())),
       ]),
     ),
     #("initializationOptions", json.object([])),
@@ -148,12 +137,9 @@ fn drain_notifications(client: client.Client, ms: Int) -> Nil {
     False ->
       case client.next_message(client, 500) {
         Ok(#(body, client)) -> {
-          log.fields_at(
-            "pharos",
-            log_entry.Info,
-            "smoke: notification",
-            [#("preview", body_preview(body))],
-          )
+          log.fields_at("pharos", log_entry.Info, "smoke: notification", [
+            #("preview", body_preview(body)),
+          ])
           drain_notifications(client, ms - 500)
         }
 
@@ -162,12 +148,9 @@ fn drain_notifications(client: client.Client, ms: Int) -> Nil {
           drain_notifications(client, ms - 500)
 
         Error(other) -> {
-          log.fields_at(
-            "pharos",
-            log_entry.Warn,
-            "smoke: drain stopped",
-            [#("reason", describe_error(other))],
-          )
+          log.fields_at("pharos", log_entry.Warn, "smoke: drain stopped", [
+            #("reason", describe_error(other)),
+          ])
           Nil
         }
       }

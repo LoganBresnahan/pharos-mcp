@@ -515,9 +515,7 @@ pub fn close_all(pool: Pool) -> Nil {
 /// request handlers.
 pub fn snapshot(pool: Pool) -> PoolSnapshot {
   let Pool(subject) = pool
-  actor.call(subject, default_call_timeout_ms, fn(reply) {
-    SnapshotReq(reply)
-  })
+  actor.call(subject, default_call_timeout_ms, fn(reply) { SnapshotReq(reply) })
 }
 
 /// Ensure the cached LSP for
@@ -607,21 +605,14 @@ fn handle_spawn_progress(
   probe_attempts: Int,
   last_probe_error: option.Option(String),
 ) -> actor.Next(State, Msg) {
-  trace_pool_event(
-    "SPAWN_PROGRESS",
-    key,
-    [
-      #("state", describe_lsp_state(lsp_state)),
-      #("probe_attempts", int.to_string(probe_attempts)),
-      #(
-        "last_err",
-        case last_probe_error {
-          option.Some(e) -> e
-          option.None -> ""
-        },
-      ),
-    ],
-  )
+  trace_pool_event("SPAWN_PROGRESS", key, [
+    #("state", describe_lsp_state(lsp_state)),
+    #("probe_attempts", int.to_string(probe_attempts)),
+    #("last_err", case last_probe_error {
+      option.Some(e) -> e
+      option.None -> ""
+    }),
+  ])
   let spawned_at = case dict.get(state.lsp_state, key) {
     Ok(bk) -> bk.spawned_at_unix_ms
     Error(_) -> system_time_ms()
@@ -765,14 +756,10 @@ fn handle_get(
   case dict.get(state.cache, key) {
     // Cache hit — reply immediately, no actor blocking.
     Ok(existing) -> {
-      trace_pool_event(
-        "GET",
-        key,
-        [
-          #("path", "cache_hit"),
-          #("inflight_total", int.to_string(dict.size(state.inflight))),
-        ],
-      )
+      trace_pool_event("GET", key, [
+        #("path", "cache_hit"),
+        #("inflight_total", int.to_string(dict.size(state.inflight))),
+      ])
       process.send(reply, Ok(existing))
       actor.continue(state)
     }
@@ -782,17 +769,12 @@ fn handle_get(
         // Another caller already kicked off the spawner. Join its
         // waitlist; one spawn, many waiters share the result.
         Ok(waiters) -> {
-          let inflight =
-            dict.insert(state.inflight, key, [reply, ..waiters])
-          trace_pool_event(
-            "GET",
-            key,
-            [
-              #("path", "join_waitlist"),
-              #("waiters", int.to_string(list.length(waiters) + 1)),
-              #("inflight_total", int.to_string(dict.size(state.inflight))),
-            ],
-          )
+          let inflight = dict.insert(state.inflight, key, [reply, ..waiters])
+          trace_pool_event("GET", key, [
+            #("path", "join_waitlist"),
+            #("waiters", int.to_string(list.length(waiters) + 1)),
+            #("inflight_total", int.to_string(dict.size(state.inflight))),
+          ])
           actor.continue(State(..state, inflight: inflight))
         }
 
@@ -807,22 +789,15 @@ fn handle_get(
           let inflight = dict.insert(state.inflight, key, [reply])
           let spawner_monitors =
             dict.insert(state.spawner_monitors, spawner_monitor, key)
-          trace_pool_event(
-            "GET",
-            key,
-            [
-              #("path", "spawn_started"),
-              #("spawner_pid", describe_pid(spawner_pid)),
-              #(
-                "inflight_total",
-                int.to_string(dict.size(state.inflight) + 1),
-              ),
-              #(
-                "spawner_monitors",
-                int.to_string(dict.size(state.spawner_monitors) + 1),
-              ),
-            ],
-          )
+          trace_pool_event("GET", key, [
+            #("path", "spawn_started"),
+            #("spawner_pid", describe_pid(spawner_pid)),
+            #("inflight_total", int.to_string(dict.size(state.inflight) + 1)),
+            #(
+              "spawner_monitors",
+              int.to_string(dict.size(state.spawner_monitors) + 1),
+            ),
+          ])
           // ADR-024: record the Spawning state immediately so
           // runtime_lsp_state can observe an in-flight spawn between
           // Get arrival and the worker's first SpawnProgress message.
@@ -863,21 +838,18 @@ fn handle_spawn_completed(
     Ok(_) -> "ok"
     Error(err) -> "err:" <> describe_get_error(err)
   }
-  trace_pool_event(
-    "SPAWN_COMPLETED",
-    key,
-    [
-      #("result", result_tag),
-      #("waiters_to_reply", int.to_string(list.length(waiters))),
-      #("inflight_remaining", int.to_string(dict.size(state.inflight) - 1)),
-    ],
-  )
+  trace_pool_event("SPAWN_COMPLETED", key, [
+    #("result", result_tag),
+    #("waiters_to_reply", int.to_string(list.length(waiters))),
+    #("inflight_remaining", int.to_string(dict.size(state.inflight) - 1)),
+  ])
   let inflight = dict.delete(state.inflight, key)
   // Spawner is about to exit cleanly; remove its monitor entry so
   // the upcoming DOWN doesn't trip the crash-flush branch in
   // handle_proc_down. spawner_monitors keyed by Monitor (reverse
   // map); find the entry whose value is this key.
-  let spawner_monitors = remove_spawner_monitor_for_key(state.spawner_monitors, key)
+  let spawner_monitors =
+    remove_spawner_monitor_for_key(state.spawner_monitors, key)
 
   // Preserve probe-attempt counters that the worker accumulated via
   // SpawnProgress; only the terminal state field changes here.
@@ -1006,44 +978,39 @@ fn spawn_worker(
 ) -> process.Pid {
   let #(language, workspace, _) = key
   process.spawn_unlinked(fn() {
-      case recover_or_spawn(language, workspace, spec) {
-        Error(err) ->
-          process.send(self_subject, SpawnCompleted(key, Error(err)))
-        Ok(spawned) -> {
-          // Transition Spawning → Probing so runtime_lsp_state can
-          // distinguish "still doing init handshake" from "init done,
-          // now warming the index via probe".
-          process.send(
+    case recover_or_spawn(language, workspace, spec) {
+      Error(err) -> process.send(self_subject, SpawnCompleted(key, Error(err)))
+      Ok(spawned) -> {
+        // Transition Spawning → Probing so runtime_lsp_state can
+        // distinguish "still doing init handshake" from "init done,
+        // now warming the index via probe".
+        process.send(self_subject, SpawnProgress(key, Probing, 0, option.None))
+        let probe_result =
+          run_probe_loop(
             self_subject,
-            SpawnProgress(key, Probing, 0, option.None),
+            key,
+            spawned,
+            workspace,
+            spec.warm_probe,
+            spec.ready_timeout_ms,
           )
-          let probe_result =
-            run_probe_loop(
+        case probe_result {
+          Ok(_) -> process.send(self_subject, SpawnCompleted(key, Ok(spawned)))
+          Error(reason) -> {
+            // Probe budget exhausted — close the proc so we don't
+            // cache a half-warm LSP. Pool's monitor will see the
+            // DOWN and (already) clean up; SpawnCompleted with
+            // Error short-circuits the inflight waiters first.
+            proc.close(spawned)
+            process.send(
               self_subject,
-              key,
-              spawned,
-              workspace,
-              spec.warm_probe,
-              spec.ready_timeout_ms,
+              SpawnCompleted(key, Error(ProbeFailed(reason))),
             )
-          case probe_result {
-            Ok(_) ->
-              process.send(self_subject, SpawnCompleted(key, Ok(spawned)))
-            Error(reason) -> {
-              // Probe budget exhausted — close the proc so we don't
-              // cache a half-warm LSP. Pool's monitor will see the
-              // DOWN and (already) clean up; SpawnCompleted with
-              // Error short-circuits the inflight waiters first.
-              proc.close(spawned)
-              process.send(
-                self_subject,
-                SpawnCompleted(key, Error(ProbeFailed(reason))),
-              )
-            }
           }
         }
       }
-    })
+    }
+  })
 }
 
 /// ADR-017a recover-first, spawn-on-miss. Cheap when the lsp_proc
@@ -1092,7 +1059,18 @@ fn run_probe_loop(
 ) -> Result(Nil, String) {
   case probe {
     ProbeNone -> Ok(Nil)
-    _ -> probe_loop_step(self_subject, key, spawned, workspace, probe, 1, 0, total_budget_ms, option.None)
+    _ ->
+      probe_loop_step(
+        self_subject,
+        key,
+        spawned,
+        workspace,
+        probe,
+        1,
+        0,
+        total_budget_ms,
+        option.None,
+      )
   }
 }
 
@@ -1122,16 +1100,12 @@ fn probe_loop_step(
     False -> {
       let attempt_started_ms = system_time_ms()
       let probe_outcome = run_one_probe(spawned, workspace, probe)
-      let attempt_duration =
-        int_max(0, system_time_ms() - attempt_started_ms)
+      let attempt_duration = int_max(0, system_time_ms() - attempt_started_ms)
       let next_err = case probe_outcome {
         Ok(_) -> option.None
         Error(e) -> option.Some(e)
       }
-      process.send(
-        self_subject,
-        SpawnProgress(key, Probing, attempt, next_err),
-      )
+      process.send(self_subject, SpawnProgress(key, Probing, attempt, next_err))
       case probe_outcome {
         Ok(_) -> Ok(Nil)
         Error(reason_str) if reason_str == lsp_proc_dead_reason ->
@@ -1144,8 +1118,7 @@ fn probe_loop_step(
           Error(reason_str)
         Error(_) -> {
           let backoff_ms = probe_backoff_ms(attempt)
-          let after_sleep_elapsed =
-            elapsed_ms + attempt_duration + backoff_ms
+          let after_sleep_elapsed = elapsed_ms + attempt_duration + backoff_ms
           case after_sleep_elapsed >= total_budget_ms {
             True -> {
               let reason =
@@ -1182,10 +1155,10 @@ fn probe_loop_step(
 fn probe_backoff_ms(attempt: Int) -> Int {
   // Exponential backoff capped at 10s.
   case attempt {
-    1 -> 1_000
-    2 -> 2_000
-    3 -> 4_000
-    4 -> 8_000
+    1 -> 1000
+    2 -> 2000
+    3 -> 4000
+    4 -> 8000
     _ -> 10_000
   }
 }
@@ -1268,8 +1241,7 @@ fn probe_call_inner(
   case proc.request(spawned, method, params, probe_attempt_timeout_ms) {
     // Transport down or decode failure → LSP itself isn't responding
     // to us. Real failure; retry.
-    Error(lifecycle.ClientFailure(_)) ->
-      Error("transport error during probe")
+    Error(lifecycle.ClientFailure(_)) -> Error("transport error during probe")
     Error(lifecycle.ResponseDecodeError(reason)) ->
       Error("decode error during probe: " <> reason)
     // proc.request now catches actor.call panics from a dead lsp_proc
@@ -1392,32 +1364,26 @@ fn handle_proc_down(
   // `spawner_monitors` (in-flight spawn workers). Check both.
   case dict.get(state.monitors, monitor_ref) {
     Ok(key) -> {
-      trace_pool_event(
-        "DOWN",
-        key,
-        [#("source", "lsp_child"), #("reason", describe_dynamic(reason))],
-      )
+      trace_pool_event("DOWN", key, [
+        #("source", "lsp_child"),
+        #("reason", describe_dynamic(reason)),
+      ])
       handle_lsp_child_down(state, monitor_ref, key)
     }
     Error(_) ->
       case dict.get(state.spawner_monitors, monitor_ref) {
         Ok(key) -> {
-          trace_pool_event(
-            "DOWN",
-            key,
-            [#("source", "spawner"), #("reason", describe_dynamic(reason))],
-          )
+          trace_pool_event("DOWN", key, [
+            #("source", "spawner"),
+            #("reason", describe_dynamic(reason)),
+          ])
           handle_spawner_down(state, monitor_ref, key, reason)
         }
         Error(_) -> {
-          trace_pool_event(
-            "DOWN",
-            #("?", "?", "?"),
-            [
-              #("source", "unknown_monitor"),
-              #("reason", describe_dynamic(reason)),
-            ],
-          )
+          trace_pool_event("DOWN", #("?", "?", "?"), [
+            #("source", "unknown_monitor"),
+            #("reason", describe_dynamic(reason)),
+          ])
           actor.continue(state)
         }
       }
@@ -1616,34 +1582,36 @@ fn spawn_proc(
 ) -> Result(Proc, GetError) {
   // ADR-017a: spawn the lsp_proc actor as a child of
   // `pharos_lsp_dyn_sup`. ETS bridge keys (lang, workspace, server_id).
-  use _spawned_pid <- result.try(case
-    dyn_sup_start_child(
-      language,
-      workspace,
-      spec.server_id,
-      spec.command,
-      spec.args,
-      spec.init_params,
-      spec.initialize_timeout_ms,
-      spec.readiness_token,
-      spec.ready_timeout_ms,
-    )
-  {
-    Ok(p) -> Ok(p)
-    Error(reason) ->
-      Error(ProcStartFailed("lsp_dyn_sup.start_child failed: " <> reason))
-  })
+  use _spawned_pid <- result.try(
+    case
+      dyn_sup_start_child(
+        language,
+        workspace,
+        spec.server_id,
+        spec.command,
+        spec.args,
+        spec.init_params,
+        spec.initialize_timeout_ms,
+        spec.readiness_token,
+        spec.ready_timeout_ms,
+      )
+    {
+      Ok(p) -> Ok(p)
+      Error(reason) ->
+        Error(ProcStartFailed("lsp_dyn_sup.start_child failed: " <> reason))
+    },
+  )
 
-  use subject <- result.try(case
-    proc.recover_subject(language, workspace, spec.server_id)
-  {
-    Ok(s) -> Ok(s)
-    Error(_) ->
-      Error(ProcStartFailed(
-        "ETS bridge missing entry for spawned lsp_proc; "
-        <> "(ADR-017a invariant violation)",
-      ))
-  })
+  use subject <- result.try(
+    case proc.recover_subject(language, workspace, spec.server_id) {
+      Ok(s) -> Ok(s)
+      Error(_) ->
+        Error(ProcStartFailed(
+          "ETS bridge missing entry for spawned lsp_proc; "
+          <> "(ADR-017a invariant violation)",
+        ))
+    },
+  )
 
   let spawned = proc.from_subject(subject)
 

@@ -34,10 +34,7 @@ pub fn tail(n: Int, filter: String) -> List(#(Level, String))
 /// from the buffer (ADR 022). False positives are possible if a
 /// message body literally contains ` <prefix>`; cheaper than
 /// teaching the ring about target as a separate column.
-pub fn tail_by_target_prefix(
-  n: Int,
-  prefix: String,
-) -> List(#(Level, String)) {
+pub fn tail_by_target_prefix(n: Int, prefix: String) -> List(#(Level, String)) {
   tail(n, " " <> prefix)
 }
 

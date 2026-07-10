@@ -63,21 +63,21 @@ pub fn category_for(name: String) -> ToolCategory {
     | "type_hierarchy_prepare"
     | "type_hierarchy_supertypes"
     | "type_hierarchy_subtypes"
-    // -- ADR-026 symbol layer (read paths) --
-    | "find_symbol"
+    | // -- ADR-026 symbol layer (read paths) --
+      "find_symbol"
     | "get_symbols_overview"
     | "containing_symbol"
     | "find_referencing_symbols"
-    // -- ADR-029 custom URI read --
-    | "fetch_uri_contents" -> CatRead
+    | // -- ADR-029 custom URI read --
+      "fetch_uri_contents" -> CatRead
 
     // -- write (returns WorkspaceEdit data; or applies it on demand) --
     "rename_preview"
     | "format_document"
     | "code_actions"
     | "apply_workspace_edit"
-    // -- ADR-026 symbol layer (preview-only write path) --
-    | "edit_at_symbol" -> CatWrite
+    | // -- ADR-026 symbol layer (preview-only write path) --
+      "edit_at_symbol" -> CatWrite
 
     // -- ADR-027 memory tools --
     "memory_save"

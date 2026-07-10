@@ -416,8 +416,7 @@ fn is_default_essential(name: String) -> Bool {
 
 fn overlay_global_toml(config: Config) -> Config {
   case env.get("PHAROS_CONFIG_FILE") {
-    Some(path) if path != "" ->
-      overlay_path(config, path, "PHAROS_CONFIG_FILE")
+    Some(path) if path != "" -> overlay_path(config, path, "PHAROS_CONFIG_FILE")
     _ ->
       case xdg_config_path() {
         None -> config
@@ -487,21 +486,16 @@ fn dirname(path: String) -> String
 fn overlay_path(config: Config, path: String, label: String) -> Config {
   case read_toml(path) {
     Error(reason) -> {
-      log.fields_at(
-        "pharos/config",
-        log_entry.Warn,
-        "ignoring " <> label,
-        [#("path", path), #("reason", reason)],
-      )
+      log.fields_at("pharos/config", log_entry.Warn, "ignoring " <> label, [
+        #("path", path),
+        #("reason", reason),
+      ])
       config
     }
     Ok(parsed) -> {
-      log.fields_at(
-        "pharos/config",
-        log_entry.Info,
-        "loaded " <> label,
-        [#("path", path)],
-      )
+      log.fields_at("pharos/config", log_entry.Info, "loaded " <> label, [
+        #("path", path),
+      ])
       apply_toml(config, parsed)
     }
   }
@@ -552,7 +546,13 @@ fn apply_toml(config: Config, parsed: Dynamic) -> Config {
 /// section since one is a value and the other is a table-of-tables —
 /// distinct TOML keys, no collision.
 fn apply_section_tool_config(config: Config, parsed: Dynamic) -> Config {
-  case decode_field(parsed, "tool_config", decode.dict(decode.string, decode.dynamic)) {
+  case
+    decode_field(
+      parsed,
+      "tool_config",
+      decode.dict(decode.string, decode.dynamic),
+    )
+  {
     Error(_) -> config
     Ok(raw) -> {
       let parsed_overrides =
@@ -597,10 +597,7 @@ fn decode_tool_config(value: Dynamic) -> ToolConfig {
             // skip values that aren't dict-shaped (stray scalars
             // shouldn't error the boot, just get ignored).
             case
-              decode.run(
-                sub_value,
-                decode.dict(decode.string, decode.dynamic),
-              )
+              decode.run(sub_value, decode.dict(decode.string, decode.dynamic))
             {
               Error(_) -> Error(Nil)
               Ok(_) -> Ok(#(key, decode_tool_config(sub_value)))
@@ -660,9 +657,7 @@ fn apply_section_server(config: Config, parsed: Dynamic) -> Config {
               }
             Error(_) -> with_transport.http.bind
           }
-          let port_file = case
-            decode_field(http, "port_file", decode.string)
-          {
+          let port_file = case decode_field(http, "port_file", decode.string) {
             Ok(p) ->
               case p {
                 "" -> with_transport.http.port_file
@@ -684,9 +679,7 @@ fn apply_section_log(config: Config, parsed: Dynamic) -> Config {
   case decode_field(parsed, "log", decode.dynamic) {
     Error(_) -> config
     Ok(log_table) -> {
-      let filter_spec = case
-        decode_field(log_table, "filter", decode.string)
-      {
+      let filter_spec = case decode_field(log_table, "filter", decode.string) {
         Ok(s) -> s
         Error(_) -> config.log.filter_spec
       }
@@ -702,9 +695,7 @@ fn apply_section_log(config: Config, parsed: Dynamic) -> Config {
         Ok(b) -> b
         Error(_) -> config.log.ring_enabled
       }
-      let stderr_enabled = case
-        decode_field(log_table, "stderr", decode.bool)
-      {
+      let stderr_enabled = case decode_field(log_table, "stderr", decode.bool) {
         Ok(b) -> b
         Error(_) -> config.log.stderr_enabled
       }
@@ -752,10 +743,7 @@ fn apply_section_runtime(config: Config, parsed: Dynamic) -> Config {
     Ok(rt) ->
       case decode_field(rt, "trace_calls_enabled", decode.bool) {
         Ok(b) ->
-          Config(
-            ..config,
-            runtime: RuntimeConfig(trace_calls_enabled: b),
-          )
+          Config(..config, runtime: RuntimeConfig(trace_calls_enabled: b))
         Error(_) -> config
       }
   }
@@ -897,11 +885,12 @@ fn decode_ready_timeout_ms(value: Dynamic) -> Option(Int) {
 /// each element is a map; pull the per-server fields out of each.
 /// Returns `None` when the key is absent or the value isn't an
 /// array of tables — falls back to legacy flat-override semantics.
-fn decode_optional_servers_list(parent: Dynamic) -> Option(List(ServerOverride)) {
+fn decode_optional_servers_list(
+  parent: Dynamic,
+) -> Option(List(ServerOverride)) {
   case decode_field(parent, "servers", decode.list(decode.dynamic)) {
     Error(_) -> None
-    Ok(entries) ->
-      Some(list.map(entries, decode_server_override))
+    Ok(entries) -> Some(list.map(entries, decode_server_override))
   }
 }
 
@@ -1077,14 +1066,9 @@ fn env_log(config: Config) -> Config {
         None -> log_rotate.default_session_log_path()
       }
   }
-  let ring_enabled = read_bool_env(
-    "PHAROS_LOG_RING",
-    config.log.ring_enabled,
-  )
-  let stderr_enabled = read_bool_env(
-    "PHAROS_LOG_STDERR",
-    config.log.stderr_enabled,
-  )
+  let ring_enabled = read_bool_env("PHAROS_LOG_RING", config.log.ring_enabled)
+  let stderr_enabled =
+    read_bool_env("PHAROS_LOG_STDERR", config.log.stderr_enabled)
   Config(
     ..config,
     log: LogConfig(
@@ -1104,10 +1088,11 @@ fn env_lsp(config: Config) -> Config {
 }
 
 fn env_runtime(config: Config) -> Config {
-  let enabled = read_bool_env(
-    "PHAROS_RUNTIME_TRACE_ENABLED",
-    config.runtime.trace_calls_enabled,
-  )
+  let enabled =
+    read_bool_env(
+      "PHAROS_RUNTIME_TRACE_ENABLED",
+      config.runtime.trace_calls_enabled,
+    )
   Config(..config, runtime: RuntimeConfig(trace_calls_enabled: enabled))
 }
 

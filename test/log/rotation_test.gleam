@@ -13,8 +13,7 @@ import pharos/log/writer
 
 pub fn rotates_at_max_bytes_and_keeps_n_test() {
   // Unique per-test path so concurrent test runs don't collide.
-  let path =
-    "/tmp/pharos-rotation-test-" <> int_str(unique_int()) <> ".log"
+  let path = "/tmp/pharos-rotation-test-" <> int_str(unique_int()) <> ".log"
   let _ = file_delete(path)
   let _ = file_delete(numbered(path, 1))
   let _ = file_delete(numbered(path, 2))
@@ -25,8 +24,7 @@ pub fn rotates_at_max_bytes_and_keeps_n_test() {
   // structured log message overflow it. keep_rotated = 2 means we
   // expect path.1 + path.2 to exist after enough emits and path.3
   // to have been dropped.
-  let assert Ok(w) =
-    writer.start(f, False, False, Some(path), Some(200), 2)
+  let assert Ok(w) = writer.start(f, False, False, Some(path), Some(200), 2)
 
   burst_emit("rotation-test", 30)
 
@@ -54,8 +52,7 @@ pub fn rotates_at_max_bytes_and_keeps_n_test() {
   case file_exists(numbered(path, 3)) {
     False -> Nil
     True ->
-      panic as
-        "path.3 still exists — keep_rotated=2 should have dropped it"
+      panic as "path.3 still exists — keep_rotated=2 should have dropped it"
   }
 
   let _ = file_delete(path)

@@ -28,38 +28,37 @@ import pharos/lsp/languages
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/lsp/registry
-import pharos/tools/session_overrides
 import pharos/mcp/content_block
 import pharos/mcp/request_workers
-import pharos/tools/diagnostics
-import pharos/tools/document_symbols
-import pharos/tools/find_references
-import pharos/tools/goto_definition
-import pharos/tools/hover
-import pharos/tools/workspace_symbols
 import pharos/tools/apply_workspace_edit
 import pharos/tools/call_hierarchy
 import pharos/tools/code_actions
-import pharos/tools/format_document
-import pharos/tools/goto_implementation
-import pharos/tools/inlay_hints
-import pharos/tools/goto_type_definition
-import pharos/tools/fetch_uri_contents
-import pharos/tools/lsp_request_raw
-import pharos/tools/registry as tool_registry
 import pharos/tools/debug
+import pharos/tools/diagnostics
+import pharos/tools/document_symbols
+import pharos/tools/fetch_uri_contents
+import pharos/tools/find_references
+import pharos/tools/format_document
+import pharos/tools/goto_definition
+import pharos/tools/goto_implementation
+import pharos/tools/goto_type_definition
+import pharos/tools/hover
+import pharos/tools/inlay_hints
+import pharos/tools/lsp_request_raw
+import pharos/tools/memory
+import pharos/tools/registry as tool_registry
 import pharos/tools/rename_preview
 import pharos/tools/semantic_tokens
+import pharos/tools/session_overrides
 import pharos/tools/signature_help
-import pharos/tools/memory
 import pharos/tools/symbols
 import pharos/tools/type_hierarchy
+import pharos/tools/workspace_symbols
+import pharos/version
 
 const protocol_version: String = "2024-11-05"
 
 const server_name: String = "pharos"
-
-const server_version: String = "0.1.2"
 
 /// JSON-RPC request id — string or integer per spec.
 pub type Id {
@@ -94,8 +93,16 @@ type Message {
 
 fn message_decoder() -> decode.Decoder(Message) {
   use method <- decode.field("method", decode.string)
-  use maybe_id <- decode.optional_field("id", None, decode.optional(id_decoder()))
-  use maybe_params <- decode.optional_field("params", None, decode.optional(decode.dynamic))
+  use maybe_id <- decode.optional_field(
+    "id",
+    None,
+    decode.optional(id_decoder()),
+  )
+  use maybe_params <- decode.optional_field(
+    "params",
+    None,
+    decode.optional(decode.dynamic),
+  )
   case maybe_id {
     Some(id) -> decode.success(RequestMessage(id, method, maybe_params))
     None -> decode.success(NotificationMessage(method, maybe_params))
@@ -114,22 +121,15 @@ fn dispatch(pool: Pool, message: Message) -> DispatchResult {
   case message {
     RequestMessage(id, method, params) -> {
       log.set_correlation_id(id_to_text(id))
-      log.fields_at(
-        "pharos/mcp/server",
-        log_entry.Debug,
-        "dispatch",
-        [#("method", method)],
-      )
+      log.fields_at("pharos/mcp/server", log_entry.Debug, "dispatch", [
+        #("method", method),
+      ])
       let result = case method {
         "initialize" -> Reply(initialize_response(id))
         "tools/list" -> Reply(tools_list_response(id))
         "tools/call" -> Reply(handle_tool_call(pool, id, params))
         other ->
-          Reply(error_response(
-            Some(id),
-            -32_601,
-            "Method not found: " <> other,
-          ))
+          Reply(error_response(Some(id), -32_601, "Method not found: " <> other))
       }
       log.clear_correlation_id()
       result
@@ -261,7 +261,7 @@ fn initialize_response(id: Id) -> String {
         "serverInfo",
         json.object([
           #("name", json.string(server_name)),
-          #("version", json.string(server_version)),
+          #("version", json.string(version.current())),
         ]),
       ),
       // MCP-spec optional field — server-level guidance the client
@@ -355,14 +355,8 @@ fn allowed_tool_definitions() -> List(Json) {
     #("inlay_hints", inlay_hints_tool_definition),
     #("semantic_tokens", semantic_tokens_tool_definition),
     #("type_hierarchy_prepare", type_hierarchy_prepare_tool_definition),
-    #(
-      "type_hierarchy_supertypes",
-      type_hierarchy_supertypes_tool_definition,
-    ),
-    #(
-      "type_hierarchy_subtypes",
-      type_hierarchy_subtypes_tool_definition,
-    ),
+    #("type_hierarchy_supertypes", type_hierarchy_supertypes_tool_definition),
+    #("type_hierarchy_subtypes", type_hierarchy_subtypes_tool_definition),
     #("lsp_request_raw", lsp_request_raw_tool_definition),
     // -- ADR-029 custom URI schemes --
     #("fetch_uri_contents", fetch_uri_contents_tool_definition),
@@ -370,10 +364,7 @@ fn allowed_tool_definitions() -> List(Json) {
     #("find_symbol", find_symbol_tool_definition),
     #("get_symbols_overview", get_symbols_overview_tool_definition),
     #("containing_symbol", containing_symbol_tool_definition),
-    #(
-      "find_referencing_symbols",
-      find_referencing_symbols_tool_definition,
-    ),
+    #("find_referencing_symbols", find_referencing_symbols_tool_definition),
     #("edit_at_symbol", edit_at_symbol_tool_definition),
     // -- ADR-027 memory tools --
     #("memory_save", memory_save_tool_definition),
@@ -405,13 +396,13 @@ fn timeout_ms_property() -> #(String, Json) {
         "description",
         json.string(
           "Optional. How long pharos waits (in ms) for the LSP to "
-            <> "respond before failing the call. Falls back to the "
-            <> "per-tool default; that default can itself be overridden "
-            <> "in `pharos.toml` via "
-            <> "`[tool_config.<name>] default_timeout_ms` or per-language "
-            <> "via `[tool_config.<name>.<lang>] default_timeout_ms`. "
-            <> "Pass a larger value when the LSP is still cold-indexing "
-            <> "or the workspace is unusually large.",
+          <> "respond before failing the call. Falls back to the "
+          <> "per-tool default; that default can itself be overridden "
+          <> "in `pharos.toml` via "
+          <> "`[tool_config.<name>] default_timeout_ms` or per-language "
+          <> "via `[tool_config.<name>.<lang>] default_timeout_ms`. "
+          <> "Pass a larger value when the LSP is still cold-indexing "
+          <> "or the workspace is unusually large.",
         ),
       ),
     ]),
@@ -431,7 +422,7 @@ fn position_arg_schema() -> Json {
               "description",
               json.string(
                 "file:// URI of the source file. Example: "
-                  <> "file:///path/to/file",
+                <> "file:///path/to/file",
               ),
             ),
           ]),
@@ -444,8 +435,8 @@ fn position_arg_schema() -> Json {
               "description",
               json.string(
                 "Zero-based line number, per LSP spec. Editor "
-                  <> "convention shows it as 1-based; subtract 1 for "
-                  <> "this field.",
+                <> "convention shows it as 1-based; subtract 1 for "
+                <> "this field.",
               ),
             ),
           ]),
@@ -458,7 +449,7 @@ fn position_arg_schema() -> Json {
               "description",
               json.string(
                 "Zero-based UTF-16 code-unit offset within the line, "
-                  <> "per LSP spec.",
+                <> "per LSP spec.",
               ),
             ),
           ]),
@@ -466,10 +457,7 @@ fn position_arg_schema() -> Json {
         timeout_ms_property(),
       ]),
     ),
-    #(
-      "required",
-      json.array(["uri", "line", "character"], of: json.string),
-    ),
+    #("required", json.array(["uri", "line", "character"], of: json.string)),
     #("type", json.string("object")),
   ])
 }
@@ -481,7 +469,7 @@ fn hover_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/hover. Returns Hover or null. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -495,8 +483,8 @@ fn goto_definition_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/definition. Returns Location, Location[], "
-          <> "LocationLink[], or null. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "LocationLink[], or null. "
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -510,9 +498,9 @@ fn find_references_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/references. Returns Location[]. "
-          <> "`include_declaration` (default true) includes the "
-          <> "definition site. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "`include_declaration` (default true) includes the "
+        <> "definition site. "
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -522,18 +510,9 @@ fn find_references_tool_definition() -> Json {
         #(
           "properties",
           json.object([
-            #(
-              "uri",
-              json.object([#("type", json.string("string"))]),
-            ),
-            #(
-              "line",
-              json.object([#("type", json.string("integer"))]),
-            ),
-            #(
-              "character",
-              json.object([#("type", json.string("integer"))]),
-            ),
+            #("uri", json.object([#("type", json.string("string"))])),
+            #("line", json.object([#("type", json.string("integer"))])),
+            #("character", json.object([#("type", json.string("integer"))])),
             #(
               "include_declaration",
               json.object([
@@ -542,7 +521,7 @@ fn find_references_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Whether to include the definition site in the "
-                      <> "results. Defaults to true.",
+                    <> "results. Defaults to true.",
                   ),
                 ),
               ]),
@@ -561,10 +540,7 @@ fn find_references_tool_definition() -> Json {
             ),
           ]),
         ),
-        #(
-          "required",
-          json.array(["uri", "line", "character"], of: json.string),
-        ),
+        #("required", json.array(["uri", "line", "character"], of: json.string)),
       ]),
     ),
   ])
@@ -577,9 +553,9 @@ fn document_symbols_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/documentSymbol. Returns hierarchical "
-          <> "DocumentSymbol[] or flat SymbolInformation[] depending "
-          <> "on server. For LLM-friendly outlines prefer "
-          <> "get_symbols_overview.",
+        <> "DocumentSymbol[] or flat SymbolInformation[] depending "
+        <> "on server. For LLM-friendly outlines prefer "
+        <> "get_symbols_overview.",
       ),
     ),
     #(
@@ -589,10 +565,7 @@ fn document_symbols_tool_definition() -> Json {
         #(
           "properties",
           json.object([
-            #(
-              "uri",
-              json.object([#("type", json.string("string"))]),
-            ),
+            #("uri", json.object([#("type", json.string("string"))])),
             timeout_ms_property(),
           ]),
         ),
@@ -609,22 +582,22 @@ fn workspace_symbols_tool_definition() -> Json {
       "description",
       json.string(
         "LSP workspace/symbol search by name. Returns an envelope "
-          <> "`{matches, truncated_by, near_misses, retried_with?}` "
-          <> "where `matches` is the SymbolInformation[] / "
-          <> "WorkspaceSymbol[] array (LSP-spec shape) capped at "
-          <> "`limit` (default 20). When `matches` is empty and the "
-          <> "query looks like it could be a case / convention "
-          <> "mismatch (snake_case typed against camelCase code or "
-          <> "vice versa), pharos retries once with the alternate "
-          <> "convention; if that retry returns hits, their names "
-          <> "appear in `near_misses` and `retried_with` carries the "
-          <> "actual variant tried. This catches the most common "
-          <> "\"LSP returned []\" failure where the agent has the "
-          <> "right symbol in mind but typed the wrong convention. "
-          <> "`workspace_uri_hint` is any file inside the workspace "
-          <> "or the workspace root URI; pass `language` when a "
-          <> "directory is given so LSP routing skips extension "
-          <> "lookup.",
+        <> "`{matches, truncated_by, near_misses, retried_with?}` "
+        <> "where `matches` is the SymbolInformation[] / "
+        <> "WorkspaceSymbol[] array (LSP-spec shape) capped at "
+        <> "`limit` (default 20). When `matches` is empty and the "
+        <> "query looks like it could be a case / convention "
+        <> "mismatch (snake_case typed against camelCase code or "
+        <> "vice versa), pharos retries once with the alternate "
+        <> "convention; if that retry returns hits, their names "
+        <> "appear in `near_misses` and `retried_with` carries the "
+        <> "actual variant tried. This catches the most common "
+        <> "\"LSP returned []\" failure where the agent has the "
+        <> "right symbol in mind but typed the wrong convention. "
+        <> "`workspace_uri_hint` is any file inside the workspace "
+        <> "or the workspace root URI; pass `language` when a "
+        <> "directory is given so LSP routing skips extension "
+        <> "lookup.",
       ),
     ),
     #(
@@ -642,7 +615,7 @@ fn workspace_symbols_tool_definition() -> Json {
                   "description",
                   json.string(
                     "file:// URI of any file inside the workspace, or "
-                      <> "of the workspace root directory itself.",
+                    <> "of the workspace root directory itself.",
                   ),
                 ),
               ]),
@@ -655,7 +628,7 @@ fn workspace_symbols_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Substring to match against symbol names. Empty "
-                      <> "string returns all symbols (potentially many).",
+                    <> "string returns all symbols (potentially many).",
                   ),
                 ),
               ]),
@@ -666,9 +639,7 @@ fn workspace_symbols_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string(
-                    "Max symbols to return. Default 20.",
-                  ),
+                  json.string("Max symbols to return. Default 20."),
                 ),
               ]),
             ),
@@ -680,10 +651,10 @@ fn workspace_symbols_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Optional language id (e.g. `rust`, `go`, "
-                      <> "`typescript`, `python`). Required when "
-                      <> "`workspace_uri_hint` is a directory URI. "
-                      <> "When omitted, language is inferred from "
-                      <> "the URI's file extension.",
+                    <> "`typescript`, `python`). Required when "
+                    <> "`workspace_uri_hint` is a directory URI. "
+                    <> "When omitted, language is inferred from "
+                    <> "the URI's file extension.",
                   ),
                 ),
               ]),
@@ -707,8 +678,8 @@ fn get_diagnostics_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/publishDiagnostics drain. Returns "
-          <> "diagnostics for the file. Some servers are pull-mode "
-          <> "only and may return NoDiagnosticsObserved.",
+        <> "diagnostics for the file. Some servers are pull-mode "
+        <> "only and may return NoDiagnosticsObserved.",
       ),
     ),
     #(
@@ -726,7 +697,7 @@ fn get_diagnostics_tool_definition() -> Json {
                   "description",
                   json.string(
                     "file:// URI of the source file to inspect. "
-                      <> "Example: file:///path/to/file",
+                    <> "Example: file:///path/to/file",
                   ),
                 ),
               ]),
@@ -739,9 +710,9 @@ fn get_diagnostics_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Optional. How long to wait for diagnostics after the "
-                      <> "LSP initialize handshake. Defaults to 20000ms — "
-                      <> "cold LSP workspaces commonly take 10-15s before "
-                      <> "they emit the first publishDiagnostics.",
+                    <> "LSP initialize handshake. Defaults to 20000ms — "
+                    <> "cold LSP workspaces commonly take 10-15s before "
+                    <> "they emit the first publishDiagnostics.",
                   ),
                 ),
               ]),
@@ -761,7 +732,7 @@ fn echo_tool_definition() -> Json {
       "description",
       json.string(
         "Echo the supplied message back as a text content block. "
-          <> "Smoke-test tool used to verify MCP plumbing.",
+        <> "Smoke-test tool used to verify MCP plumbing.",
       ),
     ),
     #(
@@ -797,9 +768,7 @@ fn handle_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
       error_response(
         Some(id),
         -32_601,
-        "Tool not enabled: "
-          <> blocked
-          <> " (filtered by pharos.tools config)",
+        "Tool not enabled: " <> blocked <> " (filtered by pharos.tools config)",
       )
     None -> dispatch_tool_call(pool, id, params)
   }
@@ -820,11 +789,7 @@ fn peek_filtered_name(params: Option(Dynamic)) -> Option(String) {
   }
 }
 
-fn dispatch_tool_call(
-  pool: Pool,
-  id: Id,
-  params: Option(Dynamic),
-) -> String {
+fn dispatch_tool_call(pool: Pool, id: Id, params: Option(Dynamic)) -> String {
   case decode_tool_call(params) {
     Ok(#("echo", arguments)) ->
       case decode_echo_arguments(arguments) {
@@ -891,14 +856,12 @@ fn dispatch_tool_call(
     Ok(#("format_document", arguments)) ->
       handle_format_document(pool, id, arguments)
 
-    Ok(#("code_actions", arguments)) ->
-      handle_code_actions(pool, id, arguments)
+    Ok(#("code_actions", arguments)) -> handle_code_actions(pool, id, arguments)
 
     Ok(#("apply_workspace_edit", arguments)) ->
       handle_apply_workspace_edit(id, arguments)
 
-    Ok(#("inlay_hints", arguments)) ->
-      handle_inlay_hints(pool, id, arguments)
+    Ok(#("inlay_hints", arguments)) -> handle_inlay_hints(pool, id, arguments)
 
     Ok(#("semantic_tokens", arguments)) ->
       handle_semantic_tokens(pool, id, arguments)
@@ -931,8 +894,7 @@ fn dispatch_tool_call(
       handle_fetch_uri_contents(pool, id, arguments)
 
     // -- ADR-026 symbol layer --
-    Ok(#("find_symbol", arguments)) ->
-      handle_find_symbol(pool, id, arguments)
+    Ok(#("find_symbol", arguments)) -> handle_find_symbol(pool, id, arguments)
     Ok(#("get_symbols_overview", arguments)) ->
       handle_get_symbols_overview(pool, id, arguments)
     Ok(#("containing_symbol", arguments)) ->
@@ -943,16 +905,11 @@ fn dispatch_tool_call(
       handle_edit_at_symbol(pool, id, arguments)
 
     // -- ADR-027 memory tools --
-    Ok(#("memory_save", arguments)) ->
-      handle_memory_save(id, arguments)
-    Ok(#("memory_get", arguments)) ->
-      handle_memory_get(id, arguments)
-    Ok(#("memory_list", arguments)) ->
-      handle_memory_list(id, arguments)
-    Ok(#("memory_prune", arguments)) ->
-      handle_memory_prune(id, arguments)
-    Ok(#("memory_audit", arguments)) ->
-      handle_memory_audit(id, arguments)
+    Ok(#("memory_save", arguments)) -> handle_memory_save(id, arguments)
+    Ok(#("memory_get", arguments)) -> handle_memory_get(id, arguments)
+    Ok(#("memory_list", arguments)) -> handle_memory_list(id, arguments)
+    Ok(#("memory_prune", arguments)) -> handle_memory_prune(id, arguments)
+    Ok(#("memory_audit", arguments)) -> handle_memory_audit(id, arguments)
 
     Ok(#(name, arguments)) ->
       case debug.dispatch(pool, name, arguments) {
@@ -987,25 +944,21 @@ fn handle_get_diagnostics(
           success_response(id, fn() { tool_text_result(body, False) })
 
         Ok(diagnostics.NoDiagnosticsObserved(uri: u)) ->
-          success_response(
-            id,
-            fn() {
-              tool_text_result(
-                "No textDocument/publishDiagnostics notification was received "
-                  <> "for "
-                  <> u
-                  <> " within the timeout. The LSP may still be indexing, "
-                  <> "or the file may have no diagnostics.",
-                False,
-              )
-            },
-          )
+          success_response(id, fn() {
+            tool_text_result(
+              "No textDocument/publishDiagnostics notification was received "
+                <> "for "
+                <> u
+                <> " within the timeout. The LSP may still be indexing, "
+                <> "or the file may have no diagnostics.",
+              False,
+            )
+          })
 
         Error(err) ->
-          success_response(
-            id,
-            fn() { tool_text_result(describe_diagnostics_error(err), True) },
-          )
+          success_response(id, fn() {
+            tool_text_result(describe_diagnostics_error(err), True)
+          })
       }
   }
 }
@@ -1025,14 +978,8 @@ fn decode_get_diagnostics_arguments(
   }
   case decode.run(raw, decoder) {
     Ok(#(uri, timeout_arg)) ->
-      Ok(#(
-        uri,
-        finalize_timeout("get_diagnostics", 20_000, uri, timeout_arg),
-      ))
-    Error(_) ->
-      Error(
-        "expected `uri: string` (and optional `timeout_ms: int`)",
-      )
+      Ok(#(uri, finalize_timeout("get_diagnostics", 20_000, uri, timeout_arg)))
+    Error(_) -> Error("expected `uri: string` (and optional `timeout_ms: int`)")
   }
 }
 
@@ -1271,9 +1218,7 @@ fn handle_goto_type_definition(
         "Invalid goto_type_definition params: " <> reason,
       )
     Ok(#(uri, line, character, timeout_ms)) ->
-      case
-        goto_type_definition.handle(pool, uri, line, character, timeout_ms)
-      {
+      case goto_type_definition.handle(pool, uri, line, character, timeout_ms) {
         Ok(json_text) ->
           success_response(id, fn() { tool_text_result(json_text, False) })
         Error(goto_type_definition.SessionFailed(reason)) ->
@@ -1607,10 +1552,7 @@ fn handle_inlay_hints(
   }
 }
 
-fn handle_apply_workspace_edit(
-  id: Id,
-  arguments: Option(Dynamic),
-) -> String {
+fn handle_apply_workspace_edit(id: Id, arguments: Option(Dynamic)) -> String {
   case decode_apply_workspace_edit_arguments(arguments) {
     Error(reason) ->
       error_response(
@@ -1623,10 +1565,9 @@ fn handle_apply_workspace_edit(
         Ok(rendered) ->
           success_response(id, fn() { tool_text_result(rendered, False) })
         Error(apply_workspace_edit.DecodeFailed(reason)) ->
-          success_response(
-            id,
-            fn() { tool_text_result("decode failed: " <> reason, True) },
-          )
+          success_response(id, fn() {
+            tool_text_result("decode failed: " <> reason, True)
+          })
         Error(apply_workspace_edit.InvalidUris(reason)) ->
           success_response(id, fn() { tool_text_result(reason, True) })
       }
@@ -1690,13 +1631,13 @@ fn fetch_uri_contents_tool_definition() -> Json {
       "description",
       json.string(
         "ADR-029. Read raw text from a custom-scheme URI (e.g. "
-          <> "`jdt://contents/...` for a Java class inside a JAR) by "
-          <> "dispatching the per-scheme LSP extension method declared "
-          <> "in the language registry. Returns `{uri, content}` JSON. "
-          <> "For `file://` URIs use Claude Code's `Read` tool instead "
-          <> "— this tool only handles virtual URIs. Requires a Ready "
-          <> "LSP session for the scheme's language (open a `file://` "
-          <> "from the same workspace first if you haven't already).",
+        <> "`jdt://contents/...` for a Java class inside a JAR) by "
+        <> "dispatching the per-scheme LSP extension method declared "
+        <> "in the language registry. Returns `{uri, content}` JSON. "
+        <> "For `file://` URIs use Claude Code's `Read` tool instead "
+        <> "— this tool only handles virtual URIs. Requires a Ready "
+        <> "LSP session for the scheme's language (open a `file://` "
+        <> "from the same workspace first if you haven't already).",
       ),
     ),
     #(
@@ -1753,8 +1694,7 @@ fn decode_fetch_uri_contents_arguments(
           timeout_arg,
         ),
       ))
-    Error(_) ->
-      Error("expected `uri: string`, optional `timeout_ms: int`")
+    Error(_) -> Error("expected `uri: string`, optional `timeout_ms: int`")
   }
 }
 
@@ -1767,9 +1707,9 @@ fn goto_type_definition_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/typeDefinition. Returns the location "
-          <> "of the *type* of the symbol at position. Same shape as "
-          <> "goto_definition. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "of the *type* of the symbol at position. Same shape as "
+        <> "goto_definition. "
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1783,9 +1723,9 @@ fn goto_implementation_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/implementation. Returns up to `limit` "
-          <> "(default 50) implementation sites for the trait or "
-          <> "interface method at position. Trims excess. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "(default 50) implementation sites for the trait or "
+        <> "interface method at position. Trims excess. "
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -1812,10 +1752,7 @@ fn goto_implementation_tool_definition() -> Json {
               "line",
               json.object([
                 #("type", json.string("integer")),
-                #(
-                  "description",
-                  json.string("Zero-based line, per LSP spec."),
-                ),
+                #("description", json.string("Zero-based line, per LSP spec.")),
               ]),
             ),
             #(
@@ -1864,8 +1801,8 @@ fn signature_help_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/signatureHelp. Position inside the call "
-          <> "parens. Returns SignatureHelp or null. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "parens. Returns SignatureHelp or null. "
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1879,11 +1816,11 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/prepareCallHierarchy. Returns "
-          <> "CallHierarchyItem[]. Pass items back to "
-          <> "call_hierarchy_incoming_calls / outgoing_calls. "
-          <> "Returns -32601 if server didn't advertise "
-          <> "callHierarchyProvider. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "CallHierarchyItem[]. Pass items back to "
+        <> "call_hierarchy_incoming_calls / outgoing_calls. "
+        <> "Returns -32601 if server didn't advertise "
+        <> "callHierarchyProvider. "
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -1955,9 +1892,9 @@ fn rename_preview_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/rename, preview-only — never writes. "
-          <> "Returns the proposed WorkspaceEdit summary. Apply via "
-          <> "apply_workspace_edit. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "Returns the proposed WorkspaceEdit summary. Apply via "
+        <> "apply_workspace_edit. "
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -1984,10 +1921,7 @@ fn rename_preview_tool_definition() -> Json {
               "line",
               json.object([
                 #("type", json.string("integer")),
-                #(
-                  "description",
-                  json.string("Zero-based line, per LSP spec."),
-                ),
+                #("description", json.string("Zero-based line, per LSP spec.")),
               ]),
             ),
             #(
@@ -2034,8 +1968,8 @@ fn format_document_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/formatting, preview-only. Returns the "
-          <> "formatter's proposed TextEdit[] summary. Options use "
-          <> "LSP defaults (tabSize=4, insertSpaces=true).",
+        <> "formatter's proposed TextEdit[] summary. Options use "
+        <> "LSP defaults (tabSize=4, insertSpaces=true).",
       ),
     ),
     #(
@@ -2051,9 +1985,7 @@ fn format_document_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string(
-                    "file:// URI of the source file to format.",
-                  ),
+                  json.string("file:// URI of the source file to format."),
                 ),
               ]),
             ),
@@ -2084,10 +2016,10 @@ fn type_hierarchy_prepare_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/prepareTypeHierarchy. Returns "
-          <> "TypeHierarchyItem[]. Pass items to "
-          <> "type_hierarchy_supertypes / subtypes. Server support "
-          <> "sparse — many return -32601. "
-          <> "Positions are 0-based; character is UTF-16 code units.",
+        <> "TypeHierarchyItem[]. Pass items to "
+        <> "type_hierarchy_supertypes / subtypes. Server support "
+        <> "sparse — many return -32601. "
+        <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
     #("inputSchema", position_arg_schema()),
@@ -2153,11 +2085,11 @@ fn semantic_tokens_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/semanticTokens/{full,range}. Whole doc "
-          <> "if all range ints are 0, else range-scoped. Returns "
-          <> "SemanticTokens — `data` is the 5-int-per-token "
-          <> "LSP-spec integer encoding. Legend lives in the "
-          <> "server's initialize capabilities; pharos does not "
-          <> "stash it.",
+        <> "if all range ints are 0, else range-scoped. Returns "
+        <> "SemanticTokens — `data` is the 5-int-per-token "
+        <> "LSP-spec integer encoding. Legend lives in the "
+        <> "server's initialize capabilities; pharos does not "
+        <> "stash it.",
       ),
     ),
     #(
@@ -2173,9 +2105,7 @@ fn semantic_tokens_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string(
-                    "file:// URI of the source file to tokenize.",
-                  ),
+                  json.string("file:// URI of the source file to tokenize."),
                 ),
               ]),
             ),
@@ -2227,10 +2157,7 @@ fn semantic_tokens_tool_definition() -> Json {
             ),
           ]),
         ),
-        #(
-          "required",
-          json.preprocessed_array([json.string("uri")]),
-        ),
+        #("required", json.preprocessed_array([json.string("uri")])),
       ]),
     ),
   ])
@@ -2243,9 +2170,9 @@ fn inlay_hints_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/inlayHint. Range-scoped. Returns "
-          <> "InlayHint[] or null. Returns -32601 if server didn't "
-          <> "advertise inlayHintProvider. "
-          <> "Positions/ranges are 0-based; character is UTF-16 code units.",
+        <> "InlayHint[] or null. Returns -32601 if server didn't "
+        <> "advertise inlayHintProvider. "
+        <> "Positions/ranges are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -2261,9 +2188,7 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string(
-                    "file:// URI of the source file to inspect.",
-                  ),
+                  json.string("file:// URI of the source file to inspect."),
                 ),
               ]),
             ),
@@ -2283,9 +2208,7 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string(
-                    "Zero-based UTF-16 start offset on `start_line`.",
-                  ),
+                  json.string("Zero-based UTF-16 start offset on `start_line`."),
                 ),
               ]),
             ),
@@ -2305,9 +2228,7 @@ fn inlay_hints_tool_definition() -> Json {
                 #("type", json.string("integer")),
                 #(
                   "description",
-                  json.string(
-                    "Zero-based UTF-16 end offset on `end_line`.",
-                  ),
+                  json.string("Zero-based UTF-16 end offset on `end_line`."),
                 ),
               ]),
             ),
@@ -2347,12 +2268,12 @@ fn apply_workspace_edit_tool_definition() -> Json {
       "description",
       json.string(
         "Apply an LSP WorkspaceEdit to disk. `dry_run=true` "
-          <> "(default) validates + reports per-file byte delta but "
-          <> "writes nothing; `dry_run=false` commits via per-file "
-          <> "atomic rename. Overlapping edits abort the run. "
-          <> "Characters are UTF-16 LSP units approximated as "
-          <> "Unicode codepoints (BMP-exact, off-by-one on "
-          <> "surrogate-pair chars).",
+        <> "(default) validates + reports per-file byte delta but "
+        <> "writes nothing; `dry_run=false` commits via per-file "
+        <> "atomic rename. Overlapping edits abort the run. "
+        <> "Characters are UTF-16 LSP units approximated as "
+        <> "Unicode codepoints (BMP-exact, off-by-one on "
+        <> "surrogate-pair chars).",
       ),
     ),
     #(
@@ -2404,10 +2325,10 @@ fn lsp_request_raw_tool_definition() -> Json {
       "description",
       json.string(
         "Escape hatch — send any (method, params) to the LSP for "
-          <> "`uri`'s extension. Returns the verbatim JSON result. "
-          <> "Use for server-specific extensions or methods pharos "
-          <> "does not wrap. When constructing position fields in "
-          <> "params: line is 0-based, character is UTF-16 code units.",
+        <> "`uri`'s extension. Returns the verbatim JSON result. "
+        <> "Use for server-specific extensions or methods pharos "
+        <> "does not wrap. When constructing position fields in "
+        <> "params: line is 0-based, character is UTF-16 code units.",
       ),
     ),
     #(
@@ -2437,9 +2358,7 @@ fn lsp_request_raw_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string(
-                    "LSP method name, e.g. `textDocument/inlayHint`.",
-                  ),
+                  json.string("LSP method name, e.g. `textDocument/inlayHint`."),
                 ),
               ]),
             ),
@@ -2452,9 +2371,7 @@ fn lsp_request_raw_tool_definition() -> Json {
                 #("type", json.string("object")),
                 #(
                   "description",
-                  json.string(
-                    "Method-specific params object, sent verbatim.",
-                  ),
+                  json.string("Method-specific params object, sent verbatim."),
                 ),
               ]),
             ),
@@ -2481,9 +2398,9 @@ fn code_actions_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/codeAction. Range-scoped. Returns "
-          <> "(Command | CodeAction)[]. Pharos does not auto-execute "
-          <> "commands or auto-apply edits. "
-          <> "Positions/ranges are 0-based; character is UTF-16 code units.",
+        <> "(Command | CodeAction)[]. Pharos does not auto-execute "
+        <> "commands or auto-apply edits. "
+        <> "Positions/ranges are 0-based; character is UTF-16 code units.",
       ),
     ),
     #(
@@ -2497,28 +2414,16 @@ fn code_actions_tool_definition() -> Json {
               "uri",
               json.object([
                 #("type", json.string("string")),
-                #(
-                  "description",
-                  json.string("file:// URI of the source file."),
-                ),
+                #("description", json.string("file:// URI of the source file.")),
               ]),
             ),
-            #(
-              "start_line",
-              json.object([#("type", json.string("integer"))]),
-            ),
+            #("start_line", json.object([#("type", json.string("integer"))])),
             #(
               "start_character",
               json.object([#("type", json.string("integer"))]),
             ),
-            #(
-              "end_line",
-              json.object([#("type", json.string("integer"))]),
-            ),
-            #(
-              "end_character",
-              json.object([#("type", json.string("integer"))]),
-            ),
+            #("end_line", json.object([#("type", json.string("integer"))])),
+            #("end_character", json.object([#("type", json.string("integer"))])),
             timeout_ms_property(),
           ]),
         ),
@@ -2563,12 +2468,12 @@ fn decode_position_with_timeout(
   }
   case decode.run(raw, decoder) {
     Ok(#(uri, line, char, timeout_arg)) ->
-      Ok(#(uri, line, char, finalize_timeout(
-        tool_name,
-        default,
+      Ok(#(
         uri,
-        timeout_arg,
-      )))
+        line,
+        char,
+        finalize_timeout(tool_name, default, uri, timeout_arg),
+      ))
     Error(_) ->
       Error(
         "expected `uri: string`, `line: int`, `character: int`, "
@@ -2640,8 +2545,7 @@ fn decode_uri_only_with_timeout(
   case decode.run(raw, decoder) {
     Ok(#(uri, timeout_arg)) ->
       Ok(#(uri, finalize_timeout(tool_name, default, uri, timeout_arg)))
-    Error(_) ->
-      Error("expected `uri: string`, optional `timeout_ms: int`")
+    Error(_) -> Error("expected `uri: string`, optional `timeout_ms: int`")
   }
 }
 
@@ -2789,8 +2693,7 @@ fn decode_format_document_arguments(
           timeout_arg,
         ),
       ))
-    Error(_) ->
-      Error("expected `uri: string`, optional `timeout_ms: int`")
+    Error(_) -> Error("expected `uri: string`, optional `timeout_ms: int`")
   }
 }
 
@@ -3037,14 +2940,11 @@ pub fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
     diagnostics.NotAFileUri(uri) -> "uri must start with file:// — got: " <> uri
     diagnostics.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
-    diagnostics.SpawnFailed(reason) ->
-      "LSP spawn failed: " <> reason
+    diagnostics.SpawnFailed(reason) -> "LSP spawn failed: " <> reason
     diagnostics.HandshakeFailed(reason) ->
       "LSP initialize handshake failed: " <> reason
-    diagnostics.TransportFailed(reason) ->
-      "LSP transport error: " <> reason
-    diagnostics.UnsupportedFileType(uri) ->
-      "unsupported file type: " <> uri
+    diagnostics.TransportFailed(reason) -> "LSP transport error: " <> reason
+    diagnostics.UnsupportedFileType(uri) -> "unsupported file type: " <> uri
     diagnostics.UnknownCustomUriScheme(uri) ->
       "custom URI scheme not registered for any language: " <> uri
     diagnostics.NoActiveSessionForLanguage(uri, language) ->
@@ -3158,22 +3058,22 @@ fn find_symbol_tool_definition() -> Json {
       "description",
       json.string(
         "Locate symbols by name_path (slash-delimited, e.g. "
-          <> "\"User/authenticate\"). Use when you know the name but "
-          <> "not the file, or when grep would find multiple "
-          <> "identifiers with the same name in unrelated scopes and "
-          <> "you need scope-aware disambiguation. Also use for "
-          <> "single-symbol kind queries (\"is X a function or a "
-          <> "class?\") — each match's `kind` and `kind_name` fields "
-          <> "answer that directly without dumping the whole file "
-          <> "outline via get_symbols_overview. Returns Resolution = "
-          <> "Single(match) | Multiple(matches) | NotFound(near_misses); "
-          <> "each match carries `kind` (LSP SymbolKind int), "
-          <> "`kind_name` (human label), `uri`, `range`, "
-          <> "`selection_range`, `full_path`, `detail`, and a "
-          <> "SymbolHandle that chains directly into "
-          <> "find_referencing_symbols and edit_at_symbol. `policy` "
-          <> "overrides the default AllMatches with one of: "
-          <> "first_match, closest_scope, strict_single.",
+        <> "\"User/authenticate\"). Use when you know the name but "
+        <> "not the file, or when grep would find multiple "
+        <> "identifiers with the same name in unrelated scopes and "
+        <> "you need scope-aware disambiguation. Also use for "
+        <> "single-symbol kind queries (\"is X a function or a "
+        <> "class?\") — each match's `kind` and `kind_name` fields "
+        <> "answer that directly without dumping the whole file "
+        <> "outline via get_symbols_overview. Returns Resolution = "
+        <> "Single(match) | Multiple(matches) | NotFound(near_misses); "
+        <> "each match carries `kind` (LSP SymbolKind int), "
+        <> "`kind_name` (human label), `uri`, `range`, "
+        <> "`selection_range`, `full_path`, `detail`, and a "
+        <> "SymbolHandle that chains directly into "
+        <> "find_referencing_symbols and edit_at_symbol. `policy` "
+        <> "overrides the default AllMatches with one of: "
+        <> "first_match, closest_scope, strict_single.",
       ),
     ),
     #(
@@ -3183,14 +3083,8 @@ fn find_symbol_tool_definition() -> Json {
         #(
           "properties",
           json.object([
-            #(
-              "name_path",
-              json.object([#("type", json.string("string"))]),
-            ),
-            #(
-              "scope_uri",
-              json.object([#("type", json.string("string"))]),
-            ),
+            #("name_path", json.object([#("type", json.string("string"))])),
+            #("scope_uri", json.object([#("type", json.string("string"))])),
             #(
               "policy",
               json.object([
@@ -3209,10 +3103,7 @@ fn find_symbol_tool_definition() -> Json {
             ),
           ]),
         ),
-        #(
-          "required",
-          json.array(["name_path", "scope_uri"], of: json.string),
-        ),
+        #("required", json.array(["name_path", "scope_uri"], of: json.string)),
       ]),
     ),
   ])
@@ -3225,17 +3116,17 @@ fn get_symbols_overview_tool_definition() -> Json {
       "description",
       json.string(
         "LLM-friendly outline of a single source file. Reshapes LSP "
-          <> "documentSymbol output to drop block-scope variable noise "
-          <> "and surface only `(name, kind, line, character, end_line, "
-          <> "end_character, detail, children)`. `line`/`character` "
-          <> "anchor the symbol's identifier (pipe straight into "
-          <> "find_references / goto_definition without a find_symbol "
-          <> "round-trip); `end_line`/`end_character` carry the full "
-          <> "body span so the agent can slice the file rather than "
-          <> "loading the whole document. Cheaper than document_symbols "
-          <> "for navigation; use this first, then drill with find_symbol "
-          <> "when you need a SymbolHandle for symbol-layer tools "
-          <> "(find_referencing_symbols, edit_at_symbol).",
+        <> "documentSymbol output to drop block-scope variable noise "
+        <> "and surface only `(name, kind, line, character, end_line, "
+        <> "end_character, detail, children)`. `line`/`character` "
+        <> "anchor the symbol's identifier (pipe straight into "
+        <> "find_references / goto_definition without a find_symbol "
+        <> "round-trip); `end_line`/`end_character` carry the full "
+        <> "body span so the agent can slice the file rather than "
+        <> "loading the whole document. Cheaper than document_symbols "
+        <> "for navigation; use this first, then drill with find_symbol "
+        <> "when you need a SymbolHandle for symbol-layer tools "
+        <> "(find_referencing_symbols, edit_at_symbol).",
       ),
     ),
     #(
@@ -3245,10 +3136,7 @@ fn get_symbols_overview_tool_definition() -> Json {
         #(
           "properties",
           json.object([
-            #(
-              "uri",
-              json.object([#("type", json.string("string"))]),
-            ),
+            #("uri", json.object([#("type", json.string("string"))])),
           ]),
         ),
         #("required", json.array(["uri"], of: json.string)),
@@ -3264,24 +3152,24 @@ fn containing_symbol_tool_definition() -> Json {
       "description",
       json.string(
         "Map a `(uri, line)` — or `(uri, line, character)` for "
-          <> "cursor-precise lookups — to the innermost named symbol "
-          <> "whose range contains that position. Use for stack-trace-"
-          <> "style lookups (\"what function owns line 47 of "
-          <> "foo.ts?\") and cursor-driven UX (\"what does the caret "
-          <> "currently sit inside?\"). `character` defaults to 0 "
-          <> "when omitted — line membership is enough for stack-"
-          <> "trace work. Provide a column when nested same-line "
-          <> "scopes need disambiguating (e.g. arrow functions inside "
-          <> "a class body). Cheaper than dumping the whole file "
-          <> "outline via get_symbols_overview when only one "
-          <> "position's owner is wanted. Returns `{match: "
-          <> "SymbolMatch}` with name, kind, kind_name, range, "
-          <> "selection_range, full_path, "
-          <> "matched_via=\"containing_range\", and a SymbolHandle "
-          <> "that chains into find_referencing_symbols / "
-          <> "edit_at_symbol; or `{match: null}` if the position "
-          <> "falls outside every named symbol (top-of-file imports, "
-          <> "blank lines, etc.).",
+        <> "cursor-precise lookups — to the innermost named symbol "
+        <> "whose range contains that position. Use for stack-trace-"
+        <> "style lookups (\"what function owns line 47 of "
+        <> "foo.ts?\") and cursor-driven UX (\"what does the caret "
+        <> "currently sit inside?\"). `character` defaults to 0 "
+        <> "when omitted — line membership is enough for stack-"
+        <> "trace work. Provide a column when nested same-line "
+        <> "scopes need disambiguating (e.g. arrow functions inside "
+        <> "a class body). Cheaper than dumping the whole file "
+        <> "outline via get_symbols_overview when only one "
+        <> "position's owner is wanted. Returns `{match: "
+        <> "SymbolMatch}` with name, kind, kind_name, range, "
+        <> "selection_range, full_path, "
+        <> "matched_via=\"containing_range\", and a SymbolHandle "
+        <> "that chains into find_referencing_symbols / "
+        <> "edit_at_symbol; or `{match: null}` if the position "
+        <> "falls outside every named symbol (top-of-file imports, "
+        <> "blank lines, etc.).",
       ),
     ),
     #(
@@ -3297,9 +3185,7 @@ fn containing_symbol_tool_definition() -> Json {
                 #("type", json.string("string")),
                 #(
                   "description",
-                  json.string(
-                    "file:// URI of the source file to probe.",
-                  ),
+                  json.string("file:// URI of the source file to probe."),
                 ),
               ]),
             ),
@@ -3311,7 +3197,7 @@ fn containing_symbol_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Zero-based line number to map to its containing "
-                      <> "symbol.",
+                    <> "symbol.",
                   ),
                 ),
               ]),
@@ -3324,8 +3210,8 @@ fn containing_symbol_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Optional zero-based UTF-16 column. Defaults to 0 "
-                      <> "(line-membership semantics). Provide when "
-                      <> "nested same-line scopes need disambiguating.",
+                    <> "(line-membership semantics). Provide when "
+                    <> "nested same-line scopes need disambiguating.",
                   ),
                 ),
               ]),
@@ -3351,11 +3237,11 @@ fn find_referencing_symbols_tool_definition() -> Json {
       "description",
       json.string(
         "Find symbols that reference the given handle. Wraps LSP "
-          <> "textDocument/references then projects each call-site "
-          <> "location back through documentSymbol to return the "
-          <> "OWNER symbol (the function/class containing the "
-          <> "reference) rather than a bare location. The handle "
-          <> "comes from a prior find_symbol call.",
+        <> "textDocument/references then projects each call-site "
+        <> "location back through documentSymbol to return the "
+        <> "OWNER symbol (the function/class containing the "
+        <> "reference) rather than a bare location. The handle "
+        <> "comes from a prior find_symbol call.",
       ),
     ),
     #(
@@ -3365,10 +3251,7 @@ fn find_referencing_symbols_tool_definition() -> Json {
         #(
           "properties",
           json.object([
-            #(
-              "symbol_handle",
-              json.object([#("type", json.string("object"))]),
-            ),
+            #("symbol_handle", json.object([#("type", json.string("object"))])),
           ]),
         ),
         #("required", json.array(["symbol_handle"], of: json.string)),
@@ -3384,14 +3267,14 @@ fn edit_at_symbol_tool_definition() -> Json {
       "description",
       json.string(
         "Compose a WorkspaceEdit preview that targets the symbol "
-          <> "identified by `symbol_handle` (returned from a prior "
-          <> "find_symbol). Never writes — returns the proposed range "
-          <> "+ new_text + rendered diff. Apply via "
-          <> "apply_workspace_edit if you want to commit. `mode` "
-          <> "selects the edit boundary: replace_body (rewrite the "
-          <> "body keeping the signature), insert_before (prepend "
-          <> "content above the whole symbol), insert_after (append "
-          <> "content below the whole symbol).",
+        <> "identified by `symbol_handle` (returned from a prior "
+        <> "find_symbol). Never writes — returns the proposed range "
+        <> "+ new_text + rendered diff. Apply via "
+        <> "apply_workspace_edit if you want to commit. `mode` "
+        <> "selects the edit boundary: replace_body (rewrite the "
+        <> "body keeping the signature), insert_before (prepend "
+        <> "content above the whole symbol), insert_after (append "
+        <> "content below the whole symbol).",
       ),
     ),
     #(
@@ -3401,10 +3284,7 @@ fn edit_at_symbol_tool_definition() -> Json {
         #(
           "properties",
           json.object([
-            #(
-              "symbol_handle",
-              json.object([#("type", json.string("object"))]),
-            ),
+            #("symbol_handle", json.object([#("type", json.string("object"))])),
             #(
               "mode",
               json.object([
@@ -3418,18 +3298,12 @@ fn edit_at_symbol_tool_definition() -> Json {
                 ),
               ]),
             ),
-            #(
-              "content",
-              json.object([#("type", json.string("string"))]),
-            ),
+            #("content", json.object([#("type", json.string("string"))])),
           ]),
         ),
         #(
           "required",
-          json.array(
-            ["symbol_handle", "mode", "content"],
-            of: json.string,
-          ),
+          json.array(["symbol_handle", "mode", "content"], of: json.string),
         ),
       ]),
     ),
@@ -3520,13 +3394,10 @@ fn handle_containing_symbol(
             tool_text_result(
               json.to_string(
                 json.object([
-                  #(
-                    "match",
-                    case maybe_match {
-                      Some(m) -> symbols.symbol_match_to_json(m)
-                      None -> json.null()
-                    },
-                  ),
+                  #("match", case maybe_match {
+                    Some(m) -> symbols.symbol_match_to_json(m)
+                    None -> json.null()
+                  }),
                 ]),
               ),
               False,
@@ -3664,7 +3535,7 @@ fn decode_containing_symbol_arguments(
         Error(_) ->
           Error(
             "expected `uri: string`, `line: int`, "
-              <> "optional `character: int`",
+            <> "optional `character: int`",
           )
         Ok(triple) -> Ok(triple)
       }
@@ -3710,8 +3581,7 @@ fn decode_edit_at_symbol_arguments(
         decode.success(#(handle, mode_str, content))
       }
       case decode.run(args, decoder) {
-        Error(_) ->
-          Error("symbol_handle + mode + content required")
+        Error(_) -> Error("symbol_handle + mode + content required")
         Ok(#(handle, mode_str, content)) ->
           case symbols.edit_mode_from_string(mode_str) {
             Ok(mode) -> Ok(#(handle, mode, content))
@@ -3722,7 +3592,6 @@ fn decode_edit_at_symbol_arguments(
   }
 }
 
-
 // -- ADR-027 memory tool definitions + handlers -------------------------
 
 fn memory_save_tool_definition() -> Json {
@@ -3732,16 +3601,16 @@ fn memory_save_tool_definition() -> Json {
       "description",
       json.string(
         "Save a project-local memory entry. Cross-MCP-client store: "
-          <> "any client (Claude Code, Cursor, ChatGPT, agents) reads "
-          <> "the same content. `type` ∈ {user, project, feedback, "
-          <> "reference}. `user` writes to ~/.pharos/memories/user/ "
-          <> "(per-user, NOT committed). Others write to "
-          <> ".pharos/memories/<type>/ in the repo. Do save: user role, "
-          <> "project conventions, decisions+rationale, external "
-          <> "system pointers. Do NOT save: code patterns (already in "
-          <> "repo), git history (use git log), debugging solutions "
-          <> "(in commits). Refuses duplicates without overwrite=true. "
-          <> "<private>...</private> blocks are stripped before write.",
+        <> "any client (Claude Code, Cursor, ChatGPT, agents) reads "
+        <> "the same content. `type` ∈ {user, project, feedback, "
+        <> "reference}. `user` writes to ~/.pharos/memories/user/ "
+        <> "(per-user, NOT committed). Others write to "
+        <> ".pharos/memories/<type>/ in the repo. Do save: user role, "
+        <> "project conventions, decisions+rationale, external "
+        <> "system pointers. Do NOT save: code patterns (already in "
+        <> "repo), git history (use git log), debugging solutions "
+        <> "(in commits). Refuses duplicates without overwrite=true. "
+        <> "<private>...</private> blocks are stripped before write.",
       ),
     ),
     #(
@@ -3751,23 +3620,32 @@ fn memory_save_tool_definition() -> Json {
         #(
           "properties",
           json.object([
-            #("type", json.object([
-              #("type", json.string("string")),
-              #("enum", json.array(
-                ["user", "project", "feedback", "reference"],
-                of: json.string,
-              )),
-            ])),
+            #(
+              "type",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "enum",
+                  json.array(
+                    ["user", "project", "feedback", "reference"],
+                    of: json.string,
+                  ),
+                ),
+              ]),
+            ),
             #("name", json.object([#("type", json.string("string"))])),
             #("description", json.object([#("type", json.string("string"))])),
             #("content", json.object([#("type", json.string("string"))])),
             #("overwrite", json.object([#("type", json.string("boolean"))])),
           ]),
         ),
-        #("required", json.array(
-          ["type", "name", "description", "content"],
-          of: json.string,
-        )),
+        #(
+          "required",
+          json.array(
+            ["type", "name", "description", "content"],
+            of: json.string,
+          ),
+        ),
       ]),
     ),
   ])
@@ -3780,7 +3658,7 @@ fn memory_get_tool_definition() -> Json {
       "description",
       json.string(
         "Fetch a memory by name. Checks project layer first, falls "
-          <> "back to user layer. Bumps last_accessed timestamp.",
+        <> "back to user layer. Bumps last_accessed timestamp.",
       ),
     ),
     #(
@@ -3806,8 +3684,8 @@ fn memory_list_tool_definition() -> Json {
       "description",
       json.string(
         "List memories across both layers. Optional `type` filter and "
-          <> "`query` substring match (name + description). Sorted by "
-          <> "last_accessed descending — recent first.",
+        <> "`query` substring match (name + description). Sorted by "
+        <> "last_accessed descending — recent first.",
       ),
     ),
     #(
@@ -3817,13 +3695,19 @@ fn memory_list_tool_definition() -> Json {
         #(
           "properties",
           json.object([
-            #("type", json.object([
-              #("type", json.string("string")),
-              #("enum", json.array(
-                ["user", "project", "feedback", "reference"],
-                of: json.string,
-              )),
-            ])),
+            #(
+              "type",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "enum",
+                  json.array(
+                    ["user", "project", "feedback", "reference"],
+                    of: json.string,
+                  ),
+                ),
+              ]),
+            ),
             #("query", json.object([#("type", json.string("string"))])),
           ]),
         ),
@@ -3839,7 +3723,7 @@ fn memory_prune_tool_definition() -> Json {
       "description",
       json.string(
         "Delete a memory by name. One-at-a-time on purpose — no batch "
-          <> "deletes to discourage accidental wipes.",
+        <> "deletes to discourage accidental wipes.",
       ),
     ),
     #(
@@ -3865,10 +3749,10 @@ fn memory_audit_tool_definition() -> Json {
       "description",
       json.string(
         "Report dumping-ground signals across both memory layers: stale "
-          <> "entries (last_accessed older than stale_threshold_days, default "
-          <> "30) and high-similarity duplicate candidates (Jaccard >= 0.5 on "
-          <> "name-tokens or description-tokens). Use before hitting quotas to "
-          <> "decide what to prune/merge.",
+        <> "entries (last_accessed older than stale_threshold_days, default "
+        <> "30) and high-similarity duplicate candidates (Jaccard >= 0.5 on "
+        <> "name-tokens or description-tokens). Use before hitting quotas to "
+        <> "decide what to prune/merge.",
       ),
     ),
     #(
@@ -3886,7 +3770,7 @@ fn memory_audit_tool_definition() -> Json {
                   "description",
                   json.string(
                     "Days since last_accessed at which an entry counts as "
-                      <> "stale. Default 30.",
+                    <> "stale. Default 30.",
                   ),
                 ),
               ]),
@@ -3913,15 +3797,25 @@ fn memory_audit_tool_definition() -> Json {
 fn handle_memory_save(id: Id, arguments: Option(Dynamic)) -> String {
   case decode_memory_save_arguments(arguments) {
     Error(reason) ->
-      error_response(Some(id), -32_602, "Invalid memory_save params: " <> reason)
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid memory_save params: " <> reason,
+      )
     Ok(#(type_, name, description, content, overwrite)) ->
-      case memory.save(name, type_, description, content, overwrite, now_iso8601_ffi()) {
+      case
+        memory.save(
+          name,
+          type_,
+          description,
+          content,
+          overwrite,
+          now_iso8601_ffi(),
+        )
+      {
         Ok(entry) ->
           success_response(id, fn() {
-            tool_text_result(
-              json.to_string(memory_entry_to_json(entry)),
-              False,
-            )
+            tool_text_result(json.to_string(memory_entry_to_json(entry)), False)
           })
         Error(err) ->
           success_response(id, fn() {
@@ -3939,10 +3833,7 @@ fn handle_memory_get(id: Id, arguments: Option(Dynamic)) -> String {
       case memory.get(name, now_iso8601_ffi()) {
         Ok(entry) ->
           success_response(id, fn() {
-            tool_text_result(
-              json.to_string(memory_entry_to_json(entry)),
-              False,
-            )
+            tool_text_result(json.to_string(memory_entry_to_json(entry)), False)
           })
         Error(err) ->
           success_response(id, fn() {
@@ -3963,9 +3854,10 @@ fn handle_memory_list(id: Id, arguments: Option(Dynamic)) -> String {
               #("count", json.int(list.length(entries))),
               #(
                 "entries",
-                json.preprocessed_array(
-                  list.map(entries, memory_entry_summary_to_json),
-                ),
+                json.preprocessed_array(list.map(
+                  entries,
+                  memory_entry_summary_to_json,
+                )),
               ),
             ]),
           ),
@@ -3982,15 +3874,17 @@ fn handle_memory_list(id: Id, arguments: Option(Dynamic)) -> String {
 fn handle_memory_prune(id: Id, arguments: Option(Dynamic)) -> String {
   case decode_memory_name_only(arguments, "memory_prune") {
     Error(reason) ->
-      error_response(Some(id), -32_602, "Invalid memory_prune params: " <> reason)
+      error_response(
+        Some(id),
+        -32_602,
+        "Invalid memory_prune params: " <> reason,
+      )
     Ok(name) ->
       case memory.prune(name) {
         Ok(_) ->
           success_response(id, fn() {
             tool_text_result(
-              json.to_string(
-                json.object([#("pruned", json.string(name))]),
-              ),
+              json.to_string(json.object([#("pruned", json.string(name))])),
               False,
             )
           })
@@ -4007,10 +3901,7 @@ fn handle_memory_audit(id: Id, arguments: Option(Dynamic)) -> String {
   case memory.audit(threshold, include_dupes) {
     Ok(report) ->
       success_response(id, fn() {
-        tool_text_result(
-          json.to_string(audit_report_to_json(report)),
-          False,
-        )
+        tool_text_result(json.to_string(audit_report_to_json(report)), False)
       })
     Error(err) ->
       success_response(id, fn() {
@@ -4021,10 +3912,7 @@ fn handle_memory_audit(id: Id, arguments: Option(Dynamic)) -> String {
 
 fn audit_report_to_json(r: memory.AuditReport) -> Json {
   json.object([
-    #(
-      "stale",
-      json.preprocessed_array(list.map(r.stale, stale_entry_to_json)),
-    ),
+    #("stale", json.preprocessed_array(list.map(r.stale, stale_entry_to_json))),
     #(
       "duplicate_candidates",
       json.preprocessed_array(list.map(r.duplicates, duplicate_pair_to_json)),
@@ -4052,9 +3940,7 @@ fn duplicate_pair_to_json(d: memory.DuplicatePair) -> Json {
   ])
 }
 
-fn decode_memory_audit_arguments(
-  arguments: Option(Dynamic),
-) -> #(Int, Bool) {
+fn decode_memory_audit_arguments(arguments: Option(Dynamic)) -> #(Int, Bool) {
   case arguments {
     None -> #(30, True)
     Some(args) -> {
@@ -4171,4 +4057,3 @@ fn decode_memory_list_arguments(
 
 @external(erlang, "pharos_fs_ffi", "now_iso8601")
 fn now_iso8601_ffi() -> String
-

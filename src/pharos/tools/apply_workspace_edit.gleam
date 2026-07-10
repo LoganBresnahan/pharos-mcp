@@ -75,10 +75,7 @@ fn apply_to_file_ffi(
 /// Apply a `WorkspaceEdit` to disk (or simulate, when `dry_run`).
 /// Returns the rendered summary; per-file failures appear inline so
 /// the caller sees exactly what landed.
-pub fn handle(
-  edit: Dynamic,
-  dry_run: Bool,
-) -> Result(String, ApplyError) {
+pub fn handle(edit: Dynamic, dry_run: Bool) -> Result(String, ApplyError) {
   use file_edits <- result.try(decode(edit))
   use _ <- result.try(reject_unresolvable(file_edits))
   let outcomes = list.map(file_edits, run_one(_, dry_run))
@@ -92,9 +89,7 @@ fn decode(value: Dynamic) -> Result(List(FileEdits), ApplyError) {
   }
 }
 
-fn reject_unresolvable(
-  file_edits: List(FileEdits),
-) -> Result(Nil, ApplyError) {
+fn reject_unresolvable(file_edits: List(FileEdits)) -> Result(Nil, ApplyError) {
   let bad =
     file_edits
     |> list.filter_map(fn(fe) {
@@ -171,10 +166,7 @@ fn edit_to_ffi(edit: TextEdit) -> FfiEdit {
   )
 }
 
-fn render_summary(
-  outcomes: List(ApplyOutcome),
-  dry_run: Bool,
-) -> String {
+fn render_summary(outcomes: List(ApplyOutcome), dry_run: Bool) -> String {
   let header = case dry_run {
     True -> "Dry run — no files written. Re-call with dry_run=false to apply."
     False -> "Applied edits."
@@ -193,10 +185,7 @@ fn render_counts(outcomes: List(ApplyOutcome)) -> String {
         Failed(_, _) -> #(ok, fail + 1)
       }
     })
-  int.to_string(ok)
-  <> " file(s) ok, "
-  <> int.to_string(fail)
-  <> " failed."
+  int.to_string(ok) <> " file(s) ok, " <> int.to_string(fail) <> " failed."
 }
 
 fn render_outcome(o: ApplyOutcome) -> String {

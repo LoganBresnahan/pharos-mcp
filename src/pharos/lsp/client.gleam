@@ -94,8 +94,7 @@ pub fn start(
         lsp_pid: lsp_pid,
       ))
     }
-    Error(spawn_err) ->
-      Error(SpawnError(spawn_err))
+    Error(spawn_err) -> Error(SpawnError(spawn_err))
   }
 }
 
@@ -134,8 +133,7 @@ pub fn next_message(
   timeout_ms: Int,
 ) -> Result(#(BitArray, Client), Error) {
   case client.queue {
-    [first, ..rest] ->
-      Ok(#(first, Client(..client, queue: rest)))
+    [first, ..rest] -> Ok(#(first, Client(..client, queue: rest)))
 
     [] -> read_until_message(client, timeout_ms)
   }
@@ -163,10 +161,7 @@ fn read_until_message(
         }
 
         Ok(framing.Parsed(messages: [first, ..rest], buffer: leftover)) ->
-          Ok(#(
-            first,
-            Client(..client, buffer: leftover, queue: rest),
-          ))
+          Ok(#(first, Client(..client, buffer: leftover, queue: rest)))
       }
     }
   }

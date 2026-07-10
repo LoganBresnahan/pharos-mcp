@@ -9,11 +9,11 @@
 //// whichever shape the server sends.
 
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 // Cold rust-analyzer + concurrent worker queueing through the proc
 // actor (post-didOpen drain serialization, M11 polish B1) makes the

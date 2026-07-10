@@ -21,11 +21,11 @@
 //// flag the user must enable in their server config.
 
 import gleam/json
-import pharos/lsp/proc
+import gleam/string
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import gleam/string
 
 pub const default_timeout_ms: Int = 30_000
 
