@@ -11,8 +11,11 @@ defmodule Mix.Tasks.Release.Prod do
 
     1. Refuse if the working tree has uncommitted changes
        (release tagging on dirty state would be a footgun).
-    2. Replace the `version: "..."` line in `mix.exs` and the
-       `version = "..."` line in `gleam.toml`.
+    2. Replace the `@version_base "..."` attribute in `mix.exs` and
+       the `version = "..."` line in `gleam.toml`. Both, because
+       `mix.exs` drives the OTP application `vsn` that `pharos/version`
+       reports and `gleam.toml` drives the Gleam compiler's view;
+       shipping them out of sync is the bug 9b92aec fixed.
     3. `git commit -am "chore: release v<vsn>"`.
     4. `git tag v<vsn>`.
     5. `MIX_ENV=prod mix do compile, release --overwrite` — full
@@ -88,9 +91,19 @@ defmodule Mix.Tasks.Release.Prod do
   defp bump_mix_exs!(new_vsn) do
     path = "mix.exs"
     contents = File.read!(path)
-    updated = Regex.replace(~r/@version "\S+"/, contents, "@version \"#{new_vsn}\"", global: false)
+    # Must track the attribute name in mix.exs. It was renamed
+    # `@version` -> `@version_base` in 9b92aec (the commit that made the
+    # runtime read its version from the OTP app vsn); this task was not
+    # updated with it, so every `mix release.prod` between that commit and
+    # this fix raised here instead of bumping. Renaming the attribute again
+    # means updating this regex in the same commit.
+    updated =
+      Regex.replace(~r/@version_base "\S+"/, contents, "@version_base \"#{new_vsn}\"",
+        global: false
+      )
+
     if updated == contents do
-      Mix.raise("Could not locate `@version \"...\"` in #{path}.")
+      Mix.raise("Could not locate `@version_base \"...\"` in #{path}.")
     end
     File.write!(path, updated)
     Mix.shell().info("[release.prod] mix.exs version -> #{new_vsn}")

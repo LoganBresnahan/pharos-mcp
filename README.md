@@ -205,7 +205,7 @@ pharos process — every subsequent tool call against the same
 multi-language workspaces (one pyright + one rust-analyzer running
 side by side for the same project tree) and multi-server languages
 (python uses pyright AND ruff with method routing — see
-[ADR-019](doc/adr/019-lsp-multi-server-routing.md)).
+[ADR-019](doc/adr/019-multi-lsp-method-routing.md)).
 
 **No background daemon.** Pharos lives only as long as the MCP
 client that spawned it. When the client closes its end of the stdio
@@ -259,7 +259,7 @@ overridable.
 
 Multi-server routing is supported for languages that need it
 ([Python](#multi-server-languages-adr-019); see
-[ADR-019](doc/adr/019-lsp-multi-server-routing.md)).
+[ADR-019](doc/adr/019-multi-lsp-method-routing.md)).
 
 [↑ top](#pharos)
 
@@ -395,7 +395,7 @@ Python is the prominent case:
 | `pyright` | `methods = "all"` | hover, goto, references, types, signature_help, document_symbols, workspace_symbols |
 | `ruff` | `methods = ["textDocument/formatting", "textDocument/codeAction", "textDocument/diagnostic"]` | formatter, lint quick-fixes, import-sort, lint diagnostics |
 
-Routing rule per [ADR-019](doc/adr/019-lsp-multi-server-routing.md):
+Routing rule per [ADR-019](doc/adr/019-multi-lsp-method-routing.md):
 the first server declaring a method via `Only` wins; otherwise the
 first `All`-scope server wins. Methods that produce array-shaped
 results (`codeAction`, `diagnostic`) merge across every claiming
@@ -782,10 +782,10 @@ Key design choices live in
 | [001](doc/adr/001-language-gleam.md) | Gleam over Elixir |
 | [002](doc/adr/002-pollux-for-jsonrpc.md) | pollux for JSON-RPC |
 | [004](doc/adr/004-distribution-npm-and-releases.md) | npm optional-deps + GitHub Releases |
-| [013](doc/adr/013-supervisor-tree.md) | Supervisor tree shape |
-| [017](doc/adr/017-stdio-worker.md) | Stdio transport actor |
-| [019](doc/adr/019-lsp-multi-server-routing.md) | Multi-server method routing |
-| [021](doc/adr/021-timeout-resolution-stack.md) | Timeout resolution |
+| [013](doc/adr/013-supervisor-tree-and-lsp-worker.md) | Supervisor tree shape |
+| [017](doc/adr/017-supervision-tree-wiring.md) | Stdio transport actor |
+| [019](doc/adr/019-multi-lsp-method-routing.md) | Multi-server method routing |
+| [021](doc/adr/021-timeout-resolution-and-autotune.md) | Timeout resolution |
 | [024](doc/adr/024-lsp-readiness-gate.md) | LSP readiness probe |
 | [029](doc/adr/029-custom-uri-schemes.md) | jdt:// / jar:// virtual URIs |
 | [030](doc/adr/030-process-lifecycle-hardening.md) | Boot / shutdown / cleanup hardening |

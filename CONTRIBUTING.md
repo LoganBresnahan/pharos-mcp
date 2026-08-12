@@ -65,8 +65,9 @@ force-push-with-lease signs off the whole branch at once.
 
 Pharos is Gleam on the BEAM. You'll need:
 
-- Erlang/OTP 27+ (28+ recommended)
-- Gleam 1.0+
+- Erlang/OTP 28.1, Elixir 1.19.5, Gleam 1.17.0, rebar3 3.27.0 —
+  the exact versions are pinned in `.tool-versions` and matched by
+  CI; `asdf install` gets you all four
 - Node (for the npm packaging tests; not needed for core
   development)
 - Optional: one or more LSP servers locally (rust-analyzer,
@@ -76,10 +77,18 @@ Pharos is Gleam on the BEAM. You'll need:
 We use [`asdf`](https://asdf-vm.com/) to pin toolchain versions.
 A `.tool-versions` file at the repo root drives that.
 
+**The build is driven by Mix, not the Gleam CLI.** `gleam build` and
+`gleam test` will not produce a working build here: the project is
+compiled through the `mix_gleam` archive, and `gleam.toml` is a
+duplicate kept only so the Gleam compiler classifies dev dependencies
+correctly — `mix.exs` is authoritative for version resolution.
+
 ```
 asdf install                  # install pinned toolchains
-gleam build                   # compile
-gleam test                    # 178 tests at last count, ~10s
+mix archive.install github LoganBresnahan/mix_gleam   # once; see ADR-008
+mix deps.get                  # fetch (aliased to also run gleam.deps.get)
+mix compile --warnings-as-errors   # what CI compiles with
+mix gleam.test                # 194 tests at last count
 bin/pharos-dev --version      # smoke a dev binary
 ```
 
@@ -93,7 +102,9 @@ bin/dogfood-23lang.py --help  # see options
 
 ## Coding standards
 
-- **Run `gleam fmt`** before submitting. CI enforces formatting.
+- **Run `gleam fmt`** before submitting. CI does not currently check
+  formatting, so this one is on you — an unformatted PR will still go
+  green and still get review comments.
 - **No `git push --force`** to anything but your own branches.
 - **Commit message format**: Conventional Commits style —
   `feat(scope):`, `fix(scope):`, `docs(scope):`, `chore(scope):`,
@@ -108,10 +119,11 @@ bin/dogfood-23lang.py --help  # see options
 
 ## Test expectations
 
-- `gleam test` must pass — 178 tests today; new tests welcome.
+- `mix gleam.test` must pass — 194 tests today; new tests welcome.
 - For changes that touch LSP-bound tools, dogfood the change
-  against at least one language fixture before requesting review
-  (`bin/dogfood-23lang.py --filter <lang>`).
+  against at least one language fixture before requesting review.
+  Languages are positional, not a flag:
+  `python3 bin/dogfood-23lang.py <lang>`.
 - For changes that affect agentic behaviour (tool descriptions,
   new tools, response shapes), the maintainer will likely re-run
   the benchmark sweep before merging. Heads up: this can add
