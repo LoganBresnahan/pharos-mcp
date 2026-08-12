@@ -49,6 +49,9 @@
     is_pid_alive/1,
     process_comm/1,
     signal_pid/2,
+    %% Exported for tests: the group-vs-pid decision is the risky part
+    %% of the kill path and is worth asserting directly.
+    signal_target/1,
     remove_dir_recursive/1,
     sleep_ms/1
 ]).
@@ -248,17 +251,80 @@ process_comm(_) ->
 %% Send a signal to a PID. `Signal` is one of the binaries `<<"TERM">>`,
 %% `<<"KILL">>`, `<<"INT">>`. Returns ok on success, error otherwise
 %% (best-effort: any non-zero exit from `kill` becomes error).
+%%
+%% Targets the process GROUP when the pid leads its own group. A bare
+%% `kill <pid>` reaches only the LSP itself, so any grandchild it
+%% spawned survives — jdtls and metals both spawn them, and a
+%% grandchild that reparents to init is structurally unreachable from
+%% a process-tree walk. ADR-030 failure mode 4.
 signal_pid(Pid, Signal)
         when is_integer(Pid), Pid > 0,
              is_binary(Signal) ->
     Cmd = io_lib:format("kill -~s ~B 2>/dev/null; echo $?",
-                        [Signal, Pid]),
+                        [Signal, signal_target(Pid)]),
     case os:cmd(lists:flatten(Cmd)) of
         "0\n" -> ok;
         _ -> error
     end;
 signal_pid(_, _) ->
     error.
+
+%% Choose what `kill` aims at: the NEGATED process-group id (which
+%% signals the whole group) when `Pid` leads its own group, else the
+%% bare pid.
+%%
+%% The group path is the normal one for an LSP pharos spawned: BEAM's
+%% `erl_child_setup` already calls setsid() on every port child, so
+%% the child comes back as its own session and group leader
+%% (pid == pgid == sid) with any grandchild inheriting that pgid.
+%% Verified empirically, not assumed — this is also why pharos needs
+%% no external setsid wrapper.
+%%
+%% Three guards, each protecting against a way a group kill goes very
+%% wrong. All must hold or we fall back to the single-pid signal,
+%% which is never unsafe, only incomplete:
+%%
+%%   Pgid =:= Pid      the pid actually LEADS the group. Signalling
+%%                     `-N` where N is not a group leader hits some
+%%                     unrelated group that merely happens to be
+%%                     numbered N.
+%%   Pgid  >  1        never group 0 — `kill -TERM -0` means "my own
+%%                     process group", i.e. pharos signals itself and
+%%                     every sibling. Never group 1 either.
+%%   Pgid =/= OwnPgid  belt-and-braces against the same suicide via a
+%%                     different route (a pid that somehow shares
+%%                     pharos's own group).
+signal_target(Pid) ->
+    case {process_pgid(Pid), own_pgid()} of
+        {Pgid, OwnPgid}
+                when is_integer(Pgid), is_integer(OwnPgid),
+                     Pgid =:= Pid, Pgid > 1, Pgid =/= OwnPgid ->
+            -Pgid;
+        _ ->
+            Pid
+    end.
+
+%% Process-group id for a pid, or `undefined` when it can't be read
+%% (pid gone, or a platform without a POSIX `ps`). `ps -o pgid=` is
+%% used rather than /proc so this works on macOS as well as Linux —
+%% same portability reasoning as `process_comm/1` above.
+process_pgid(Pid) when is_integer(Pid), Pid > 0 ->
+    Out = os:cmd("ps -o pgid= -p " ++ integer_to_list(Pid)
+                 ++ " 2>/dev/null"),
+    parse_pgid(string:trim(Out));
+process_pgid(_) ->
+    undefined.
+
+own_pgid() ->
+    case parse_pgid(os:getpid()) of
+        undefined -> undefined;
+        SelfPid -> process_pgid(SelfPid)
+    end.
+
+parse_pgid(S) ->
+    try list_to_integer(lists:flatten(S))
+    catch _:_ -> undefined
+    end.
 
 %% Public wrapper for the same recursive delete we use internally on
 %% graceful shutdown. Exposed so the cleanup CLI can remove an
