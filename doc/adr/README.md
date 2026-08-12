@@ -51,6 +51,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 029 | [Custom URI schemes: relaxed gate, config-driven registry, read-only semantics](029-custom-uri-schemes.md) | Accepted |
 | 030 | [Process lifecycle hardening: boot, shutdown, and cleanup](030-process-lifecycle-hardening.md) | Accepted |
 | 031 | [Orphan reaping via process-group signals; no external setsid wrapper](031-process-group-signalling-no-setsid-wrapper.md) | Accepted |
+| 032 | [Workspace root determination: vendored deps and rootless sessions](032-workspace-root-determination.md) | Proposed |
 
 ## Anticipated future ADRs
 
@@ -60,6 +61,5 @@ Written when the corresponding decision actually arises with tradeoffs — not p
 |---|-------|---------|
 | 023 | Tool result format: MCP content blocks | First real tool ships, rendering choices firm up |
 | 024 | Bridge port discovery mechanism | Extension repo bootstraps |
-| 025 | Workspace root determination | First multi-root project test runs |
 | 026 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
 | 027 | Config file format and location (formalize) | Override registry promoted to first-class config |

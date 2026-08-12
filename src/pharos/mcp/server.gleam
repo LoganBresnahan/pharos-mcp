@@ -49,6 +49,7 @@ import pharos/tools/memory
 import pharos/tools/registry as tool_registry
 import pharos/tools/rename_preview
 import pharos/tools/semantic_tokens
+import pharos/tools/session
 import pharos/tools/session_overrides
 import pharos/tools/signature_help
 import pharos/tools/symbols
@@ -1125,7 +1126,12 @@ fn handle_find_references(
         )
       {
         Ok(json_text) ->
-          success_response(id, fn() { tool_text_result(json_text, False) })
+          success_response(id, fn() {
+            tool_text_result_with_note(
+              json_text,
+              session.root_attribution(pool, uri),
+            )
+          })
         Error(find_references.SessionFailed(reason)) ->
           success_response(id, fn() { tool_text_result(reason, True) })
         Error(find_references.RequestFailed(reason)) ->
@@ -3010,6 +3016,30 @@ fn tool_text_result(message: String, is_error: Bool) -> Json {
     #("content", json.array([block], of: fn(b) { b })),
     #("isError", json.bool(is_error)),
   ])
+}
+
+/// Success result carrying an optional second content block (ADR-032
+/// option F: root attribution).
+///
+/// The payload stays block one, byte-identical to what
+/// `tool_text_result` would have produced, so callers parsing the
+/// first block are unaffected — MCP already models `content` as an
+/// array, which is what makes attribution additive rather than a
+/// response-shape change.
+fn tool_text_result_with_note(message: String, note: Option(String)) -> Json {
+  case note {
+    None -> tool_text_result(message, False)
+    Some(text) -> {
+      let blocks = [
+        content_block.to_json(content_block.text(message)),
+        content_block.to_json(content_block.text(text)),
+      ]
+      json.object([
+        #("content", json.array(blocks, of: fn(b) { b })),
+        #("isError", json.bool(False)),
+      ])
+    }
+  }
 }
 
 // -- response building ---------------------------------------------------

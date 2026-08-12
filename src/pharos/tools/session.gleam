@@ -17,6 +17,7 @@
 
 import gleam/bit_array
 import gleam/erlang/process
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option
@@ -580,6 +581,23 @@ pub fn prepare_for_custom_uri_with_meta(
   }
 }
 
+/// Distinct workspaces with a Ready entry for `language`. Shared by
+/// custom-URI routing (which needs exactly one) and root attribution
+/// (which only needs to know whether there is more than one).
+fn ready_workspaces_for_language(pool: Pool, language: String) -> List(String) {
+  let snap = pool.snapshot(pool)
+  snap.entries
+  |> list.filter(fn(entry) {
+    entry.language == language
+    && case entry.state {
+      pool.Ready -> True
+      _ -> False
+    }
+  })
+  |> list.map(fn(entry) { entry.workspace })
+  |> list.unique
+}
+
 /// Walk the pool snapshot for Ready entries whose `language` matches.
 /// Distinct workspace count drives the outcome — 0 → no session,
 /// 1 → route, 2+ → ambiguous.
@@ -588,23 +606,122 @@ fn infer_active_workspace_for_language(
   language: String,
   uri: String,
 ) -> Result(String, SessionError) {
-  let snap = pool.snapshot(pool)
-  let ready_workspaces =
-    snap.entries
-    |> list.filter(fn(entry) {
-      entry.language == language
-      && case entry.state {
-        pool.Ready -> True
-        _ -> False
-      }
-    })
-    |> list.map(fn(entry) { entry.workspace })
-    |> list.unique
+  let ready_workspaces = ready_workspaces_for_language(pool, language)
   case ready_workspaces {
     [] -> Error(NoActiveSessionForLanguage(uri, language))
     [one] -> Ok(one)
     multiple -> Error(AmbiguousSessionForLanguage(uri, language, multiple))
   }
+}
+
+/// Path fragments that identify a workspace root sitting inside
+/// vendored or cached dependency sources.
+///
+/// Deliberately narrow. Each fragment is distinctive enough to carry
+/// effectively no false positives — bare `vendor` and `deps` are
+/// excluded precisely because they are ordinary directory names in
+/// first-party trees, and a spurious note on every call is worse than
+/// a missed one. ADR-032 moves this to per-language config when the
+/// rooting rule itself is decided; this list only decides whether to
+/// *warn*, and never influences which root is chosen.
+const dependency_path_fragments: List(String) = [
+  "/node_modules/", "/site-packages/", "/.cargo/registry/", "/pkg/mod/",
+  "/vendor/bundle/",
+]
+
+/// Root attribution for a position-anchored answer (ADR-032 option F).
+///
+/// Returns a note only when the routing is surprising enough that a
+/// caller could otherwise read a scope-limited answer as a complete
+/// one. Two triggers:
+///
+///   1. The answering root lies inside a dependency directory — the
+///      rootless-session failure ADR-032 describes. The LSP's project
+///      graph is then the dependency, not the project, so a small or
+///      empty result set means nothing about the real codebase.
+///   2. More than one workspace is live for this language, so which
+///      one answered is not inferable from the request alone.
+///
+/// `None` on the ordinary path, which is the overwhelming majority of
+/// calls. Every emitted note is permanent context cost in the agent's
+/// window per ADR-006, so it is spent only where it changes what the
+/// caller should believe.
+///
+/// Deliberately reports only facts pharos holds: the root that
+/// answered, and how many workspaces are live. It does NOT report the
+/// scope the LSP searched — LSP exposes no such signal, and a guessed
+/// "project-wide" would be worse than saying nothing.
+///
+/// Discovery is re-derived rather than threaded back through the call
+/// path. `discover_workspace` is a pure function of the URI, the
+/// marker list, and the filesystem, so it yields the same root the
+/// request itself used.
+pub fn root_attribution(pool: Pool, file_uri: String) -> option.Option(String) {
+  // Custom-scheme URIs route by active session rather than by
+  // ascent, and ADR-029 already fails loudly when that is ambiguous.
+  case is_custom_uri(file_uri) {
+    True -> option.None
+    False ->
+      case lookup_config(file_uri) {
+        // Both error paths mean the tool itself already failed, or is
+        // about to; it surfaces its own message and needs no note.
+        Error(_) -> option.None
+        Ok(config) ->
+          case discover_workspace(file_uri, config.root_markers) {
+            Error(_) -> option.None
+            Ok(raw) ->
+              attribution_note(
+                config.id,
+                promote_root(raw, config),
+                list.length(ready_workspaces_for_language(pool, config.id)),
+              )
+          }
+      }
+  }
+}
+
+/// Pure note-selection half of `root_attribution/2`, split out so the
+/// decision is testable without a live pool.
+pub fn attribution_note(
+  language: String,
+  workspace: String,
+  live_workspaces: Int,
+) -> option.Option(String) {
+  case is_dependency_path(workspace), live_workspaces {
+    True, _ ->
+      option.Some(
+        "pharos: answered by workspace root "
+        <> workspace
+        <> ", which is inside a dependency directory. These results are "
+        <> "scoped to that dependency, not your project — a small or empty "
+        <> "result set here does not mean the symbol is unused. Re-anchor on "
+        <> "a first-party declaration for project-wide results. See the "
+        <> "pharos README, \"Wrong answers for queries anchored inside a "
+        <> "dependency\".",
+      )
+    False, n if n > 1 ->
+      option.Some(
+        "pharos: answered by workspace root "
+        <> workspace
+        <> " ("
+        <> int.to_string(n)
+        <> " "
+        <> language
+        <> " workspaces are live in this session).",
+      )
+    False, _ -> option.None
+  }
+}
+
+/// True when `path` lies at or below a dependency directory. The
+/// trailing separator makes a root that *is* the dependency dir
+/// (`.../node_modules/@types/react`) match the same interior-segment
+/// test as one nested deeper.
+pub fn is_dependency_path(path: String) -> Bool {
+  let probe = path <> "/"
+  list.any(dependency_path_fragments, fn(fragment) {
+    string.contains(probe, fragment)
+  })
 }
 
 /// Prepare a single Proc for the server that owns `method` under

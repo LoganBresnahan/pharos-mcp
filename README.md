@@ -672,7 +672,7 @@ methods = "all"                         # this one server handles every LSP meth
 |-----|---------|
 | `extensions` | Filename extensions to associate with this language |
 | `language_id` | The `languageId` pharos sends in `initialize`'s `textDocument/clientCapabilities` |
-| `root_markers` | Filenames whose presence marks the project root (used to pick the LSP workspace) |
+| `root_markers` | Filenames whose presence marks the project root (used to pick the LSP workspace). Replaces the default list rather than merging. Note that markers a dependency also ships — e.g. `package.json` under `node_modules/` — can root a session inside that dependency; see [Wrong answers for queries anchored inside a dependency](#wrong-answers-for-queries-anchored-inside-a-dependency) |
 | `[[languages.<id>.servers]]` (≥1) | At least one server with a `command` resolvable on PATH |
 
 **Validate** the new entry before booting an MCP client against it:
@@ -708,6 +708,60 @@ pharos --cleanup --yes      # actually reap
 The CLI verifies each LSP PID's process name matches what pharos
 recorded before signalling, so it won't kill anything pharos didn't
 spawn.
+
+### Wrong answers for queries anchored inside a dependency
+
+Symptoms, all appearing only for calls anchored on a file **inside**
+`node_modules/`, `site-packages/`, a cargo registry checkout, or the
+Go module cache:
+
+- `find_references` on a library symbol returns a small result set
+  confined to the dependency's own files, and zero project hits.
+- `get_diagnostics` reports parse errors that make no sense for the
+  file — for TypeScript, JSX errors like `'>' expected` or
+  `Cannot find name 'div'`.
+- The LSP reports the file as belonging to no project (tsserver:
+  `No Project`).
+
+**Cause.** Pharos picks the workspace root by walking up from the file
+and stopping at the first directory containing any configured
+`root_markers` entry. Dependencies ship marker files of their own —
+`node_modules/@types/react/package.json` is a `package.json` — so a
+query anchored inside a dependency roots a **second**, separate LSP
+session at the dependency directory, whose project graph is that one
+file. Answers from it are plausible but scoped to nothing.
+
+Follow `goto_definition` into a dependency and the next call anchored
+there hits this.
+
+`find_references` detects the case and appends a second content block
+naming the root that answered — if you see a note mentioning a
+dependency directory, the result set is not evidence about your
+project. Other tools do not yet report it.
+
+**Mitigation.** Where the dependency satisfies a *secondary* marker,
+drop it in `pharos.toml`. `root_markers` **replaces** the default list
+rather than merging, so restate the ones you want to keep:
+
+```toml
+[languages.typescript]
+root_markers = ["tsconfig.json", "jsconfig.json"]   # drops package.json
+```
+
+The cost is real: pure-JS projects whose only root marker is a
+`package.json` stop rooting at all. Make this per-repo via
+`./.pharos.toml` rather than globally if you work on both kinds.
+
+This mitigation does **not** help Rust or Go, where the dependency
+satisfies the language's *primary* marker (`Cargo.toml`, `go.mod`) and
+there is nothing droppable. There, prefer anchoring `find_references`
+on a first-party declaration rather than on the definition site inside
+the dependency.
+
+Reading dependency sources is unaffected — `hover`, `goto_definition`,
+and `fetch_uri_contents` on a dependency file all work. The defect is
+only in which session serves follow-up queries anchored there. Tracked
+in [ADR-032](doc/adr/032-workspace-root-determination.md).
 
 ### Cold-start latency on first MCP call
 
