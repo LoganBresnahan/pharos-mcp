@@ -53,7 +53,12 @@ __pycache__/
 
 # Notes
 /notes/
-.claude/
+
+# Claude Code: skills are shared project tooling and are tracked;
+# everything else under .claude/ (settings.local.json, scheduled task
+# locks, transcripts) is per-operator local state.
+.claude/*
+!.claude/skills/
 
 .private/
 bench/data/
