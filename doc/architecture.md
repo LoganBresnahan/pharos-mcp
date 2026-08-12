@@ -55,7 +55,6 @@ drifts, the linked code is canonical.
 │    pharos_lsp_proc_subjects        (lang, ws, srv) → lsp_proc Subject            │
 │    pharos_request_workers          mcp_id          → dispatcher pid              │
 │    pharos_inflight                 mcp_id          → (lsp_proc_subj, lsp_id)     │
-│    pharos_post_didopen_drained     (srv, ws)       → claim flag                  │
 │    pharos_diagnostics_cache        uri             → latest Diagnostic[]         │
 │    pharos_log_writer_subject       global          → log writer Subject          │
 │    pharos_session_overrides        (tool, lang)    → bumped timeout_ms           │
@@ -199,7 +198,7 @@ tool worker                  pool_actor                    spawner (process.spaw
     │                                            ├─ send `initialized`
     │                                            ├─ workspace_configuration push
     │                                            └─ proc.wait_for_ready
-    │                                                  (readiness_timeout_ms,
+    │                                                  (ready_timeout_ms,
     │                                                   only if readiness_token set)
     │                                                       │
     │                                                       ▼
@@ -242,15 +241,14 @@ condition surfaces when it does.
 | 4 | **Session override** | `pharos_session_overrides` ETS | unset | `runtime_set_tool_timeout` MCP tool | LLM-driven runtime bump, survives the session, resets on pharos restart. ADR-021. |
 | 5 | **Per-call `timeout_ms` arg** | MCP request `params.arguments.timeout_ms` | caller-supplied | every call site | Wins all other layers. The harness uses this for the matrix. |
 | 6 | **`initialize_timeout_ms`** | `ServerConfig` per server | 90s; scala 180s | `pharos.toml` `[[languages.<id>.servers]] initialize_timeout_ms` | LSP `initialize` handshake. Pool's spawner returns `Error(SpawnFailed)` if this fires. |
-| 7 | **`readiness_timeout_ms`** | `ServerConfig` per server | 30s | `pharos.toml` | `proc.wait_for_ready` wall-clock — drain of `$/progress` `readiness_token` end. Only when token is set (rust-analyzer, gopls, gleam). |
-| 8 | **post-didOpen drain** | `pharos/lsp/post_didopen_drained.gleam` | 35s `proc.wait_for_ready` ETS-claim TTL | not exposed | First-claim-wins barrier; subsequent same-(srv, ws) tools skip the drain. |
-| 9 | **`pool.get` outer `actor.call`** | `pool.gleam` | `spec.initialize_timeout_ms + 30_000` | derived from #6 | Caller's deadline waiting for `SpawnCompleted` from spawner. Returns `Error(ProcStartFailed("call timed out"))`. |
-| 10 | **`proc.request` outer `actor.call`** | `proc.gleam` | `timeout_ms + 5_000` | derived from #5 | Caller's deadline waiting for the LSP-side reply. Returns `ProcCallTimeout` (distinct from the LSP's own timeout). |
-| 11 | **`proc.{push_configuration,send_notification}` `actor.call`** | `proc.gleam` | 5s | not exposed | Backpressure on the Port write. |
-| 12 | **`proc.get_client`** | `proc.gleam` | 1s | not exposed | Cheap fetch of the underlying `Client` reference. |
-| 13 | **`sessions.{issue,validate,attach,detach}` `actor.call`** | `sessions.gleam` | 60s (`default_call_timeout_ms`) | not exposed | HTTP session bookkeeping — should never fire in practice. |
-| 14 | **HTTP request timeout** | mist | mist defaults | not exposed | Per-HTTP-request wall-clock. |
-| 15 | **Harness wall-clock** | `bin/dogfood-23lang.py` | `timeout_ms / 1000 + 45s` | `PER_LANG_TIMEOUT_MS` const + per-target override | Harness gives up + sends `notifications/cancelled`. M14 dogfood-only. |
+| 7 | **`ready_timeout_ms`** | `ServerConfig` per server | 60s (`languages.default_ready_timeout_ms`) | `pharos.toml` | Total spawn-time readiness budget: `$/progress` drain **plus** the ADR-024 probe loop, combined. Renamed from `readiness_timeout_ms` by ADR-024. |
+| 8 | **`pool.get` outer `actor.call`** | `pool.gleam` | `spec.initialize_timeout_ms + 30_000` | derived from #6 | Caller's deadline waiting for `SpawnCompleted` from spawner. Returns `Error(ProcStartFailed("call timed out"))`. |
+| 9 | **`proc.request` outer `actor.call`** | `proc.gleam` | `timeout_ms + 5_000` | derived from #5 | Caller's deadline waiting for the LSP-side reply. Returns `ProcCallTimeout` (distinct from the LSP's own timeout). |
+| 10 | **`proc.{push_configuration,send_notification}` `actor.call`** | `proc.gleam` | 5s | not exposed | Backpressure on the Port write. |
+| 11 | **`proc.get_client`** | `proc.gleam` | 1s | not exposed | Cheap fetch of the underlying `Client` reference. |
+| 12 | **`sessions.{issue,validate,attach,detach}` `actor.call`** | `sessions.gleam` | 60s (`default_call_timeout_ms`) | not exposed | HTTP session bookkeeping — should never fire in practice. |
+| 13 | **HTTP request timeout** | mist | mist defaults | not exposed | Per-HTTP-request wall-clock. |
+| 14 | **Harness wall-clock** | `bin/dogfood-23lang.py` | `timeout_ms / 1000 + 45s` | `PER_LANG_TIMEOUT_MS` const + per-target override | Harness gives up + sends `notifications/cancelled`. M14 dogfood-only. |
 
 Resolution stack at request time (ADR-021): #5 wins → #4 → #3 → #2
 → #1. The pool / proc / readiness timeouts (#6-12) operate on
@@ -319,11 +317,12 @@ lsp_proc actor                    LSP child (OS process)
     │  ◄── $/progress begin            ─
     │  ◄── $/progress report           ─
     │  ◄── $/progress end              ─  (token end signals indexing done)
-    │  (within readiness_timeout_ms)   │
+    │  (within ready_timeout_ms)       │
     │                                  │
     │ ━━ ready for tool requests ━━    │
     │                                  │
-    │   write textDocument/didOpen     ─►  (per-uri, first-claim-wins via ETS)
+    │   write textDocument/didOpen     ─►  (once per (lang, ws, srv, uri);
+    │                                       deduped in pool actor state)
     │                                  │
     │   write request (method, params) ─►
     │  ◄── reply / error / notification ─
@@ -361,7 +360,7 @@ Tracing the cascade observed in M14 Pass 1 ([doc/m14-test-plan.md](m14-test-plan
   v2-repl), metals (2-3 min Bloop bootstrap) genuinely take long
   enough that the harness's 3-tool short-circuit threshold fires
   before the first response. Pharos's `initialize_timeout_ms` /
-  `readiness_timeout_ms` are tuned conservatively but the harness
+  `ready_timeout_ms` are tuned conservatively but the harness
   gives up before pharos's own deadline. Future fix candidates:
   per-spawn **warmup probe** (fire `workspace/symbol`, retry
   until non-error) so pool releases waiters only when the LSP
@@ -388,7 +387,6 @@ Tracing the cascade observed in M14 Pass 1 ([doc/m14-test-plan.md](m14-test-plan
 | Tool session orchestrator | [src/pharos/tools/session.gleam](../src/pharos/tools/session.gleam) |
 | Per-tool defaults | `src/pharos/tools/<tool>.gleam` (`default_timeout_ms` const) |
 | Session timeout overrides | [src/pharos/tools/session_overrides.gleam](../src/pharos/tools/session_overrides.gleam) |
-| Post-didOpen barrier | [src/pharos/lsp/post_didopen_drained.gleam](../src/pharos/lsp/post_didopen_drained.gleam) |
 | Log subtree | [src/pharos/log/](../src/pharos/log/) |
 | Inflight table | [src/pharos/lsp/inflight.gleam](../src/pharos/lsp/inflight.gleam) |
 | Cancel routing | [src/pharos/mcp/server.gleam](../src/pharos/mcp/server.gleam) `log_cancel_notification` |

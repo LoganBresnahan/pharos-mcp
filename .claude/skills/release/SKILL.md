@@ -23,23 +23,28 @@ pushed.
 `.github/workflows/release.yml` fires on `push: tags`, and a bad tag means a
 failed public pipeline you then have to clean up.
 
-## 0. Known defect — `mix release.prod` is broken
+## 0. History — `mix release.prod` had never worked until 6b24d79
 
-`lib/mix/tasks/release/prod.ex` bumps `mix.exs` by matching `@version "..."`, but
-commit `9b92aec` (2026-07-10) renamed that attribute to **`@version_base`** and
-did not update the task. The regex matches nothing, so the task raises:
+Worth knowing, because it means the tags in this repo were **not** produced by
+the process below. `prod.ex` bumped `mix.exs` by matching `@version "..."`, but
+`d4e9058` (2026-05-21) renamed that attribute to `@version_base` without
+updating the task. That was four days before the `v0.1.0` tag, so every release
+from `v0.1.0` through `v0.1.4` was bumped and tagged **by hand** — which is why
+no `chore: release v<vsn>` commit (this task's signature) appears anywhere in
+the history, and why the tags sit on ordinary `fix(...)` commits.
 
-```
-Could not locate `@version "..."` in mix.exs.
-```
+The regex is fixed now, but treat the task as **lightly exercised**: it has one
+verified run behind it, not five releases' worth. Two consequences:
 
-It **fails safe** — `bump_mix_exs!` raises before `gleam.toml` is touched and
-before anything is committed or tagged, so there is no partial state to unwind.
+- Verify each step's effect rather than trusting the task — after it returns,
+  confirm both version files, the commit, and the tag.
+- If you change it, re-verify on a **throwaway branch**, because its failure
+  mode is *after* `git commit` and `git tag` for every step past the first.
+  Delete the branch, the tag, and the test build afterwards.
 
-Until it is fixed (one-line: match `@version_base "\S+"`), do the bump by hand —
-step 2 below. If you fix the task in the same session, re-verify by running it on
-a throwaway branch, because its failure mode is *after* `git commit` and
-`git tag` for every step past the first.
+The failure mode it did have was at least safe: `bump_mix_exs!` raises before
+`gleam.toml` is touched and before anything is committed, so a mismatch leaves
+no partial state.
 
 ## 1. Decide the version, confirm it
 

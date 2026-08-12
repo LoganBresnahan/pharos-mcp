@@ -92,11 +92,15 @@ defmodule Mix.Tasks.Release.Prod do
     path = "mix.exs"
     contents = File.read!(path)
     # Must track the attribute name in mix.exs. It was renamed
-    # `@version` -> `@version_base` in 9b92aec (the commit that made the
-    # runtime read its version from the OTP app vsn); this task was not
-    # updated with it, so every `mix release.prod` between that commit and
-    # this fix raised here instead of bumping. Renaming the attribute again
-    # means updating this regex in the same commit.
+    # `@version` -> `@version_base` in d4e9058 (2026-05-21, the per-build
+    # version suffix); this task was not updated with it, so the regex
+    # matched nothing and every invocation raised here instead of bumping.
+    # That rename landed four days BEFORE the v0.1.0 tag, so this task has
+    # never successfully cut a release -- every tag from v0.1.0 through
+    # v0.1.4 was bumped and tagged by hand, which is why no
+    # "chore: release v<vsn>" commit (this task's signature) exists in the
+    # history. Renaming the attribute again means updating this regex in
+    # the same commit.
     updated =
       Regex.replace(~r/@version_base "\S+"/, contents, "@version_base \"#{new_vsn}\"",
         global: false

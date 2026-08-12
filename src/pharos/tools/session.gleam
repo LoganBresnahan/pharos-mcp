@@ -656,8 +656,10 @@ fn prepare_for_method_from_file_uri(
       // and the result is silently dropped. So get_lsp_for_server runs
       // FIRST, then ensure_doc_opened_for_server_id targets the
       // method-specific server (which may not be the language's
-      // primary), then drain the post-didOpen indexing burst once per
-      // (server, workspace).
+      // primary). No post-didOpen drain step here any more: ADR-024's
+      // probe-before-Ready gate guarantees the LSP has answered at
+      // least one query before didOpen fires, so the barrier this
+      // comment used to describe was removed in 3c3db78.
       case get_lsp_for_server(pool, config, workspace, server) {
         Ok(lsp) -> {
           let _ =
