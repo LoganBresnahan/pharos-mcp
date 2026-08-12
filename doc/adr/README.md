@@ -50,6 +50,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 028 | [Universal editor bridge: sensors and displays, never LSP host](028-universal-editor-bridge.md) | Proposed |
 | 029 | [Custom URI schemes: relaxed gate, config-driven registry, read-only semantics](029-custom-uri-schemes.md) | Accepted |
 | 030 | [Process lifecycle hardening: boot, shutdown, and cleanup](030-process-lifecycle-hardening.md) | Accepted |
+| 031 | [Orphan reaping via process-group signals; no external setsid wrapper](031-process-group-signalling-no-setsid-wrapper.md) | Accepted |
 
 ## Anticipated future ADRs
 
