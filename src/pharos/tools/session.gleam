@@ -246,10 +246,9 @@ fn retry_for_method_after_evict(
   case lookup_config(file_uri) {
     Error(err) -> Error(RetrySessionError(err))
     Ok(config) ->
-      case discover_workspace(file_uri, config.root_markers) {
+      case resolve_workspace(pool, file_uri, config) {
         Error(err) -> Error(RetrySessionError(err))
-        Ok(raw_workspace) -> {
-          let workspace = promote_root(raw_workspace, config)
+        Ok(workspace) -> {
           pool.evict_all_servers(pool, config.id, workspace)
           case prepare_for_method(pool, file_uri, method) {
             Error(err) -> Error(RetrySessionError(err))
@@ -272,10 +271,9 @@ fn retry_after_evict(
   case lookup_config(file_uri) {
     Error(err) -> Error(RetrySessionError(err))
     Ok(config) ->
-      case discover_workspace(file_uri, config.root_markers) {
+      case resolve_workspace(pool, file_uri, config) {
         Error(err) -> Error(RetrySessionError(err))
-        Ok(raw_workspace) -> {
-          let workspace = promote_root(raw_workspace, config)
+        Ok(workspace) -> {
           pool.evict_all_servers(pool, config.id, workspace)
           case prepare(pool, file_uri) {
             Error(err) -> Error(RetrySessionError(err))
@@ -380,10 +378,9 @@ fn retry_workspace_for_language_after_evict(
   case lookup_config_by_language(language) {
     Error(err) -> Error(RetrySessionError(err))
     Ok(config) ->
-      case discover_workspace_or_dir(workspace_uri_hint, config.root_markers) {
+      case resolve_workspace_or_dir(pool, workspace_uri_hint, config) {
         Error(err) -> Error(RetrySessionError(err))
-        Ok(raw_workspace) -> {
-          let workspace = promote_root(raw_workspace, config)
+        Ok(workspace) -> {
           pool.evict_all_servers(pool, config.id, workspace)
           case
             prepare_workspace_for_language(pool, language, workspace_uri_hint)
@@ -408,10 +405,9 @@ fn retry_workspace_after_evict(
   case lookup_config(workspace_uri_hint) {
     Error(err) -> Error(RetrySessionError(err))
     Ok(config) ->
-      case discover_workspace(workspace_uri_hint, config.root_markers) {
+      case resolve_workspace(pool, workspace_uri_hint, config) {
         Error(err) -> Error(RetrySessionError(err))
-        Ok(raw_workspace) -> {
-          let workspace = promote_root(raw_workspace, config)
+        Ok(workspace) -> {
           pool.evict_all_servers(pool, config.id, workspace)
           case prepare_workspace(pool, workspace_uri_hint) {
             Error(err) -> Error(RetrySessionError(err))
@@ -448,11 +444,7 @@ fn prepare_from_file_uri(
   file_uri: String,
 ) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(file_uri))
-  use raw_workspace <- result.try(discover_workspace(
-    file_uri,
-    config.root_markers,
-  ))
-  let workspace = promote_root(raw_workspace, config)
+  use workspace <- result.try(resolve_workspace(pool, file_uri, config))
   use lsp <- result.try(get_lsp(pool, config, workspace))
   let _ = ensure_doc_opened(pool, config, workspace, file_uri)
   Ok(lsp)
@@ -480,11 +472,11 @@ fn prepare_workspace_from_file_uri(
   workspace_uri_hint: String,
 ) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(workspace_uri_hint))
-  use raw_workspace <- result.try(discover_workspace_or_dir(
+  use workspace <- result.try(resolve_workspace_or_dir(
+    pool,
     workspace_uri_hint,
-    config.root_markers,
+    config,
   ))
-  let workspace = promote_root(raw_workspace, config)
   get_lsp(pool, config, workspace)
 }
 
@@ -499,11 +491,11 @@ pub fn prepare_workspace_for_language(
   workspace_uri_hint: String,
 ) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config_by_language(language))
-  use raw_workspace <- result.try(discover_workspace_or_dir(
+  use workspace <- result.try(resolve_workspace_or_dir(
+    pool,
     workspace_uri_hint,
-    config.root_markers,
+    config,
   ))
-  let workspace = promote_root(raw_workspace, config)
   get_lsp(pool, config, workspace)
 }
 
@@ -652,10 +644,13 @@ const dependency_path_fragments: List(String) = [
 /// scope the LSP searched — LSP exposes no such signal, and a guessed
 /// "project-wide" would be worse than saying nothing.
 ///
-/// Discovery is re-derived rather than threaded back through the call
-/// path. `discover_workspace` is a pure function of the URI, the
-/// marker list, and the filesystem, so it yields the same root the
-/// request itself used.
+/// The root is re-derived rather than threaded back through the call
+/// path, which is sound because it goes through the same
+/// `resolve_workspace` chokepoint the request itself used (ADR-032 step
+/// 2). Attribution naming a root the routing did not use would be worse
+/// than no attribution at all, so this must not drift back to calling
+/// `discover_workspace` directly — that was true-by-coincidence before
+/// the chokepoint and would become false the moment step 3 lands.
 pub fn root_attribution(pool: Pool, file_uri: String) -> option.Option(String) {
   // Custom-scheme URIs route by active session rather than by
   // ascent, and ADR-029 already fails loudly when that is ambiguous.
@@ -667,12 +662,12 @@ pub fn root_attribution(pool: Pool, file_uri: String) -> option.Option(String) {
         // about to; it surfaces its own message and needs no note.
         Error(_) -> option.None
         Ok(config) ->
-          case discover_workspace(file_uri, config.root_markers) {
+          case resolve_workspace(pool, file_uri, config) {
             Error(_) -> option.None
-            Ok(raw) ->
+            Ok(workspace) ->
               attribution_note(
                 config.id,
-                promote_root(raw, config),
+                workspace,
                 list.length(ready_workspaces_for_language(pool, config.id)),
               )
           }
@@ -751,11 +746,7 @@ fn prepare_for_method_from_file_uri(
   method: String,
 ) -> Result(Proc, SessionError) {
   use config <- result.try(lookup_config(file_uri))
-  use raw_workspace <- result.try(discover_workspace(
-    file_uri,
-    config.root_markers,
-  ))
-  let workspace = promote_root(raw_workspace, config)
+  use workspace <- result.try(resolve_workspace(pool, file_uri, config))
   case languages.primary_server_for_method(config, method) {
     Error(_) ->
       Error(SpawnFailed(
@@ -823,11 +814,7 @@ pub fn prepare_all_covering_method(
   method: String,
 ) -> Result(List(#(languages.ServerConfig, Proc)), SessionError) {
   use config <- result.try(lookup_config(file_uri))
-  use raw_workspace <- result.try(discover_workspace(
-    file_uri,
-    config.root_markers,
-  ))
-  let workspace = promote_root(raw_workspace, config)
+  use workspace <- result.try(resolve_workspace(pool, file_uri, config))
   let servers = languages.servers_covering_method(config, method)
   let prepared =
     list.filter_map(servers, fn(server) {
@@ -876,11 +863,7 @@ fn prepare_all_with_selector(
   select_servers: fn(LanguageConfig, String) -> List(languages.ServerConfig),
 ) -> Result(List(#(String, Proc)), SessionError) {
   use config <- result.try(lookup_config(file_uri))
-  use raw_workspace <- result.try(discover_workspace(
-    file_uri,
-    config.root_markers,
-  ))
-  let workspace = promote_root(raw_workspace, config)
+  use workspace <- result.try(resolve_workspace(pool, file_uri, config))
   let servers = select_servers(config, method)
   let prepared =
     list.filter_map(servers, fn(server) {
@@ -1068,6 +1051,61 @@ fn promote_root(raw: String, config: LanguageConfig) -> String {
     NoPromotion -> raw
     CargoWorkspacePromotion -> workspace_root.promote_to_cargo_workspace(raw)
   }
+}
+
+// -- Workspace resolution chokepoint (ADR-032 step 2) --------------------
+
+/// **The** place a URI becomes a workspace root. Every caller that needs
+/// to know which workspace owns a URI — routing, eviction, and root
+/// attribution alike — goes through here.
+///
+/// Before this existed the `discover_workspace` + `promote_root` pair was
+/// open-coded at twelve sites, one of them in `diagnostics.evict_for_uri`
+/// with its own hand-inlined copy of the promotion `case`. That is a
+/// correctness trap rather than mere duplication: when ADR-032 step 3
+/// changes *which* root a dependency path resolves to, any site still
+/// doing plain ascent computes a key no session lives under. Eviction
+/// would then evict nothing while still appearing to run, and
+/// `root_attribution` would name a root the routing no longer uses —
+/// both silent failures, which is why the consolidation lands before the
+/// behaviour change rather than with it.
+///
+/// `pool` is threaded through unused today. Step 3's out-of-tree branch
+/// routes by live-session lookup, so it needs pool access; taking it now
+/// means that change touches this function's body and not the call sites
+/// again — which is the entire point of having a chokepoint.
+pub fn resolve_workspace(
+  pool: Pool,
+  file_uri: String,
+  config: LanguageConfig,
+) -> Result(String, SessionError) {
+  resolve_with(pool, file_uri, config, discover_workspace)
+}
+
+/// Dir-tolerant sibling of `resolve_workspace/3`, for callers whose URI
+/// may name a directory rather than a file (`workspace_symbols` with a
+/// directory hint). Splits only on the discovery function; promotion and
+/// — once step 3 lands — dispatch are shared.
+pub fn resolve_workspace_or_dir(
+  pool: Pool,
+  uri_hint: String,
+  config: LanguageConfig,
+) -> Result(String, SessionError) {
+  resolve_with(pool, uri_hint, config, discover_workspace_or_dir)
+}
+
+/// Shared body of both public forms, and the single seam step 3 opens.
+/// Kept deliberately trivial: this refactor must not change behaviour,
+/// so it is exactly the `discover` + `promote_root` pair the call sites
+/// used to spell out.
+fn resolve_with(
+  _pool: Pool,
+  uri: String,
+  config: LanguageConfig,
+  discover: fn(String, List(String)) -> Result(String, SessionError),
+) -> Result(String, SessionError) {
+  use raw <- result.try(discover(uri, config.root_markers))
+  Ok(promote_root(raw, config))
 }
 
 fn get_lsp(

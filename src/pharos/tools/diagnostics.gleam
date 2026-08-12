@@ -39,7 +39,6 @@ import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
-import pharos/workspace_root
 
 const default_drain_window_ms: Int = 8000
 
@@ -492,17 +491,20 @@ fn lookup_cached(file_uri: String, server_id: String) -> option.Option(String) {
   }
 }
 
+/// Evict every server for the workspace owning `file_uri`.
+///
+/// Resolution goes through `session.resolve_workspace` (ADR-032 step 2),
+/// not a local ascent. This used to hand-inline its own copy of the
+/// promotion `case`, which made it the ADR's headline example of a
+/// silent-failure trap: once routing sends a dependency path somewhere
+/// other than plain ascent, a local copy computes a key no session lives
+/// under, so eviction quietly evicts nothing while still appearing to
+/// run — and the retry-after-evict path stops working with no error
+/// anywhere.
 fn evict_for_uri(pool: Pool, file_uri: String, config: LanguageConfig) -> Nil {
-  case workspace_root.discover_from_uri(file_uri, config.root_markers) {
+  case session.resolve_workspace(pool, file_uri, config) {
     Error(_) -> Nil
-    Ok(raw_workspace) -> {
-      let workspace = case config.root_promotion {
-        languages.NoPromotion -> raw_workspace
-        languages.CargoWorkspacePromotion ->
-          workspace_root.promote_to_cargo_workspace(raw_workspace)
-      }
-      pool.evict_all_servers(pool, config.id, workspace)
-    }
+    Ok(workspace) -> pool.evict_all_servers(pool, config.id, workspace)
   }
 }
 
