@@ -20,6 +20,11 @@ mist = ">= 6.0.0 and < 7.0.0"
 pollux = ">= 1.0.0 and < 2.0.0"
 tomerl = ">= 0.5.0 and < 1.0.0"
 gleam_crypto = ">= 1.6.0 and < 2.0.0"
+# Pinned transitive — mirrors the `override: true` pin in mix.exs. Not used
+# directly by pharos; it arrives via pollux -> oas_generator_utils. 1.0.1
+# breaks the erlang-target build (see the mix.exs comment for the mechanism),
+# so both dependency trees must hold it at 1.0.0 or they drift apart.
+gleam_javascript = "1.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.10.0 and < 2.0.0"

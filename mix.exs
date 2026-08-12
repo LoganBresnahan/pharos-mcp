@@ -104,9 +104,29 @@ defmodule Pharos.MixProject do
       {:pollux, "~> 1.0"},
       {:recon, "~> 2.5"},
       {:tomerl, "~> 0.5"},
+      # Pinned transitive (pollux -> oas_generator_utils -> gleam_javascript).
+      # 1.0.1 is byte-identical to 1.0.0 in `src/` — the only change is its
+      # gleam.toml raising `gleam = ">= 0.32.0"` to `">= 1.13.0"`. That bump
+      # is nonetheless enough to break us: on 1.0.1 the erlang-target build of
+      # `oas_generator_utils` fails to resolve `gleam/javascript/array` ("No
+      # module has been found with the name `array`"), deterministically and
+      # from a clean tree; on 1.0.0 it builds. The package declares
+      # `target = "javascript"` in BOTH versions, so that alone is not the
+      # trigger — the precise mechanism is unconfirmed, only the pass/fail
+      # boundary is. Retest on the next gleam_javascript or
+      # oas_generator_utils release; unpin if it builds clean.
+      {:gleam_javascript, "1.0.0", override: true},
       {:gleeunit, "~> 1.10", only: [:dev, :test], runtime: false},
       {:qcheck, "~> 1.0", only: [:dev, :test], runtime: false},
-      {:burrito, "~> 1.5", runtime: false}
+      # Held at 1.5.x deliberately — `~> 1.5.0`, not `~> 1.5`. Burrito 1.6.0
+      # raises its required Zig to 0.16.0 (`Burrito.check_zig_version/0`),
+      # while our release toolchain — and the `mlugg/setup-zig` pin in
+      # .github/workflows/release.yml — is 0.15.2. Under 1.6.0 the compile and
+      # assemble steps both succeed and only the wrap step fails, so the
+      # breakage is invisible to `mix gleam.test` and only shows up at release
+      # time. Moving to 1.6.0 means bumping Zig to 0.16.0 and re-verifying all
+      # five cross-compiled targets; that is its own piece of work.
+      {:burrito, "~> 1.5.0", runtime: false}
     ]
   end
 
