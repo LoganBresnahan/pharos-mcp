@@ -146,14 +146,20 @@ What is decided:
    residue of cases it gets wrong, and attribution is what makes that residue
    visible instead of confidently wrong.
 
-The leaning is **A and D composed behind a single resolution function**, with
+The leaning was **A and D composed behind a single resolution function**, with
 F already landed as the instrument that makes the other two verifiable. B is
 subsumed (D routes by active session more precisely than a prefix match would)
 and C stays deferred as an optimization over D rather than an alternative to
 it — provenance only exists on a round-trip, so it can never be the sole
-mechanism. See *Implementation plan* below; step 1 is an empirical gate on
-the premise A and D share, and can still kill either for individual
-languages.
+mechanism.
+
+**Step 1 has since run and split that pairing** (see *Implementation plan*
+below). D's premise holds for rust and go and it proceeds. A's premise fails
+for both TypeScript and python; for TypeScript `find_references` A is actively
+worse than doing nothing; and both field-report symptoms that motivated it turn
+out to reproduce under correct rooting. **A does not ship.** The gate did its
+job: it killed the mechanism this ADR was leaning on hardest, and the topology
+that prompted the ADR needs no rooting change at all.
 
 ### Implementation status
 
@@ -179,6 +185,16 @@ The dependency-path fragment list lives in `session.gleam` as a provisional
 constant. It decides only whether to *warn* and never influences which root is
 chosen; whichever mechanism this ADR settles on should absorb it into the
 per-language config rather than leaving two lists.
+
+**Defect found by step 1 — the note's advice is wrong for library symbols.**
+It says *"Re-anchor on a first-party declaration for project-wide results."*
+That holds for first-party symbols and fails for the library symbols the note
+actually fires on: re-anchoring on a first-party *use* of `useState` still
+returns only that file's uses plus the declaration sites, because TypeScript
+resolves the anchor to the file-local import binding. The note therefore sends
+the agent to a second wrong answer, with no warning attached the second time.
+Fixing the wording is independent of which mechanism wins and should not wait
+for step 3.
 
 ## Options under consideration
 
@@ -254,6 +270,60 @@ response shape and opt-in.
 
 ### Step 1 — probe the assumption before writing code
 
+**Status: RUN, 2026-08-12. Evidence:
+[dogfood-adr-032-step1.md](../dogfood-adr-032-step1.md).**
+
+| Language | Topology | Mechanism | Verdict |
+|---|---|---|---|
+| rust | out-of-tree (`~/.cargo/registry/`) | D | **CLEARS** |
+| go | out-of-tree (`$GOPATH/pkg/mod/`) | D | **CLEARS** |
+| typescript | in-tree (`node_modules/`) | A | **FAILS** |
+| python | in-tree (`.venv/…/site-packages/`) | A | **FAILS** |
+
+The split falls exactly on the topology line, which is also the A/D line.
+**D's premise holds for both its languages; A's premise fails for both of
+its** — including TypeScript, the language that produced the report.
+
+Two results change the plan rather than merely gating it:
+
+1. **The reported wrong reference count is not a rooting defect.** A session
+   rooted at the dependency and a session rooted at the project return *the
+   same five locations*. Verified through production pharos, varying only
+   `root_markers` (dropping `package.json` simulates A's skip-ascent). What
+   the report attributed to a rootless session is TypeScript deliberately
+   scoping reference search for `node_modules`-declared symbols — the project
+   is fully loaded and the engine is project-wide capable, confirmed by
+   controls.
+
+2. **For TypeScript `find_references`, A is a net negative.** Identical
+   payload, and F's note goes *silent* because the answering root is no longer
+   a dependency path. Warned-and-wrong becomes unwarned-and-wrong.
+
+The premise is therefore **per-method, not per-language**. Routing repairs
+project *context* while `references` carries a server-side scope rule routing
+does not reach. Step 3 must not assume that fixing the root fixes the answer;
+the two are separable, and only the first is in this ADR's power.
+
+3. **The report's other symptom is not a rooting defect either.** Found while
+   verifying step 2: the bogus JSX diagnostics reproduce on a *first-party* file
+   in a *correctly rooted* project (`App.tsx` errors, `Plain.ts` beside it does
+   not). The likely cause is pharos passing `config.id` as the `didOpen`
+   `languageId`, so every `.tsx` opens as `typescript` and tsserver never enters
+   JSX mode — a `LanguageConfig` shape problem (one `id`, many
+   `file_extensions`), not a workspace question. Tracked in the field report;
+   it needs its own investigation and is out of scope here.
+
+Consequently: **D proceeds for rust and go. A is unmotivated and does not
+ship.** Both symptoms that motivated it reproduce under correct rooting, so
+neither is evidence for a rooting change; A needs a symptom that actually
+depends on the root before it is worth building. Should it ever be revived,
+F's dependency-note trigger must widen beyond "the root is a dependency path"
+first, or A will silence the only warning the agent gets.
+
+This narrows the ADR considerably: what remains is D for out-of-tree caches,
+plus F's already-shipped attribution. The in-tree topology — the one the field
+report was filed about — turns out to need no rooting change at all.
+
 *Execution: Opus, high effort — running the probes is mechanical; the
 judgment is reading murky tsserver/pyright behaviour. Escalate to Fable
 medium only if a verdict comes back ambiguous.*
@@ -312,6 +382,13 @@ Every caller routes through it, `evict_for_uri` included. This step is a pure
 refactor with no behavior change; the suite must stay green across it.
 
 ### Step 3 — the resolution chain
+
+> **Superseded in part by step 1's result.** The chain below is retained as the
+> design that was worked out, but the in-tree branch (`[A]`) does not ship: step
+> 1 found no symptom that a vendor-skipping ascent actually fixes. What remains
+> to build is the out-of-tree branch (`[D]`) plus the untouched default. The
+> dispatch-vs-linear-fallback reasoning still applies and is why the out-of-tree
+> branch must not be reached by falling through a skip-ascent.
 
 *Execution: Fable, high effort — the design-sensitive core: topology
 dispatch, fallback semantics, constraint 2/3 interactions, and tests for
