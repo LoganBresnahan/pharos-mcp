@@ -675,6 +675,17 @@ methods = "all"                         # this one server handles every LSP meth
 | `root_markers` | Filenames whose presence marks the project root (used to pick the LSP workspace). Replaces the default list rather than merging. Note that markers a dependency also ships — e.g. `package.json` under `node_modules/` — can root a session inside that dependency; see [Wrong answers for queries anchored inside a dependency](#wrong-answers-for-queries-anchored-inside-a-dependency) |
 | `[[languages.<id>.servers]]` (≥1) | At least one server with a `command` resolvable on PATH |
 
+**Optional dependency-location keys.** Both default to empty, which
+means "plain ascent, exactly as before" — set them only if this
+ecosystem materialises dependencies into a directory that also carries
+one of your `root_markers`. Like `root_markers`, each **replaces** the
+bundled list rather than merging into it.
+
+| Key | Purpose |
+|-----|---------|
+| `vendor_segments` | Path segments naming **in-tree** dependency directories — materialised under the project root (`"/node_modules/"`, `"/site-packages/"`, `"/vendor/bundle/"`). Matched as an interior segment, leading and trailing `/` included. Answers rooted inside one get the dependency-scope warning; rooting itself is unchanged |
+| `dependency_cache_fragments` | Structural suffixes naming an **out-of-tree** dependency cache the project is not an ancestor of (`"/registry/src/"` for cargo, `"/pkg/mod/"` for go). These *route*: a query anchored here is served by the live workspace for the language instead of rooting at the dependency. Write the structural suffix, not a home-anchored prefix — `"/registry/src/"` survives a relocated `CARGO_HOME` where `"/.cargo/registry/"` would not |
+
 **Validate** the new entry before booting an MCP client against it:
 
 ```bash
@@ -770,6 +781,12 @@ a dependency, some language servers deliberately scope
 query is routed or anchored. A small result set for a library symbol
 is not evidence it is unused in your project — a project-wide text
 search is the reliable count.
+
+Both the warning and the routing read per-language config, so an
+ecosystem pharos does not bundle a list for — or one whose cache you
+have relocated somewhere unusual — can be taught about it with
+`vendor_segments` / `dependency_cache_fragments`; see [Adding your own
+language](#adding-your-own-language).
 
 Reading dependency sources is unaffected — `hover`, `goto_definition`,
 and `fetch_uri_contents` on a dependency file all work. The defect is

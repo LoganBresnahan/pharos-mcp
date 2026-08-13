@@ -163,6 +163,14 @@ fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
     id: option.unwrap(override.id, key),
     file_extensions: option.unwrap(override.file_extensions, []),
     root_markers: option.unwrap(override.root_markers, []),
+    // ADR-032 step 4. A user-defined language has no bundled default
+    // to inherit, so an omitted key means "no dependency directories
+    // I know of" — which floors to today's plain ascent.
+    vendor_segments: option.unwrap(override.vendor_segments, []),
+    dependency_cache_fragments: option.unwrap(
+      override.dependency_cache_fragments,
+      [],
+    ),
     root_promotion: NoPromotion,
     servers: final_servers,
     // ADR-029: user-defined language entries get no custom URI
@@ -221,6 +229,19 @@ fn merge_one(
     root_markers: case override.root_markers {
       Some(xs) -> xs
       None -> default.root_markers
+    },
+    // ADR-032 step 4. Replace-not-merge, matching `root_markers`
+    // directly above: a user narrowing the list must be able to get
+    // a *shorter* one, which an additive merge could never produce.
+    // `None` keeps the bundled default, so configs written before
+    // these keys existed behave exactly as before.
+    vendor_segments: case override.vendor_segments {
+      Some(xs) -> xs
+      None -> default.vendor_segments
+    },
+    dependency_cache_fragments: case override.dependency_cache_fragments {
+      Some(xs) -> xs
+      None -> default.dependency_cache_fragments
     },
     root_promotion: default.root_promotion,
     servers: merged_servers,

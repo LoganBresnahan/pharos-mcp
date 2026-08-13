@@ -37,6 +37,15 @@ pub fn render_language(config: LanguageConfig) -> String {
   let extensions =
     "file_extensions = " <> render_string_list(config.file_extensions)
   let markers = "root_markers = " <> render_string_list(config.root_markers)
+  // ADR-032 step 4. Emitted even when empty — an empty list is a
+  // meaningful default here ("this ecosystem has no dependency
+  // directory that shadows a root marker"), and printing it is what
+  // shows the user the key exists to be set.
+  let vendors =
+    "vendor_segments = " <> render_string_list(config.vendor_segments)
+  let caches =
+    "dependency_cache_fragments = "
+    <> render_string_list(config.dependency_cache_fragments)
   let promotion_comment = case config.root_promotion {
     languages.NoPromotion ->
       "# root_promotion is locked to NoPromotion (not user-overridable)"
@@ -44,7 +53,7 @@ pub fn render_language(config: LanguageConfig) -> String {
       "# root_promotion is locked to CargoWorkspacePromotion (not user-overridable; ADR-015)"
   }
   let lang_block =
-    [header, extensions, markers, promotion_comment]
+    [header, extensions, markers, vendors, caches, promotion_comment]
     |> string.join("\n")
 
   let server_blocks =

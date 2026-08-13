@@ -247,6 +247,38 @@ pub type LanguageConfig {
     /// Files to look for when ascending the directory tree to find
     /// the workspace root. First match wins (innermost ancestor).
     root_markers: List(String),
+    /// ADR-032 step 4. Path segments naming this ecosystem's
+    /// **in-tree** dependency directories — materialised *under* the
+    /// owning project root (`/node_modules/`, `/site-packages/`,
+    /// `/vendor/bundle/`). Matched as an interior segment, leading
+    /// and trailing separator included, so a root that *is* the
+    /// dependency dir matches the same test as one nested deeper.
+    ///
+    /// Empty is the correct default, not a gap: a language earns an
+    /// entry only when its dependency dirs carry a file that also
+    /// appears in `root_markers`, which is what makes ascent stop
+    /// early. Bare `vendor` and `deps` are deliberately absent —
+    /// they are ordinary first-party directory names, and a spurious
+    /// note on every call is worse than a missed one.
+    vendor_segments: List(String),
+    /// ADR-032 step 4. Structural suffixes naming this ecosystem's
+    /// **out-of-tree** dependency cache — a shared location the
+    /// owning project is not an ancestor of (`/registry/src/` for
+    /// cargo, `/pkg/mod/` for go). A path matching one of these
+    /// cannot be rooted by ascent at all, so unlike `vendor_segments`
+    /// this list *routes*: `session.resolve_workspace` sends such a
+    /// file to the live workspace for its language.
+    ///
+    /// Deliberately a structural suffix rather than a home-anchored
+    /// prefix. `/registry/src/` holds wherever `CARGO_HOME` points,
+    /// the same way `/pkg/mod/` holds for any `GOPATH` — matching
+    /// `/.cargo/registry/` instead would silently stop working under
+    /// a relocated cache.
+    ///
+    /// Only languages the ADR-032 step-1 probe cleared carry entries.
+    /// An unprobed language must fall through to plain ascent, so
+    /// empty is again the correct default.
+    dependency_cache_fragments: List(String),
     /// Post-discovery root promotion. Per ADR-015. Rust uses
     /// `CargoWorkspacePromotion` so sibling-crate files share one
     /// rust-analyzer.
@@ -411,6 +443,12 @@ fn rust() -> LanguageConfig {
     id: "rust",
     file_extensions: [".rs"],
     root_markers: ["Cargo.toml", "rust-project.json"],
+    // ADR-032: cargo materialises deps only into the shared
+    // registry cache, never in-tree, and every crate there ships a
+    // Cargo.toml — the primary root marker. Cleared by the step-1
+    // probe, so this list routes.
+    vendor_segments: [],
+    dependency_cache_fragments: ["/registry/src/"],
     root_promotion: CargoWorkspacePromotion,
     servers: [
       ServerConfig(
@@ -440,6 +478,10 @@ fn go() -> LanguageConfig {
     id: "go",
     file_extensions: [".go"],
     root_markers: ["go.mod", "go.work"],
+    // ADR-032: the module cache under GOPATH, whose every module
+    // directory carries a go.mod. Cleared by the step-1 probe.
+    vendor_segments: [],
+    dependency_cache_fragments: ["/pkg/mod/"],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -468,6 +510,12 @@ fn typescript() -> LanguageConfig {
     id: "typescript",
     file_extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
     root_markers: ["tsconfig.json", "jsconfig.json", "package.json"],
+    // ADR-032: the field report that opened the ADR —
+    // node_modules/<pkg>/package.json satisfies the third root
+    // marker, so ascent floors at the package. In-tree, so this
+    // warns; it does not route.
+    vendor_segments: ["/node_modules/"],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -557,6 +605,8 @@ fn elixir() -> LanguageConfig {
     id: "elixir",
     file_extensions: [".ex", ".exs"],
     root_markers: ["mix.exs"],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -592,6 +642,10 @@ fn ruby() -> LanguageConfig {
     id: "ruby",
     file_extensions: [".rb"],
     root_markers: ["Gemfile", "Rakefile", ".ruby-version"],
+    // ADR-032: bundler's vendored gem path. The full segment, not
+    // bare `vendor` — that is an ordinary first-party dir name.
+    vendor_segments: ["/vendor/bundle/"],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -620,6 +674,8 @@ fn zig() -> LanguageConfig {
     id: "zig",
     file_extensions: [".zig", ".zon"],
     root_markers: ["build.zig", "build.zig.zon"],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -652,6 +708,8 @@ fn cpp() -> LanguageConfig {
       "compile_commands.json", "compile_flags.txt", ".clangd", "CMakeLists.txt",
       ".git",
     ],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -684,6 +742,8 @@ fn scala() -> LanguageConfig {
       "build.sbt", "build.sc", "build.mill", "project.scala", ".scala-build",
       ".bsp", ".git",
     ],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -728,6 +788,8 @@ fn clojure() -> LanguageConfig {
       "deps.edn", "project.clj", "shadow-cljs.edn", "build.boot", "bb.edn",
       ".git",
     ],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -758,6 +820,8 @@ fn haskell() -> LanguageConfig {
       "stack.yaml", "cabal.project", "package.yaml", "*.cabal", "hie.yaml",
       ".git",
     ],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -786,6 +850,8 @@ fn perl() -> LanguageConfig {
     id: "perl",
     file_extensions: [".pl", ".pm", ".t", ".pod"],
     root_markers: ["Makefile.PL", "Build.PL", "cpanfile", "dist.ini", ".git"],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -819,6 +885,10 @@ fn html() -> LanguageConfig {
     id: "html",
     file_extensions: [".html", ".htm"],
     root_markers: ["package.json", ".git"],
+    // ADR-032: package.json is a root marker here too, so a
+    // stylesheet or asset inside a package roots at the package.
+    vendor_segments: ["/node_modules/"],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -847,6 +917,10 @@ fn css() -> LanguageConfig {
     id: "css",
     file_extensions: [".css", ".scss", ".sass", ".less"],
     root_markers: ["package.json", ".git"],
+    // ADR-032: package.json is a root marker here too, so a
+    // stylesheet or asset inside a package roots at the package.
+    vendor_segments: ["/node_modules/"],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -874,6 +948,10 @@ fn json_lang() -> LanguageConfig {
     id: "json",
     file_extensions: [".json", ".jsonc", ".json5"],
     root_markers: ["package.json", ".git"],
+    // ADR-032: package.json is a root marker here too, so a
+    // stylesheet or asset inside a package roots at the package.
+    vendor_segments: ["/node_modules/"],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -899,6 +977,8 @@ fn yaml() -> LanguageConfig {
     id: "yaml",
     file_extensions: [".yaml", ".yml"],
     root_markers: [".git"],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -926,6 +1006,8 @@ fn markdown() -> LanguageConfig {
     id: "markdown",
     file_extensions: [".md", ".markdown"],
     root_markers: [".git"],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -955,6 +1037,8 @@ fn terraform() -> LanguageConfig {
     root_markers: [
       ".terraform.lock.hcl", "main.tf", "versions.tf", ".terraform", ".git",
     ],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -982,6 +1066,8 @@ fn erlang() -> LanguageConfig {
     id: "erlang",
     file_extensions: [".erl", ".hrl"],
     root_markers: ["rebar.config", "erlang.mk", "rebar3.config", ".git"],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -1022,6 +1108,8 @@ fn java() -> LanguageConfig {
     root_markers: [
       "pom.xml", "build.gradle", "build.gradle.kts", ".project", ".classpath",
     ],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -1088,6 +1176,8 @@ fn gleam() -> LanguageConfig {
     id: "gleam",
     file_extensions: [".gleam"],
     root_markers: ["gleam.toml"],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -1129,6 +1219,8 @@ fn lua() -> LanguageConfig {
     root_markers: [
       ".luarc.json", ".luarc.jsonc", "selene.toml", ".stylua.toml", ".git",
     ],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -1163,6 +1255,8 @@ fn bash() -> LanguageConfig {
     // us pointing at the repo root. Power users can override via
     // pharos.toml when their layout differs.
     root_markers: [".git"],
+    vendor_segments: [],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     servers: [
       ServerConfig(
@@ -1193,6 +1287,10 @@ fn python() -> LanguageConfig {
       "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
       ".python-version",
     ],
+    // ADR-032: site-packages holds installed distributions, many
+    // shipping a pyproject.toml or setup.py.
+    vendor_segments: ["/site-packages/"],
+    dependency_cache_fragments: [],
     root_promotion: NoPromotion,
     // Stage 3 of ADR-019: dual-server python. Pyright owns
     // hover/goto/types; ruff owns formatting + lint diagnostics +

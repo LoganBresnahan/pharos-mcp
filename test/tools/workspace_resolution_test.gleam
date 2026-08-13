@@ -12,6 +12,8 @@
 
 import gleam/option
 import gleeunit/should
+import pharos/config
+import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/pool
 import pharos/lsp/registry
 import pharos/tools/session
@@ -19,12 +21,28 @@ import pharos/tools/session
 @external(erlang, "pharos_fs_ffi", "shell")
 fn shell(cmd: String) -> String
 
+@external(erlang, "pharos_ffi_shape_test_support", "set_env")
+fn set_env(name: String, value: String) -> Nil
+
+@external(erlang, "pharos_ffi_shape_test_support", "unset_env")
+fn unset_env(name: String) -> Nil
+
+/// The bundled config for `id`. Since ADR-032 step 4 the fragment
+/// lists live on `LanguageConfig`, so classification is only
+/// meaningful relative to one; `registry.for_language` falls back to
+/// bundled defaults when `init` was never called, which is what these
+/// want to assert.
+fn lang(id: String) -> LanguageConfig {
+  let assert Ok(config) = registry.for_language(id)
+  config
+}
+
 // -- is_out_of_tree_cache_path -------------------------------------------
 
 pub fn cargo_registry_classifies_for_rust_test() {
   session.is_out_of_tree_cache_path(
     "/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.200/src/lib.rs",
-    "rust",
+    lang("rust"),
   )
   |> should.be_true
 }
@@ -36,7 +54,7 @@ pub fn cargo_registry_classifies_for_rust_test() {
 pub fn relocated_cargo_home_still_classifies_test() {
   session.is_out_of_tree_cache_path(
     "/opt/build-caches/cargo/registry/src/index.crates.io-abc/tokio-1.38.0",
-    "rust",
+    lang("rust"),
   )
   |> should.be_true
 }
@@ -44,14 +62,14 @@ pub fn relocated_cargo_home_still_classifies_test() {
 pub fn go_module_cache_classifies_for_go_test() {
   session.is_out_of_tree_cache_path(
     "/home/u/go/pkg/mod/github.com/x/y@v1.2.3/file.go",
-    "go",
+    lang("go"),
   )
   |> should.be_true
 
   // Any GOPATH — the suffix carries no home-directory assumption.
   session.is_out_of_tree_cache_path(
     "/data/gopath/pkg/mod/golang.org/x/net@v0.25.0",
-    "go",
+    lang("go"),
   )
   |> should.be_true
 }
@@ -60,7 +78,7 @@ pub fn go_module_cache_classifies_for_go_test() {
 /// classifies — same trailing-separator treatment as
 /// `is_dependency_path`.
 pub fn cache_dir_itself_classifies_test() {
-  session.is_out_of_tree_cache_path("/home/u/go/pkg/mod", "go")
+  session.is_out_of_tree_cache_path("/home/u/go/pkg/mod", lang("go"))
   |> should.be_true
 }
 
@@ -70,12 +88,12 @@ pub fn cache_dir_itself_classifies_test() {
 pub fn fragments_do_not_cross_languages_test() {
   session.is_out_of_tree_cache_path(
     "/home/u/.cargo/registry/src/index.crates.io-abc/serde-1.0.200",
-    "go",
+    lang("go"),
   )
   |> should.be_false
   session.is_out_of_tree_cache_path(
     "/home/u/go/pkg/mod/github.com/x/y@v1.2.3",
-    "rust",
+    lang("rust"),
   )
   |> should.be_false
 }
@@ -86,27 +104,27 @@ pub fn fragments_do_not_cross_languages_test() {
 pub fn in_tree_vendor_paths_do_not_classify_test() {
   session.is_out_of_tree_cache_path(
     "/home/u/proj/node_modules/@types/react/index.d.ts",
-    "typescript",
+    lang("typescript"),
   )
   |> should.be_false
   session.is_out_of_tree_cache_path(
     "/home/u/proj/.venv/lib/python3.12/site-packages/requests/api.py",
-    "python",
+    lang("python"),
   )
   |> should.be_false
 }
 
 pub fn first_party_paths_do_not_classify_test() {
-  session.is_out_of_tree_cache_path("/home/u/proj/src/main.rs", "rust")
+  session.is_out_of_tree_cache_path("/home/u/proj/src/main.rs", lang("rust"))
   |> should.be_false
-  session.is_out_of_tree_cache_path("/home/u/proj/cmd/main.go", "go")
+  session.is_out_of_tree_cache_path("/home/u/proj/cmd/main.go", lang("go"))
   |> should.be_false
 }
 
 // -- out_of_tree_route_decision --------------------------------------------
 
 pub fn sole_live_workspace_routes_test() {
-  session.out_of_tree_route_decision("rust", ["/home/u/proj"])
+  session.out_of_tree_route_decision(lang("rust"), ["/home/u/proj"])
   |> should.equal(option.Some("/home/u/proj"))
 }
 
@@ -114,7 +132,7 @@ pub fn sole_live_workspace_routes_test() {
 /// and the floor (ascent) applies — the residue ADR-032 records as
 /// unfixable even by option C.
 pub fn no_live_workspaces_floors_test() {
-  session.out_of_tree_route_decision("rust", [])
+  session.out_of_tree_route_decision(lang("rust"), [])
   |> should.equal(option.None)
 }
 
@@ -122,7 +140,10 @@ pub fn no_live_workspaces_floors_test() {
 /// workspaces falls through to the floor, where the dependency-rooted
 /// answer fires F's note.
 pub fn multiple_live_workspaces_floor_not_error_test() {
-  session.out_of_tree_route_decision("rust", ["/home/u/proj-a", "/home/u/proj-b"])
+  session.out_of_tree_route_decision(lang("rust"), [
+    "/home/u/proj-a",
+    "/home/u/proj-b",
+  ])
   |> should.equal(option.None)
 }
 
@@ -131,7 +152,7 @@ pub fn multiple_live_workspaces_floor_not_error_test() {
 /// Routing a *different* crate's file to it would be worse than the
 /// floor, so it is never a candidate.
 pub fn dependency_rooted_workspace_is_not_a_candidate_test() {
-  session.out_of_tree_route_decision("rust", [
+  session.out_of_tree_route_decision(lang("rust"), [
     "/home/u/.cargo/registry/src/index.crates.io-abc/serde-1.0.200",
   ])
   |> should.equal(option.None)
@@ -141,11 +162,61 @@ pub fn dependency_rooted_workspace_is_not_a_candidate_test() {
 /// earlier floor artifact plus one genuine project session still
 /// routes to the project.
 pub fn floor_artifact_does_not_block_the_real_workspace_test() {
-  session.out_of_tree_route_decision("rust", [
+  session.out_of_tree_route_decision(lang("rust"), [
     "/home/u/.cargo/registry/src/index.crates.io-abc/serde-1.0.200",
     "/home/u/proj",
   ])
   |> should.equal(option.Some("/home/u/proj"))
+}
+
+// -- per-language config plumbing (ADR-032 step 4) -------------------------
+
+/// The keys are only worth having if a user can actually set them, and
+/// a typo in the decoder's key string would fail silently — the
+/// override would just be ignored. This drives the real path: toml on
+/// disk → `config.load` → `registry.init` → classification.
+///
+/// Mutates process-global state (config + registry persistent_term),
+/// so it restores both by re-loading with the env var unset. That
+/// restore is not optional: every other test reads the same registry.
+pub fn user_config_can_override_the_cache_fragments_test() {
+  let path = "/tmp/pharos_step4_override_test.toml"
+  let _ =
+    shell(
+      "printf '[languages.rust]\\ndependency_cache_fragments = [\"/vendored-crates/\"]\\n' > "
+      <> path,
+    )
+
+  set_env("PHAROS_CONFIG_FILE", path)
+  let _ = config.load()
+  registry.init()
+
+  let overridden = lang("rust")
+  // The user's list replaces the bundled one rather than adding to it,
+  // so the default fragment must be gone.
+  session.is_out_of_tree_cache_path(
+    "/home/u/vendored-crates/serde-1.0.200/src/lib.rs",
+    overridden,
+  )
+  |> should.be_true
+  session.is_out_of_tree_cache_path(
+    "/home/u/.cargo/registry/src/index.crates.io-abc/serde-1.0.200",
+    overridden,
+  )
+  |> should.be_false
+  // An unmentioned key keeps its bundled value.
+  overridden.root_markers |> should.equal(["Cargo.toml", "rust-project.json"])
+
+  unset_env("PHAROS_CONFIG_FILE")
+  let _ = config.load()
+  registry.init()
+  let _ = shell("rm -f " <> path)
+
+  session.is_out_of_tree_cache_path(
+    "/home/u/.cargo/registry/src/index.crates.io-abc/serde-1.0.200",
+    lang("rust"),
+  )
+  |> should.be_true
 }
 
 // -- resolve_workspace floor (integration) ---------------------------------
@@ -156,7 +227,8 @@ pub fn floor_artifact_does_not_block_the_real_workspace_test() {
 /// answer into a hard failure.
 pub fn out_of_tree_path_with_empty_pool_floors_to_ascent_test() {
   let root = "/tmp/pharos_workspace_resolution_test"
-  let crate_dir = root <> "/cargo-home/registry/src/index.crates.io-abc/dep-1.0.0"
+  let crate_dir =
+    root <> "/cargo-home/registry/src/index.crates.io-abc/dep-1.0.0"
   let _ = shell("rm -rf " <> root)
   let _ = shell("mkdir -p " <> crate_dir <> "/src")
   let _ = shell("printf '[package]\\n' > " <> crate_dir <> "/Cargo.toml")

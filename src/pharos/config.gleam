@@ -155,6 +155,13 @@ pub type LanguageOverride {
     args: Option(List(String)),
     file_extensions: Option(List(String)),
     root_markers: Option(List(String)),
+    /// ADR-032 step 4. In-tree dependency directory segments and
+    /// out-of-tree dependency-cache suffixes for this language. Both
+    /// replace the bundled list rather than adding to it, same as
+    /// `root_markers`. See `languages.LanguageConfig` for the
+    /// matching semantics each one carries.
+    vendor_segments: Option(List(String)),
+    dependency_cache_fragments: Option(List(String)),
     diagnostics_mode: Option(String),
     readiness_token: Option(String),
     servers: Option(List(ServerOverride)),
@@ -797,6 +804,11 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     args: decode_optional_string_list(value, "args"),
     file_extensions: decode_optional_string_list(value, "file_extensions"),
     root_markers: decode_optional_string_list(value, "root_markers"),
+    vendor_segments: decode_optional_string_list(value, "vendor_segments"),
+    dependency_cache_fragments: decode_optional_string_list(
+      value,
+      "dependency_cache_fragments",
+    ),
     diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
     readiness_token: decode_optional_string(value, "readiness_token"),
     servers: decode_optional_servers_list(value),

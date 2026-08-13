@@ -142,6 +142,27 @@
 # root_markers = ["cabal.project", "stack.yaml"]
 # diagnostics_mode = "push"
 #
+# Where this ecosystem puts dependencies (ADR-032). Both default to
+# empty — set them only when a dependency directory carries one of the
+# root markers above, which is what makes ascent stop inside it.
+# Both replace the bundled list rather than merging into it.
+#
+#   vendor_segments             in-tree, under the project root. Warns
+#                               that an answer is dependency-scoped;
+#                               does not change rooting.
+#   dependency_cache_fragments  out-of-tree shared cache the project is
+#                               not an ancestor of. Routes: a query
+#                               anchored here is served by the live
+#                               workspace for the language. Write the
+#                               structural suffix, not a home-anchored
+#                               prefix, so it survives a relocated cache.
+#
+# [languages.rust]
+# dependency_cache_fragments = ["/registry/src/"]   # any CARGO_HOME
+#
+# [languages.typescript]
+# vendor_segments = ["/node_modules/"]
+#
 # 3) JSON-string overrides for the deep-nested fields.
 #
 # `initialization_options_json` and `workspace_configuration_json`

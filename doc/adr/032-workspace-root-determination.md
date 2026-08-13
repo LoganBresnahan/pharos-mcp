@@ -182,9 +182,26 @@ crate's file to it would be strictly worse than the floor. Filtering
 artifacts out also means one stale floor session plus one genuine project
 session still routes to the project rather than reading as ambiguous.
 
-What remains unimplemented: step 4 (per-language config keys; both fragment
-lists are still provisional constants in `session.gleam`) and the validation
-dogfood run, which is what moves this ADR past Proposed.
+**Step 4 has landed.** Both lists are now per-language keys on
+`LanguageConfig` — `vendor_segments` (in-tree, warns) and
+`dependency_cache_fragments` (out-of-tree, routes) — user-overridable from
+toml with replace-not-merge semantics matching `root_markers`, rendered by
+`registry_toml`, and documented in the README schema table plus
+`doc/example-pharos.toml`. The `CARGO_HOME` bug is gone with the global
+list: rust's entry is the structural suffix `/registry/src/`.
+
+Two consequences of the split worth recording, neither in the plan below:
+
+- The warn predicate now unions *both* per-language lists, which collapses
+  the redundant second check `out_of_tree_route_decision` was making.
+- Warning is now language-gated where it was global. A python file under
+  some project's `node_modules` no longer draws a note, because
+  `/node_modules/` is typescript's list, not python's. That is the
+  false-positive reduction the step was for, but it does mean the warn
+  surface *narrowed*, not just moved.
+
+What remains: the validation dogfood run, which is what moves this ADR past
+Proposed.
 
 Two notes on what shipping F taught us:
 
@@ -459,6 +476,9 @@ exactly that answer (the multi-workspace note is reserved for
 non-dependency roots).
 
 ### Step 4 — per-language dependency fragments
+
+**Status: LANDED.** See *Implementation status* for what shipped and the two
+consequences the plan below does not anticipate.
 
 *Execution: Opus, medium effort — config plumbing plus README /
 `example-pharos.toml` rows; the one nuance (segment vs. suffix matching
