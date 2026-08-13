@@ -106,8 +106,21 @@ pub fn dependency_note_does_not_assert_a_search_scope_test() {
   let assert option.Some(note) =
     session.attribution_note("typescript", "/home/u/proj/node_modules/react", 1)
 
-  string.contains(note, "project-wide results") |> should.be_true
   string.contains(note, "does not mean the symbol is unused") |> should.be_true
+}
+
+/// ADR-032 step 1 killed the note's original advice: "re-anchor on a
+/// first-party declaration" sends the agent to a second wrong answer
+/// for dependency-declared symbols, because the server resolves the
+/// re-anchored query to a file-local binding and keeps the scope rule.
+/// The note must not promise that re-anchoring widens the scope; the
+/// honest recovery is a text search.
+pub fn dependency_note_does_not_recommend_re_anchoring_test() {
+  let assert option.Some(note) =
+    session.attribution_note("typescript", "/home/u/proj/node_modules/react", 1)
+
+  string.contains(note, "Re-anchor") |> should.be_false
+  string.contains(note, "text search") |> should.be_true
 }
 
 pub fn multiple_live_workspaces_produce_a_note_test() {

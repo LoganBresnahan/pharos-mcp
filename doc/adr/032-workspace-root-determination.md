@@ -164,9 +164,27 @@ that prompted the ADR needs no rooting change at all.
 ### Implementation status
 
 **F has landed for `find_references`** (`session.root_attribution/2`,
-`session.attribution_note/3`). Nothing else in this ADR is implemented; root
-discovery is unchanged, so the rootless-session defect itself is still present
-— it is now merely visible rather than silent.
+`session.attribution_note/3`). **Step 2 has landed** (`resolve_workspace` /
+`resolve_workspace_or_dir` in `session.gleam`; all thirteen sites route
+through it, `evict_for_uri` included). **Step 3 has
+landed in its post-step-1 shape** — the out-of-tree `[D]` branch only:
+`is_out_of_tree_cache_path/2` classifies by structural suffix
+(`/registry/src/` for rust, `/pkg/mod/` for go — already relocation-robust,
+so the step-4 `CARGO_HOME` bug does not exist in the routing list),
+`out_of_tree_route_decision/2` picks the sole live workspace or floors to
+ascent. In-tree paths and every unprobed language resolve exactly as before.
+
+One decision made at implementation time that the plan below does not spell
+out: **a live workspace that is itself dependency-rooted is never a routing
+candidate.** Such a root is a floor artifact — an earlier cold-start call
+that rooted a session at one registry crate — and routing a *different*
+crate's file to it would be strictly worse than the floor. Filtering
+artifacts out also means one stale floor session plus one genuine project
+session still routes to the project rather than reading as ambiguous.
+
+What remains unimplemented: step 4 (per-language config keys; both fragment
+lists are still provisional constants in `session.gleam`) and the validation
+dogfood run, which is what moves this ADR past Proposed.
 
 Two notes on what shipping F taught us:
 
@@ -186,15 +204,17 @@ constant. It decides only whether to *warn* and never influences which root is
 chosen; whichever mechanism this ADR settles on should absorb it into the
 per-language config rather than leaving two lists.
 
-**Defect found by step 1 — the note's advice is wrong for library symbols.**
-It says *"Re-anchor on a first-party declaration for project-wide results."*
-That holds for first-party symbols and fails for the library symbols the note
-actually fires on: re-anchoring on a first-party *use* of `useState` still
-returns only that file's uses plus the declaration sites, because TypeScript
-resolves the anchor to the file-local import binding. The note therefore sends
-the agent to a second wrong answer, with no warning attached the second time.
-Fixing the wording is independent of which mechanism wins and should not wait
-for step 3.
+**Defect found by step 1 — the note's advice is wrong for library symbols.
+FIXED alongside step 3.** It said *"Re-anchor on a first-party declaration
+for project-wide results."* That holds for first-party symbols and fails for
+the library symbols the note actually fires on: re-anchoring on a first-party
+*use* of `useState` still returns only that file's uses plus the declaration
+sites, because TypeScript resolves the anchor to the file-local import
+binding. The note therefore sent the agent to a second wrong answer, with no
+warning attached the second time. The note now says the server may keep
+references dependency-scoped regardless of anchoring and recommends a
+project-wide text search; the README paragraph carrying the same advice was
+corrected in the same commit.
 
 ## Options under consideration
 
@@ -352,6 +372,8 @@ mechanism ships only for the languages that clear it.
 
 ### Step 2 — consolidate resolution to one chokepoint (prerequisite)
 
+**Status: LANDED (a3a67ad).**
+
 *Execution: Opus, medium effort — mechanical consolidation across thirteen
 sites, but not low: a missed site (`evict_for_uri`, `root_attribution`)
 fails silently, not loudly.*
@@ -382,6 +404,10 @@ Every caller routes through it, `evict_for_uri` included. This step is a pure
 refactor with no behavior change; the suite must stay green across it.
 
 ### Step 3 — the resolution chain
+
+**Status: LANDED, in the narrowed shape described below.** See
+*Implementation status* for what was built and the one added decision
+(dependency-rooted workspaces are not routing candidates).
 
 > **Superseded in part by step 1's result.** The chain below is retained as the
 > design that was worked out, but the in-tree branch (`[A]`) does not ship: step

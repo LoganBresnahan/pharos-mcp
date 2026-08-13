@@ -649,8 +649,9 @@ const dependency_path_fragments: List(String) = [
 /// `resolve_workspace` chokepoint the request itself used (ADR-032 step
 /// 2). Attribution naming a root the routing did not use would be worse
 /// than no attribution at all, so this must not drift back to calling
-/// `discover_workspace` directly — that was true-by-coincidence before
-/// the chokepoint and would become false the moment step 3 lands.
+/// `discover_workspace` directly — since step 3's topology dispatch,
+/// plain ascent and the chokepoint genuinely disagree for out-of-tree
+/// dependency paths, so the shortcut would report the wrong root.
 pub fn root_attribution(pool: Pool, file_uri: String) -> option.Option(String) {
   // Custom-scheme URIs route by active session rather than by
   // ascent, and ADR-029 already fails loudly when that is ambiguous.
@@ -689,10 +690,12 @@ pub fn attribution_note(
         <> workspace
         <> ", which is inside a dependency directory. These results are "
         <> "scoped to that dependency, not your project — a small or empty "
-        <> "result set here does not mean the symbol is unused. Re-anchor on "
-        <> "a first-party declaration for project-wide results. See the "
-        <> "pharos README, \"Wrong answers for queries anchored inside a "
-        <> "dependency\".",
+        <> "result set here does not mean the symbol is unused. For symbols "
+        <> "the dependency itself declares, the language server may keep "
+        <> "references dependency-scoped no matter where the query is "
+        <> "anchored, so use a project-wide text search to count real uses. "
+        <> "See the pharos README, \"Wrong answers for queries anchored "
+        <> "inside a dependency\".",
       )
     False, n if n > 1 ->
       option.Some(
@@ -717,6 +720,63 @@ pub fn is_dependency_path(path: String) -> Bool {
   list.any(dependency_path_fragments, fn(fragment) {
     string.contains(probe, fragment)
   })
+}
+
+/// Out-of-tree dependency-cache classification (ADR-032 step 3).
+///
+/// Distinct from `dependency_path_fragments` on both axes that matter:
+/// this list *routes* (it decides which session serves the file, not
+/// merely whether to warn), and it matches a structural suffix rather
+/// than a home-anchored prefix — `/registry/src/` holds wherever
+/// `CARGO_HOME` points, the same way `/pkg/mod/` already holds for any
+/// `GOPATH`. Only the two languages the step-1 probe cleared appear;
+/// an unprobed language must fall through to plain ascent, so an empty
+/// list here is the correct default, not a gap. Step 4 absorbs both
+/// this and the warn list into per-language config.
+fn out_of_tree_cache_fragments(language: String) -> List(String) {
+  case language {
+    "rust" -> ["/registry/src/"]
+    "go" -> ["/pkg/mod/"]
+    _ -> []
+  }
+}
+
+/// True when `path` lies inside a shared out-of-tree dependency cache
+/// for `language` — a location no ascent can ever connect to the
+/// owning project, because the owning project is not an ancestor.
+pub fn is_out_of_tree_cache_path(path: String, language: String) -> Bool {
+  let probe = path <> "/"
+  list.any(out_of_tree_cache_fragments(language), fn(fragment) {
+    string.contains(probe, fragment)
+  })
+}
+
+/// Pure decision half of the out-of-tree branch: given the Ready
+/// workspaces for the file's language, pick the one to route to, or
+/// `None` for the ascent floor.
+///
+/// Workspaces that are themselves dependency-rooted are not candidates
+/// — such a root is a floor artifact from an earlier cold-start call
+/// (a session rooted at one registry crate), and routing a *different*
+/// crate's file to it would be strictly worse than the floor. After
+/// that filter, only a sole survivor routes: zero means cold start,
+/// two or more is the ambiguity ADR-032 forbids turning into ADR-029's
+/// hard error, so both fall through to ascent. The floor root is then
+/// itself a dependency path, which is exactly what fires the
+/// attribution note — degraded, never silent, never a hard failure.
+pub fn out_of_tree_route_decision(
+  language: String,
+  ready_workspaces: List(String),
+) -> option.Option(String) {
+  let candidates =
+    list.filter(ready_workspaces, fn(workspace) {
+      !is_dependency_path(workspace)
+      && !is_out_of_tree_cache_path(workspace, language)
+    })
+  case candidates {
+    [sole] -> option.Some(sole)
+    _ -> option.None
+  }
 }
 
 /// Prepare a single Proc for the server that owns `method` under
@@ -1070,10 +1130,15 @@ fn promote_root(raw: String, config: LanguageConfig) -> String {
 /// both silent failures, which is why the consolidation lands before the
 /// behaviour change rather than with it.
 ///
-/// `pool` is threaded through unused today. Step 3's out-of-tree branch
-/// routes by live-session lookup, so it needs pool access; taking it now
-/// means that change touches this function's body and not the call sites
-/// again — which is the entire point of having a chokepoint.
+/// Resolution dispatches on topology (ADR-032 step 3): a path inside a
+/// shared out-of-tree dependency cache routes to the sole live
+/// workspace for its language when one exists, because no ascent from
+/// such a path can reach the owning project; everything else — first-
+/// party files and in-tree vendor paths alike — resolves by plain
+/// ascent, unchanged. The step-1 probe is the authority on which
+/// languages route (`out_of_tree_cache_fragments`); the floor for
+/// every miss is today's ascent, so no input that resolved before can
+/// hard-fail now.
 pub fn resolve_workspace(
   pool: Pool,
   file_uri: String,
@@ -1084,8 +1149,8 @@ pub fn resolve_workspace(
 
 /// Dir-tolerant sibling of `resolve_workspace/3`, for callers whose URI
 /// may name a directory rather than a file (`workspace_symbols` with a
-/// directory hint). Splits only on the discovery function; promotion and
-/// — once step 3 lands — dispatch are shared.
+/// directory hint). Splits only on the discovery function; promotion
+/// and the topology dispatch are shared.
 pub fn resolve_workspace_or_dir(
   pool: Pool,
   uri_hint: String,
@@ -1094,18 +1159,68 @@ pub fn resolve_workspace_or_dir(
   resolve_with(pool, uri_hint, config, discover_workspace_or_dir)
 }
 
-/// Shared body of both public forms, and the single seam step 3 opens.
-/// Kept deliberately trivial: this refactor must not change behaviour,
-/// so it is exactly the `discover` + `promote_root` pair the call sites
-/// used to spell out.
+/// Shared body of both public forms; the topology dispatch of ADR-032
+/// step 3. Only the out-of-tree branch consults pool state — every
+/// other path stays the deterministic `discover` + `promote_root` pair,
+/// so the order-dependence that disqualified option B is confined to
+/// the one case where no ascent can succeed.
 fn resolve_with(
-  _pool: Pool,
+  pool: Pool,
   uri: String,
   config: LanguageConfig,
   discover: fn(String, List(String)) -> Result(String, SessionError),
 ) -> Result(String, SessionError) {
-  use raw <- result.try(discover(uri, config.root_markers))
-  Ok(promote_root(raw, config))
+  case out_of_tree_route(pool, uri, config) {
+    option.Some(workspace) -> Ok(workspace)
+    option.None -> {
+      use raw <- result.try(discover(uri, config.root_markers))
+      Ok(promote_root(raw, config))
+    }
+  }
+}
+
+/// Impure half of the out-of-tree branch: classify the path, snapshot
+/// the pool only on a match, and delegate the choice to
+/// `out_of_tree_route_decision`. `None` always means "take the ascent
+/// floor", never a failure.
+fn out_of_tree_route(
+  pool: Pool,
+  uri: String,
+  config: LanguageConfig,
+) -> option.Option(String) {
+  case workspace_root.uri_to_path(uri) {
+    // Not a file:// URI — let `discover` surface NotAFileUri at the
+    // established boundary rather than duplicating the error here.
+    Error(_) -> option.None
+    Ok(path) ->
+      case is_out_of_tree_cache_path(path, config.id) {
+        False -> option.None
+        True -> {
+          let ready = ready_workspaces_for_language(pool, config.id)
+          let decision = out_of_tree_route_decision(config.id, ready)
+          case decision {
+            option.Some(workspace) ->
+              log.fields_at(
+                "pharos/tools/session",
+                log_entry.Info,
+                "routed out-of-tree dependency path to live workspace",
+                [#("language", config.id), #("workspace", workspace)],
+              )
+            option.None ->
+              log.fields_at(
+                "pharos/tools/session",
+                log_entry.Info,
+                "out-of-tree dependency path fell back to ascent",
+                [
+                  #("language", config.id),
+                  #("ready_workspaces", int.to_string(list.length(ready))),
+                ],
+              )
+          }
+          decision
+        }
+      }
+  }
 }
 
 fn get_lsp(

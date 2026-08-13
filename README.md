@@ -754,9 +754,22 @@ The cost is real: pure-JS projects whose only root marker is a
 
 This mitigation does **not** help Rust or Go, where the dependency
 satisfies the language's *primary* marker (`Cargo.toml`, `go.mod`) and
-there is nothing droppable. There, prefer anchoring `find_references`
-on a first-party declaration rather than on the definition site inside
-the dependency.
+there is nothing droppable. For those two, pharos instead routes a
+query anchored inside the shared dependency cache (`registry/src` under
+`CARGO_HOME`, `pkg/mod` under `GOPATH`) to the already-running project
+session for that language, whose analysis graph includes the dependency
+sources. Two residues remain, both falling back to today's
+root-at-the-dependency behaviour (flagged by the note above, never a
+hard error): the *first* call of a session has no project session to
+route to yet, and so does any call while two or more workspaces for the
+language are live, since pharos cannot tell which one owns the file.
+
+One caveat that survives everything above: for a symbol *declared by*
+a dependency, some language servers deliberately scope
+`find_references` to the dependency's own files no matter how the
+query is routed or anchored. A small result set for a library symbol
+is not evidence it is unused in your project — a project-wide text
+search is the reliable count.
 
 Reading dependency sources is unaffected — `hover`, `goto_definition`,
 and `fetch_uri_contents` on a dependency file all work. The defect is
