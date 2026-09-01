@@ -1,6 +1,6 @@
 # 032. Workspace root determination: vendored dependencies and rootless sessions
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-12
 
 ## Context
@@ -200,8 +200,17 @@ Two consequences of the split worth recording, neither in the plan below:
   false-positive reduction the step was for, but it does mean the warn
   surface *narrowed*, not just moved.
 
-What remains: the validation dogfood run, which is what moves this ADR past
-Proposed.
+**Status: RUN, 2026-09-01. All nine hard cells pass.** Routing reaches
+first-party files the floored session structurally cannot see — 7 project
+references vs 0 for `hecs::World`, anchored in the registry crate. Evidence:
+[dogfood-adr-032-step5.md](../dogfood-adr-032-step5.md).
+
+The run also corrected the metric this ADR would have been judged by. Comparing
+*total* reference counts reads a correct routing result as a failure: a floored
+session rooted in the dependency returns more references (128 vs 53 here),
+every one of them inside that dependency. The criterion is step 1's — at least
+one reference in a first-party file — which the floor cannot produce by
+construction.
 
 Two notes on what shipping F taught us:
 
@@ -544,6 +553,9 @@ Once a mechanism lands:
   change to rooting has one place to land instead of twelve. That is worth more
   than this ADR's specific rule.
 
-Until the chain lands, the `root_markers` override is the documented
-mitigation, and F's note is the only signal that anything went wrong — which is
-why F shipped first and independently.
+The chain has landed (a3a67ad, 0721209, c6a220b) and the validation run
+(2026-09-01) confirms both the mechanism and the claim for rust and go. The
+`root_markers` override remains the documented mitigation for the residues:
+cold start, where there is no live session to route to, and the 21 languages
+the step-1 probe never cleared. F's note is still the signal that an answer was
+dependency-scoped.

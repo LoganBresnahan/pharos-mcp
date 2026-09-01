@@ -90,7 +90,7 @@ changing anything that spawns, blocks, or times out — it is written to answer
 
 ```sh
 mix compile --warnings-as-errors   # what CI compiles with
-mix gleam.test                     # the suite (194 at last count)
+mix gleam.test                     # the suite (230 at last count)
 mix start                          # run the stdio server on this shell
 bin/pharos-dev                     # dev wrapper for MCP-client use
 mix release.dev                    # wipe Burrito cache + rebuild all 5 targets
