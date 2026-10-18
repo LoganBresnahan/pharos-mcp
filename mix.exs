@@ -133,7 +133,13 @@ defmodule Pharos.MixProject do
   defp releases do
     [
       pharos: [
-        steps: [:assemble, &Burrito.wrap/1, &refresh_npm_platform_packages/1],
+        steps: [
+          &prepend_mirror_paths/1,
+          :assemble,
+          &check_boot_script/1,
+          &Burrito.wrap/1,
+          &refresh_npm_platform_packages/1
+        ],
         burrito: [
           targets: [
             linux_x64: [os: :linux, cpu: :x86_64],
@@ -145,6 +151,76 @@ defmodule Pharos.MixProject do
         ]
       ]
     ]
+  end
+
+  # Re-run the ADR-011 path fix immediately before :assemble. The
+  # `deps.compile` alias already prepended the mirror dirs, but by the
+  # time the release task reaches assembly Mix has re-prepended every
+  # dep's ebin, so `hpack_erl/ebin` sits ahead of `hpack/ebin` again
+  # (observed: index 7 vs 34) and systools would resolve hpack's boot
+  # path from the wrong dir. See ensure_mirror_paths/3.
+  defp prepend_mirror_paths(release) do
+    fix_app_names([])
+    release
+  end
+
+  # Fail the release if the generated boot script cannot boot in
+  # embedded mode. Embedded boot executes every `{primLoad, Mods}` in
+  # `start.script` against the `{path, Dirs}` preceding it, and a
+  # single module not found under those dirs aborts with
+  # `{load_failed, Mods}`. Interactive mode never exercises primLoad,
+  # so a broken path stays invisible until the VM runs embedded for
+  # real — which is what happened to hpack: the boot script pointed at
+  # `$RELEASE_LIB/hpack_erl/ebin/hpack-0.3.0/ebin`, a dir that does not
+  # exist in the assembled release (see ensure_mirror_paths/3 and
+  # doc/adr/011-mix-app-name-symlink-workaround.md). Runs before
+  # Burrito.wrap so the failure lands in seconds, not after five
+  # cross-compiled wraps.
+  defp check_boot_script(release) do
+    script =
+      Path.join([release.path, "releases", release.version, "start.script"])
+
+    {:ok, [{:script, _, instructions}]} =
+      :file.consult(String.to_charlist(script))
+
+    expand = fn dir ->
+      dir
+      |> List.to_string()
+      |> String.replace("$ROOT", release.path)
+      |> String.replace("$RELEASE_LIB", Path.join(release.path, "lib"))
+    end
+
+    {_, problems} =
+      Enum.reduce(instructions, {[], []}, fn
+        {:path, dirs}, {_, acc} ->
+          dirs = Enum.map(dirs, expand)
+          missing = for d <- dirs, not File.dir?(d), do: "missing path #{d}"
+          {dirs, acc ++ missing}
+
+        {:primLoad, mods}, {dirs, acc} ->
+          unloadable =
+            for m <- mods,
+                beam = "#{m}.beam",
+                not Enum.any?(dirs, &File.regular?(Path.join(&1, beam))),
+                do: "unloadable module #{m}"
+
+          {dirs, acc ++ unloadable}
+
+        _, state ->
+          state
+      end)
+
+    case Enum.uniq(problems) do
+      [] ->
+        Mix.shell().info("[pharos] start.script boot check passed")
+        release
+
+      problems ->
+        Mix.raise(
+          "[pharos] start.script would not boot in embedded mode:\n  " <>
+            Enum.join(problems, "\n  ")
+        )
+    end
   end
 
   # Copy each built `burrito_out/pharos_<target>` into the matching
@@ -244,13 +320,20 @@ defmodule Pharos.MixProject do
       not File.dir?(ebin) ->
         :ok
 
-      File.exists?(expected) ->
+      wrapper_app?(expected) ->
         # Wrapper .app already in place from a prior run. The symlink
-        # mirror dir likely also exists on disk, but `:code.add_pathz`
+        # mirror dir likely also exists on disk, but `:code.add_patha`
         # only persists for the lifetime of one Mix VM invocation —
         # subsequent `mix release` runs (separate VMs) can't resolve
         # the OTP-named app unless we re-add the path here.
         ensure_mirror_paths(build_lib, ebin, dep_name)
+
+      File.exists?(expected) ->
+        # A real app — or the OTP-named mirror itself (`hpack` ->
+        # `hpack_erl`), which shows the wrapper's `hpack_erl.app`
+        # through the link. Mirroring from it would put `hpack_erl/ebin`
+        # back at the head of the code path; see ensure_mirror_paths/3.
+        :ok
 
       true ->
         alias_app_if_unambiguous(ebin, expected, dep_name)
@@ -261,8 +344,19 @@ defmodule Pharos.MixProject do
   # invocation, regardless of whether the wrapper .app was already
   # present. Walks every .app file in the dep's ebin and resolves any
   # otp_name != dep_name as a symlink target whose ebin should be on
-  # the path. Idempotent — `:code.add_pathz` is safe to call multiple
+  # the path. Idempotent — `:code.add_patha` is safe to call multiple
   # times with the same path.
+  #
+  # `add_patha` (prepend), not `add_pathz`: systools resolves each
+  # app's boot-script path from the first code-path dir holding its
+  # `.app`. With the mirror appended, `hpack.app` is found under
+  # `<lib>/hpack_erl/ebin`, systools cannot strip a dir whose name is
+  # not the app's, and the boot script gets
+  # `$RELEASE_LIB/hpack_erl/ebin/hpack-0.3.0/ebin` — a path the
+  # assembled release does not contain. Interactive mode shrugs that
+  # off; embedded mode aborts boot. Prepending makes systools see
+  # `<lib>/hpack/ebin` and emit `$RELEASE_LIB/hpack-0.3.0/ebin`.
+  # check_boot_script/1 enforces the result at release time.
   defp ensure_mirror_paths(build_lib, ebin, dep_name) do
     Path.join(ebin, "*.app")
     |> Path.wildcard()
@@ -278,10 +372,20 @@ defmodule Pharos.MixProject do
             |> Path.join("ebin")
             |> String.to_charlist()
 
-          :code.add_pathz(otp_ebin)
+          :code.add_patha(otp_ebin)
         end
       end
     end)
+  end
+
+  defp wrapper_app?(path) do
+    with {:ok, [{:application, _, props}]} <-
+           :file.consult(String.to_charlist(path)),
+         {:description, desc} <- List.keyfind(props, :description, 0) do
+      desc |> to_string() |> String.starts_with?("Workaround alias for hex package")
+    else
+      _ -> false
+    end
   end
 
   defp alias_app_if_unambiguous(ebin, expected, dep_name) do
@@ -326,8 +430,9 @@ defmodule Pharos.MixProject do
       # it. Without this step, the symlink is in place on disk but the
       # application controller never sees it because Mix only adds
       # paths for known deps and `<otp_name>` is not a declared dep.
+      # Prepended for the boot-script reason in ensure_mirror_paths/3.
       otp_ebin = Path.join(otp_dir, "ebin") |> String.to_charlist()
-      :code.add_pathz(otp_ebin)
+      :code.add_patha(otp_ebin)
     end
   end
 

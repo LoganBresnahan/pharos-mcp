@@ -162,6 +162,33 @@ release --overwrite` invocation.
 This is not specific to release builds; any Mix.Task that
 shells out to a fresh `mix` should strip the parent env.
 
+### 3. The mirror path's code-path position decides hpack's boot path
+
+*Added 2026-10-18; see [ADR-033](033-burrito-fork-embedded-mode-in-use-lock.md).*
+
+systools builds each app's `start.script` path from the first
+code-path dir holding its `.app`, and strips a trailing
+`<name>[-<vsn>]/ebin` only when the dir name matches the app. With the
+mirror appended (`add_pathz`), `hpack.app` resolved under
+`_build/prod/lib/hpack_erl/ebin`. Nothing could be stripped, and the boot
+script got `$RELEASE_LIB/hpack_erl/ebin/hpack-0.3.0/ebin`, a path the
+assembled release does not contain. Interactive mode never noticed.
+Embedded boot fails with `{load_failed,[hpack_index,huffman,…]}`.
+
+Three parts to the fix, all in `mix.exs`:
+
+- The mirror is prepended (`add_patha`).
+- It is re-applied by a release step just before `:assemble`, because by
+  then Mix has re-prepended every dep's ebin. Observed: `hpack_erl/ebin` at
+  index 7, `hpack/ebin` at 34.
+- Mirroring runs only from a dep whose own `.app` is the generated
+  wrapper. Otherwise the `hpack` symlink, which shows the wrapper's
+  `hpack_erl.app` through the link, mirrors back toward `hpack_erl`.
+
+`check_boot_script/1` fails the release if any boot path or module is
+missing. When this ADR retires, delete the mirror steps but keep the
+check.
+
 ## Alternatives considered
 
 - **Option A — wait for upstream.** Rejected: M6 timeline pressure.

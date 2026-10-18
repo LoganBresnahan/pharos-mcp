@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release now boots in embedded mode.** Its boot script pointed at a
+  nonexistent hpack directory, a side effect of the ADR-011 app-name
+  workaround. A release-time check now fails the build if any boot-script
+  path or module is missing.
+
 ## [0.1.4] — 2026-07-10
 
 ### Fixed
