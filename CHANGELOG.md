@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Updating pharos no longer crashes pharos servers already running in
+  other sessions.** Burrito's launcher deleted every older pharos unpack
+  on each launch, while the VM, never actually in embedded mode,
+  lazy-loaded modules from it. After an update, the first new session
+  killed the LSP tools of every other open session. pharos now builds
+  with a Burrito fork that boots embedded for real and skips any unpack
+  still in use ([ADR-033](doc/adr/033-burrito-fork-embedded-mode-in-use-lock.md)).
 - **The release now boots in embedded mode.** Its boot script pointed at a
   nonexistent hpack directory, a side effect of the ADR-011 app-name
   workaround. A release-time check now fails the build if any boot-script

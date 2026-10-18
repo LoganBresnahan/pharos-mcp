@@ -15,7 +15,8 @@ defmodule Pharos.MixProject do
   #
   # Why this matters: Burrito names its extracted-runtime directory
   # `<release>_erts-<erts>_<app_version>/` and gates re-extraction on
-  # that directory's existence (deps/burrito/src/wrapper.zig:160).
+  # that directory's existence (deps/burrito/src/wrapper.zig, `main` checking
+  # `_metadata.json` under the dir from `get_install_dir`).
   # If two builds share the same version string, the second build
   # silently reuses the first build's extracted beam files — a known
   # foot-gun that bit us once during ADR-029 dogfood. Suffixing the
@@ -118,15 +119,27 @@ defmodule Pharos.MixProject do
       {:gleam_javascript, "1.0.0", override: true},
       {:gleeunit, "~> 1.10", only: [:dev, :test], runtime: false},
       {:qcheck, "~> 1.0", only: [:dev, :test], runtime: false},
-      # Held at 1.5.x deliberately — `~> 1.5.0`, not `~> 1.5`. Burrito 1.6.0
-      # raises its required Zig to 0.16.0 (`Burrito.check_zig_version/0`),
-      # while our release toolchain — and the `mlugg/setup-zig` pin in
+      # A fork of Burrito v1.5.0, not hex. Fork-only: nothing goes upstream.
+      # Upstream 1.5.0 crashes running pharos servers on a version bump: every
+      # launch deletes all semver-older unpacks with no in-use check, and the
+      # launcher passed `"-mode embedded"` as one argv element, so the VM ran
+      # interactive and lazy-loaded modules from the unpack being deleted.
+      # The fork's one commit (see FORK.md on the branch) boots embedded for
+      # real and skips any unpack whose `.burrito-in-use` flock is held —
+      # the protocol `pharos --purge-cache` follows too.
+      #
+      # Still 1.5.x underneath, deliberately: Burrito 1.6.0 raises its
+      # required Zig to 0.16.0 (`Burrito.check_zig_version/0`), while our
+      # release toolchain — and the `mlugg/setup-zig` pin in
       # .github/workflows/release.yml — is 0.15.2. Under 1.6.0 the compile and
       # assemble steps both succeed and only the wrap step fails, so the
       # breakage is invisible to `mix gleam.test` and only shows up at release
-      # time. Moving to 1.6.0 means bumping Zig to 0.16.0 and re-verifying all
-      # five cross-compiled targets; that is its own piece of work.
-      {:burrito, "~> 1.5.0", runtime: false}
+      # time. Rebasing the fork onto 1.6.0 means bumping Zig to 0.16.0 and
+      # re-verifying all five cross-compiled targets; that is its own work.
+      {:burrito,
+       github: "LoganBresnahan/burrito",
+       ref: "e008df96c870b6300eedc4eef6f838bc35503b22",
+       runtime: false}
     ]
   end
 

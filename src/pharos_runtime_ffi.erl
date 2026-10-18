@@ -970,7 +970,7 @@ argv() ->
 %% Env override: if PHAROS_INSTALL_DIR is set non-empty, returns
 %% `<PHAROS_INSTALL_DIR>/.burrito`. Matches the
 %% `{UPPER_RELEASE_NAME}_INSTALL_DIR` env var Burrito's wrapper.zig
-%% honors (deps/burrito/src/wrapper.zig:139).
+%% honors (deps/burrito/src/wrapper.zig, `get_base_install_dir`).
 %%
 %% Returns the path as a binary even when the directory does not
 %% yet exist (e.g. running under `mix start` rather than the wrapped
@@ -1026,7 +1026,8 @@ linux_default_data_home() ->
 
 %% Enumerate pharos's per-version extract directories under the
 %% Burrito cache root. Burrito names these `<release>_erts-<v>_<v>`,
-%% e.g. `pharos_erts-16.1_0.1.2` (deps/burrito/src/wrapper.zig:163).
+%% e.g. `pharos_erts-16.1_0.1.2` (deps/burrito/src/wrapper.zig,
+%% `get_install_dir`).
 %% Other Burrito apps (e.g. next_ls_erts-...) sit alongside as
 %% siblings — NEVER rm -rf the parent; only entries from this list.
 %%
