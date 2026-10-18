@@ -417,3 +417,26 @@ pub fn list_pharos_extracts_filters_test() {
   setenv("PHAROS_INSTALL_DIR", "")
   let _ = rm_rf(scratch_root)
 }
+
+// -- pharos_fs_ffi: run_executable ----------------------------------------
+//
+// `pharos --purge-cache` runs the Burrito wrapper's `maintenance purge`
+// through this and relays its stdout, so both the exit status and the
+// output must come back intact, and a missing executable must be an
+// Error rather than a crash.
+
+@external(erlang, "pharos_fs_ffi", "run_executable")
+fn run_executable(
+  path: String,
+  args: List(String),
+) -> Result(#(Int, String), String)
+
+pub fn run_executable_status_and_stdout_test() {
+  run_executable("/bin/sh", ["-c", "printf 'removed a\\nkept b\\n'; exit 3"])
+  |> should.equal(Ok(#(3, "removed a\nkept b\n")))
+}
+
+pub fn run_executable_missing_binary_test() {
+  run_executable("/nonexistent/pharos-test-no-such-binary", [])
+  |> should.be_error
+}

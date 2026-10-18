@@ -75,11 +75,17 @@ On the pharos side:
   emulates embedded `primLoad` against `start.script` and fails the build
   on any missing path or unloadable module, in seconds rather than after
   five cross-compiled wraps.
-- `pharos --purge-cache` will follow the same lock protocol by calling
-  the fork's wrapper-level `maintenance purge` (pending in the fork). The
-  BEAM cannot `flock` without a NIF, which [ADR-030](030-process-lifecycle-hardening.md)
-  rules out for v1.0, and `flock(1)` does not exist on macOS or Windows.
-  A Linux-only `/proc` check was rejected as an interim.
+- `pharos --purge-cache` follows the same lock protocol by running the
+  fork's wrapper-level `maintenance purge` (`$__BURRITO_BIN_PATH
+  maintenance purge`) and relaying its per-unpack report. The BEAM cannot
+  `flock` without a NIF, which [ADR-030](030-process-lifecycle-hardening.md)
+  rules out for v1.0, and `flock(1)` does not exist on macOS or Windows,
+  so the wrapper's Zig code is the one implementation of the contract.
+  A Linux-only `/proc` check was rejected as an interim. A running pharos's
+  own unpack is always kept, because its wrapper took the shared lock
+  before booting. `pharos maintenance purge`, which the wrapper handles
+  before it locks or unpacks anything, can remove every unpack once no
+  pharos runs.
 
 ## Consequences
 
@@ -107,10 +113,11 @@ On the pharos side:
 - We now own a fork. Rebasing it onto Burrito 1.6.0 still means
   bumping Zig to 0.16.0, the same constraint the old `~> 1.5.0` pin
   recorded in `mix.exs`.
-- Known open item for the fork: the wrapper's `logger.info` writes to
-  **stdout**. With `PHAROS_INSTALL_DIR` set, it prints `[i] Install path is
-  being overridden…` ahead of the JSON-RPC stream, which corrupts stdio
-  MCP. It is being moved to stderr in the fork.
+- The wrapper's `logger.info` used to write to **stdout**. With
+  `PHAROS_INSTALL_DIR` set, it printed `[i] Install path is being
+  overridden…` ahead of the JSON-RPC stream, corrupting stdio MCP. The fork
+  (from 4407714) sends every launcher log level to stderr. `maintenance`
+  subcommands still write their own output to stdout.
 - This is a stopgap. The long-term direction (`.private/roadmap.md`) is
   shipping already-unpacked releases per platform package and exec'ing
   `erlexec` directly, with no self-extraction at all.
@@ -122,8 +129,7 @@ On the pharos side:
 - **Upstream the fixes.** Ruled out by the project owner: the fork stays
   fork-only.
 - **Pin `PHAROS_INSTALL_DIR` per version** to dodge cleanup. Rejected: it
-  doesn't fix lazy loading, it leaks unpacks forever, and the override
-  path currently corrupts stdout (above).
+  doesn't fix lazy loading, and it leaks unpacks forever.
 - **Fix only (A).** Rejected: embedded mode protects `.beam` loads but not
   lazily started port programs, and it still lets two versions fight
   over the unpacks.

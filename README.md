@@ -300,7 +300,8 @@ commands.
 | `pharos --doctor` | Self-diagnostic. Resolves config the same way a normal boot does, probes each language server's binary on PATH, reports anything that would break a real run. Doubles as a Burrito-cache warmup. |
 | `pharos --cleanup` | List orphan LSP children left behind by prior pharos sessions that exited uncleanly (host crash, SIGKILL, OOM-killer). Dry-run by default — adds nothing destructive without a flag. |
 | `pharos --cleanup --yes` | Reap the orphans listed by `--cleanup`: SIGTERM each, wait 5 s, SIGKILL survivors, remove their per-PID tracking directory. |
-| `pharos --purge-cache` | Remove the Burrito extract cache (`<user_cache>/burrito_runtime/_/pharos/`). Next run re-extracts (~3-5 s). |
+| `pharos --purge-cache` | Remove pharos's extracted runtimes under Burrito's cache (`~/.local/share/.burrito/pharos_erts-*` on Linux) that no running pharos uses. Unpacks in use, this one included, are kept and listed. Next run re-extracts. |
+| `pharos maintenance purge` | The same, handled by the launcher before pharos starts, so with every pharos quit it removes all of them. |
 | `pharos --print-default-config` | Print the canonical `pharos.toml` starter with comments. Pipe to `~/.config/pharos/pharos.toml` to begin customising. |
 | `pharos --print-language-config <id>` | Print one language's resolved registry entry (after `pharos.toml` overlays). Useful for debugging "why isn't my custom binary path being used?". |
 | `pharos --version` / `-V` | Print version and exit. |
@@ -837,7 +838,7 @@ npm update -g pharos-mcp                   # npm channel
 # or direct download from GitHub Releases
 
 # After update:
-pharos --purge-cache                       # clear stale Burrito extract
+pharos --purge-cache                       # reclaim old extracts no session uses
 pharos --doctor                            # warm fresh cache + verify
 ```
 

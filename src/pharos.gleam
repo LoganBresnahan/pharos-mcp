@@ -652,8 +652,13 @@ Flags
                              Doubles as a Burrito-cache warmup —
                              run once after install so the first
                              MCP host spawn is fast.
-  --purge-cache              Remove Burrito's extracted ERTS+BEAM
-                             payload. Next run re-extracts (~1-3s).
+  --purge-cache              Remove pharos's extracted ERTS+BEAM
+                             payloads that no running pharos uses;
+                             ones in use (this one included) are
+                             kept. `pharos maintenance purge` does
+                             the same without starting pharos, so
+                             with every pharos quit it removes all
+                             of them. Next run re-extracts.
                              Does NOT remove the binary itself or
                              your config files.
 

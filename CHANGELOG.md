@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nonexistent hpack directory, a side effect of the ADR-011 app-name
   workaround. A release-time check now fails the build if any boot-script
   path or module is missing.
+- **`PHAROS_INSTALL_DIR` no longer corrupts the stdio stream.** With the
+  override set, Burrito's launcher printed `[i] Install path is being
+  overridden…` lines to stdout ahead of the JSON-RPC frames. The fork now
+  sends every launcher log line to stderr.
+
+### Changed
+
+- **`pharos --purge-cache` only removes extracted runtimes no running
+  pharos uses.** It used to delete every pharos extract, including ones
+  that other open sessions were running from. It now delegates to the
+  launcher's new `maintenance purge`, which follows the same in-use lock
+  as Burrito's own cleanup and reports each extract as removed or kept,
+  with the reason. The running pharos's own extract is always kept. To
+  remove all of them, quit every pharos and run `pharos maintenance purge`.
 
 ## [0.1.4] — 2026-07-10
 

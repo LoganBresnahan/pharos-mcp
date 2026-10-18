@@ -124,9 +124,10 @@ defmodule Pharos.MixProject do
       # launch deletes all semver-older unpacks with no in-use check, and the
       # launcher passed `"-mode embedded"` as one argv element, so the VM ran
       # interactive and lazy-loaded modules from the unpack being deleted.
-      # The fork's one commit (see FORK.md on the branch) boots embedded for
-      # real and skips any unpack whose `.burrito-in-use` flock is held —
-      # the protocol `pharos --purge-cache` follows too.
+      # The fork (see FORK.md on the branch) boots embedded for real, skips
+      # any unpack whose `.burrito-in-use` flock is held, keeps the
+      # wrapper's own log lines off stdout, and adds `maintenance purge`,
+      # which `pharos --purge-cache` delegates to.
       #
       # Still 1.5.x underneath, deliberately: Burrito 1.6.0 raises its
       # required Zig to 0.16.0 (`Burrito.check_zig_version/0`), while our
@@ -138,7 +139,7 @@ defmodule Pharos.MixProject do
       # re-verifying all five cross-compiled targets; that is its own work.
       {:burrito,
        github: "LoganBresnahan/burrito",
-       ref: "e008df96c870b6300eedc4eef6f838bc35503b22",
+       ref: "4407714f192e47c0e3b4794a8f16d8f3fdbe93f4",
        runtime: false}
     ]
   end

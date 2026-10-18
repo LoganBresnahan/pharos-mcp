@@ -18,59 +18,65 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import pharos/config
+import pharos/env
 import pharos/lsp/instance_track
 import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/registry as lsp_registry
 import pharos/version
 
-/// Clear Burrito's extract-cache for pharos. Removes pharos's
-/// extracted release directories (`pharos_erts-<v>_<vsn>`) under
-/// Burrito's install root (`<XDG_DATA_HOME or ~/.local/share>/.burrito/`
-/// on Linux; `~/Library/Application Support/.burrito/` on macOS;
-/// `%LOCALAPPDATA%\.burrito\` on Windows). Other Burrito-packaged
-/// apps' caches (e.g. `next_ls_*`) are explicitly left untouched.
+/// Clear Burrito's extract-cache for pharos (`pharos_erts-<v>_<vsn>`
+/// under the `.burrito` root) by the in-use lock contract of ADR-033:
+/// remove every pharos unpack no running process holds, keep the rest.
+///
+/// Delegates to the Burrito wrapper's `maintenance purge` rather than
+/// deleting from here. The contract needs an exclusive `flock`, which
+/// the BEAM cannot take without a NIF (ruled out for v1.0, ADR-030),
+/// and `flock(1)` is Linux-only; the wrapper's Zig implementation is
+/// the one copy of the contract on every platform. Its stdout (one
+/// `removed <dir>` / `kept <dir>: <why>` line per unpack, then a
+/// summary) is relayed verbatim. This pharos's own unpack is always
+/// among the kept: its wrapper took the shared lock before booting.
 /// Returns the exit code main should propagate.
 pub fn purge_cache() -> Int {
-  let root = burrito_cache_root()
-  let entries = list_pharos_extracts()
-  let total_bytes =
-    list.fold(entries, 0, fn(acc, entry) { acc + dir_size_bytes(entry) })
-
-  case entries {
-    [] -> {
-      io.println("pharos --purge-cache: no pharos extracts under " <> root)
-      0
-    }
-    _ -> {
+  case env.get("__BURRITO_BIN_PATH") {
+    None | Some("") -> {
       io.println(
-        "pharos --purge-cache: removing "
-        <> int.to_string(list.length(entries))
-        <> " pharos extract(s) ("
-        <> mb_str(total_bytes)
-        <> ") from "
-        <> root,
+        "pharos --purge-cache: not running from the installed pharos binary, "
+        <> "so there is no Burrito wrapper to purge with. "
+        <> "Run `pharos maintenance purge` with the installed binary.",
       )
-      let failures =
-        list.fold(entries, 0, fn(acc, entry) {
-          case rm_rf(entry) {
-            Ok(_) -> acc
-            Error(reason) -> {
-              io.println("error: rm -rf " <> entry <> " failed: " <> reason)
-              acc + 1
-            }
-          }
-        })
-      case failures {
-        0 -> {
-          io.println(
-            "Cleared. Next run will re-extract the Burrito payload "
-            <> "(adds ~1-3s to first invocation).",
-          )
-          0
-        }
-        _ -> 2
-      }
+      2
     }
+    Some(bin) ->
+      case run_executable(bin, ["maintenance", "purge"]) {
+        Error(reason) -> {
+          io.println(
+            "pharos --purge-cache: could not run `"
+            <> bin
+            <> " maintenance purge`: "
+            <> reason,
+          )
+          2
+        }
+        Ok(#(status, output)) -> {
+          io.print(output)
+          case env.get("RELEASE_ROOT") {
+            Some(own) if own != "" ->
+              io.println(
+                "This pharos's own unpack ("
+                <> own
+                <> ") is kept while it runs: it holds the in-use lock. "
+                <> "To remove it too, quit every pharos and run "
+                <> "`pharos maintenance purge`.",
+              )
+            _ -> Nil
+          }
+          case status {
+            0 -> 0
+            _ -> 2
+          }
+        }
+      }
   }
 }
 
@@ -474,8 +480,11 @@ fn burrito_cache_root() -> String
 @external(erlang, "pharos_runtime_ffi", "list_pharos_extracts")
 fn list_pharos_extracts() -> List(String)
 
-@external(erlang, "pharos_fs_ffi", "rm_rf")
-fn rm_rf(path: String) -> Result(Nil, String)
+@external(erlang, "pharos_fs_ffi", "run_executable")
+fn run_executable(
+  path: String,
+  args: List(String),
+) -> Result(#(Int, String), String)
 
 @external(erlang, "pharos_fs_ffi", "dir_size_bytes")
 fn dir_size_bytes(path: String) -> Int
