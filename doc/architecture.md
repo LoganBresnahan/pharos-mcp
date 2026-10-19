@@ -53,14 +53,23 @@ drifts, the linked code is canonical.
 │                                                                                  │
 │  ETS registries (out-of-tree, persistent_term globals):                          │
 │    pharos_lsp_proc_subjects        (lang, ws, srv) → lsp_proc Subject            │
-│    pharos_request_workers          mcp_id          → dispatcher pid              │
-│    pharos_inflight                 mcp_id          → (lsp_proc_subj, lsp_id)     │
+│    pharos_request_workers          session|mcp_id  → dispatcher pid              │
+│    pharos_inflight                 session|mcp_id  → (lsp_proc_subj, lsp_id)     │
 │    pharos_diagnostics_cache        uri             → latest Diagnostic[]         │
 │    pharos_log_writer_subject       global          → log writer Subject          │
-│    pharos_session_overrides        (tool, lang)    → bumped timeout_ms           │
+│    pharos_session_overrides        session→(tool,lang) → bumped timeout_ms       │
 │                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+Session context (ADR-034): every dispatcher process binds its
+session's id, cwd, env, Config and language registry in its process
+dictionary ([src/pharos/session_ctx.gleam](../src/pharos/session_ctx.gleam)).
+`config.cached/0` and `registry.cached/0` resolve through it, and the
+two request-keyed tables above qualify the MCP id with the session id,
+because two clients both send id `2`. Direct mode is a single session
+built from the process cwd and env. Processes with no session bound
+(the HTTP transport, boot) see the process-wide Config.
 
 Supervision wiring: [src/pharos/supervisor.gleam](../src/pharos/supervisor.gleam)
 (supervision tree definition), [src/pharos_lsp_dyn_sup.erl](../src/pharos_lsp_dyn_sup.erl)
@@ -238,7 +247,7 @@ condition surfaces when it does.
 | 1 | **Per-tool compile-time `default_timeout_ms`** | `pharos/tools/<tool>.gleam` constant | 30s (60s for `find_references`) | source edit only | Last-resort cap when no other layer overrides it. |
 | 2 | **`[tool_config.<name>] default_timeout_ms`** | TOML | unset | `pharos.toml` | Per-tool global override across all languages. |
 | 3 | **`[tool_config.<name>.<lang>] default_timeout_ms`** | TOML | unset | `pharos.toml` | Per-tool × per-language override (matches workspace's resolved lang id). |
-| 4 | **Session override** | `pharos_session_overrides` ETS | unset | `runtime_set_tool_timeout` MCP tool | LLM-driven runtime bump, survives the session, resets on pharos restart. ADR-021. |
+| 4 | **Session override** | `pharos_session_overrides` persistent_term | unset | `runtime_set_tool_timeout` MCP tool | LLM-driven runtime bump, scoped to the MCP session that set it (ADR-034); lasts until that session disconnects or pharos restarts. ADR-021. |
 | 5 | **Per-call `timeout_ms` arg** | MCP request `params.arguments.timeout_ms` | caller-supplied | every call site | Wins all other layers. The harness uses this for the matrix. |
 | 6 | **`initialize_timeout_ms`** | `ServerConfig` per server | 90s; scala 180s | `pharos.toml` `[[languages.<id>.servers]] initialize_timeout_ms` | LSP `initialize` handshake. Pool's spawner returns `Error(SpawnFailed)` if this fires. |
 | 7 | **`ready_timeout_ms`** | `ServerConfig` per server | 60s (`languages.default_ready_timeout_ms`) | `pharos.toml` | Total spawn-time readiness budget: `$/progress` drain **plus** the ADR-024 probe loop, combined. Renamed from `readiness_timeout_ms` by ADR-024. |
@@ -387,6 +396,7 @@ Tracing the cascade observed in M14 Pass 1 ([doc/m14-test-plan.md](m14-test-plan
 | Tool session orchestrator | [src/pharos/tools/session.gleam](../src/pharos/tools/session.gleam) |
 | Per-tool defaults | `src/pharos/tools/<tool>.gleam` (`default_timeout_ms` const) |
 | Session timeout overrides | [src/pharos/tools/session_overrides.gleam](../src/pharos/tools/session_overrides.gleam) |
+| Per-session context | [src/pharos/session_ctx.gleam](../src/pharos/session_ctx.gleam) |
 | Log subtree | [src/pharos/log/](../src/pharos/log/) |
 | Inflight table | [src/pharos/lsp/inflight.gleam](../src/pharos/lsp/inflight.gleam) |
 | Cancel routing | [src/pharos/mcp/server.gleam](../src/pharos/mcp/server.gleam) `log_cancel_notification` |

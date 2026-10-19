@@ -176,6 +176,12 @@ fn emit(
     Ok(id) -> id
     Error(_) -> ""
   }
+  // ADR-034: a daemon serves many sessions, so stamp which one. Direct
+  // mode's single session needs no stamp and keeps its old lines.
+  let fields = case session_id() {
+    Ok("direct") | Error(_) -> fields
+    Ok(id) -> [#("session", id), ..fields]
+  }
   let log_entry =
     LogEntry(
       timestamp_ms: now_ms(),
@@ -187,6 +193,9 @@ fn emit(
     )
   writer.emit(log_entry)
 }
+
+@external(erlang, "pharos_session_ctx_ffi", "id")
+fn session_id() -> Result(String, Nil)
 
 @external(erlang, "pharos_log_ffi", "iso_timestamp_ms")
 fn now_ms() -> String

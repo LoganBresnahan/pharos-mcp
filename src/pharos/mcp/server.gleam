@@ -30,6 +30,7 @@ import pharos/lsp/proc
 import pharos/lsp/registry
 import pharos/mcp/content_block
 import pharos/mcp/request_workers
+import pharos/session_ctx
 import pharos/tools/apply_workspace_edit
 import pharos/tools/call_hierarchy
 import pharos/tools/code_actions
@@ -191,7 +192,7 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
       )
     cid -> {
       // (1) LSP-side cancel.
-      case inflight.lookup(cid) {
+      case inflight.lookup(session_ctx.scoped(cid)) {
         Error(_) ->
           log.fields_at(
             "pharos/mcp/server",
@@ -212,7 +213,8 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
 
       // (2) MCP-worker-side cancel — kill the stdio dispatcher
       // process so the blocking receive returns immediately.
-      case request_workers.lookup(cid) {
+      let worker_key = session_ctx.scoped(cid)
+      case request_workers.lookup(worker_key) {
         Error(_) -> Nil
         Ok(worker_pid) -> {
           log.fields_at(
@@ -224,7 +226,7 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
           process.send_exit(worker_pid)
           // Worker died mid-execution — its `request_workers.delete`
           // cleanup never ran. Do it here so the table doesn't leak.
-          request_workers.delete(cid)
+          request_workers.delete(worker_key)
         }
       }
     }

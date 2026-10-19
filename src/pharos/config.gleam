@@ -303,24 +303,38 @@ pub fn defaults() -> Config {
 /// and park it in `persistent_term`. Call once at boot. Idempotent —
 /// re-calling replaces the stored value.
 pub fn load() -> Config {
-  let config =
-    defaults()
-    |> overlay_global_toml
-    |> overlay_project_toml
-    |> apply_env
-
+  let config = resolve(cwd(), env.get)
   store_persistent(config)
   config
 }
 
-/// Return the cached Config, falling back to compiled defaults if
-/// `load/0` has not yet run (test harnesses bypassing boot, etc.).
+/// Build the effective Config for a working directory and an env
+/// lookup, without caching it. `load/0` is this over the process's
+/// own cwd and env; a session context (ADR-034) is this over the
+/// session's. Same code either way, so the two cannot drift.
+pub fn resolve(cwd: String, getenv: fn(String) -> Option(String)) -> Config {
+  defaults()
+  |> overlay_global_toml(getenv)
+  |> overlay_project_toml(cwd)
+  |> apply_env(getenv)
+}
+
+/// Return the calling process's session Config when one is bound
+/// (ADR-034), else the Config stored by `load/0`, else compiled
+/// defaults (test harnesses bypassing boot, etc.).
 pub fn cached() -> Config {
-  case load_persistent() {
+  case session_config() {
     Ok(config) -> config
-    Error(_) -> defaults()
+    Error(_) ->
+      case load_persistent() {
+        Ok(config) -> config
+        Error(_) -> defaults()
+      }
   }
 }
+
+@external(erlang, "pharos_session_ctx_ffi", "config")
+fn session_config() -> Result(Config, Nil)
 
 @external(erlang, "pharos_runtime_ffi", "config_store")
 fn store_persistent(config: Config) -> Nil
@@ -421,11 +435,14 @@ fn is_default_essential(name: String) -> Bool {
 
 // -- Global TOML overlay --------------------------------------------------
 
-fn overlay_global_toml(config: Config) -> Config {
-  case env.get("PHAROS_CONFIG_FILE") {
+fn overlay_global_toml(
+  config: Config,
+  getenv: fn(String) -> Option(String),
+) -> Config {
+  case getenv("PHAROS_CONFIG_FILE") {
     Some(path) if path != "" -> overlay_path(config, path, "PHAROS_CONFIG_FILE")
     _ ->
-      case xdg_config_path() {
+      case xdg_config_path(getenv) {
         None -> config
         Some(path) ->
           case path_exists(path) {
@@ -436,11 +453,11 @@ fn overlay_global_toml(config: Config) -> Config {
   }
 }
 
-fn xdg_config_path() -> Option(String) {
-  case env.get("XDG_CONFIG_HOME") {
+fn xdg_config_path(getenv: fn(String) -> Option(String)) -> Option(String) {
+  case getenv("XDG_CONFIG_HOME") {
     Some(xdg) if xdg != "" -> Some(xdg <> "/pharos/pharos.toml")
     _ ->
-      case env.get("HOME") {
+      case getenv("HOME") {
         Some(home) if home != "" -> Some(home <> "/.config/pharos/pharos.toml")
         _ -> None
       }
@@ -449,8 +466,8 @@ fn xdg_config_path() -> Option(String) {
 
 // -- Project TOML overlay -------------------------------------------------
 
-fn overlay_project_toml(config: Config) -> Config {
-  case find_project_toml(cwd()) {
+fn overlay_project_toml(config: Config, cwd: String) -> Config {
+  case find_project_toml(cwd) {
     None -> config
     Some(path) -> overlay_path(config, path, "project config")
   }
@@ -975,19 +992,22 @@ fn parse_transport(raw: String) -> Option(Transport) {
 
 // -- Env-var overlay ------------------------------------------------------
 
-fn apply_env(config: Config) -> Config {
+fn apply_env(config: Config, getenv: fn(String) -> Option(String)) -> Config {
   config
-  |> env_transport
-  |> env_tools
-  |> env_http
-  |> env_log
-  |> env_lsp
-  |> env_runtime
-  |> env_bridge
+  |> env_transport(getenv)
+  |> env_tools(getenv)
+  |> env_http(getenv)
+  |> env_log(getenv)
+  |> env_lsp(getenv)
+  |> env_runtime(getenv)
+  |> env_bridge(getenv)
 }
 
-fn env_transport(config: Config) -> Config {
-  case env.get("PHAROS_TRANSPORT") {
+fn env_transport(
+  config: Config,
+  getenv: fn(String) -> Option(String),
+) -> Config {
+  case getenv("PHAROS_TRANSPORT") {
     None -> config
     Some(raw) ->
       case parse_transport(raw) {
@@ -1005,8 +1025,8 @@ fn env_transport(config: Config) -> Config {
   }
 }
 
-fn env_tools(config: Config) -> Config {
-  case env.get("PHAROS_TOOLS") {
+fn env_tools(config: Config, getenv: fn(String) -> Option(String)) -> Config {
+  case getenv("PHAROS_TOOLS") {
     None -> config
     Some(raw) ->
       case string.trim(raw) {
@@ -1016,8 +1036,8 @@ fn env_tools(config: Config) -> Config {
   }
 }
 
-fn env_http(config: Config) -> Config {
-  let port = case env.get("PHAROS_HTTP_PORT") {
+fn env_http(config: Config, getenv: fn(String) -> Option(String)) -> Config {
+  let port = case getenv("PHAROS_HTTP_PORT") {
     None -> config.http.port
     Some(raw) ->
       case int.parse(string.trim(raw)) {
@@ -1036,7 +1056,7 @@ fn env_http(config: Config) -> Config {
         }
       }
   }
-  let bind = case env.get("PHAROS_HTTP_BIND") {
+  let bind = case getenv("PHAROS_HTTP_BIND") {
     None -> config.http.bind
     Some(raw) ->
       case string.trim(raw) {
@@ -1044,7 +1064,7 @@ fn env_http(config: Config) -> Config {
         b -> b
       }
   }
-  let port_file = case env.get("PHAROS_HTTP_PORT_FILE") {
+  let port_file = case getenv("PHAROS_HTTP_PORT_FILE") {
     None -> config.http.port_file
     Some(raw) ->
       case raw {
@@ -1058,8 +1078,8 @@ fn env_http(config: Config) -> Config {
   )
 }
 
-fn env_log(config: Config) -> Config {
-  let filter_spec = case env.get("PHAROS_LOG") {
+fn env_log(config: Config, getenv: fn(String) -> Option(String)) -> Config {
+  let filter_spec = case getenv("PHAROS_LOG") {
     None -> config.log.filter_spec
     Some(raw) -> raw
   }
@@ -1069,7 +1089,7 @@ fn env_log(config: Config) -> Config {
   // the trigger) used to leave a single `PHAROS_LOG_FILE` path
   // shared across instances, which clobbered. The auto-default
   // produces one readable file per pharos PID per launch.
-  let file = case env.get("PHAROS_LOG_FILE") {
+  let file = case getenv("PHAROS_LOG_FILE") {
     Some("") -> None
     Some(path) -> Some(path)
     None ->
@@ -1078,9 +1098,10 @@ fn env_log(config: Config) -> Config {
         None -> log_rotate.default_session_log_path()
       }
   }
-  let ring_enabled = read_bool_env("PHAROS_LOG_RING", config.log.ring_enabled)
+  let ring_enabled =
+    read_bool_env(getenv, "PHAROS_LOG_RING", config.log.ring_enabled)
   let stderr_enabled =
-    read_bool_env("PHAROS_LOG_STDERR", config.log.stderr_enabled)
+    read_bool_env(getenv, "PHAROS_LOG_STDERR", config.log.stderr_enabled)
   Config(
     ..config,
     log: LogConfig(
@@ -1094,22 +1115,23 @@ fn env_log(config: Config) -> Config {
   )
 }
 
-fn env_lsp(config: Config) -> Config {
-  let trace = read_bool_env("PHAROS_TRACE_LSP", config.lsp.trace)
+fn env_lsp(config: Config, getenv: fn(String) -> Option(String)) -> Config {
+  let trace = read_bool_env(getenv, "PHAROS_TRACE_LSP", config.lsp.trace)
   Config(..config, lsp: LspConfig(trace: trace))
 }
 
-fn env_runtime(config: Config) -> Config {
+fn env_runtime(config: Config, getenv: fn(String) -> Option(String)) -> Config {
   let enabled =
     read_bool_env(
+      getenv,
       "PHAROS_RUNTIME_TRACE_ENABLED",
       config.runtime.trace_calls_enabled,
     )
   Config(..config, runtime: RuntimeConfig(trace_calls_enabled: enabled))
 }
 
-fn env_bridge(config: Config) -> Config {
-  case env.get("PHAROS_BRIDGE_PORT") {
+fn env_bridge(config: Config, getenv: fn(String) -> Option(String)) -> Config {
+  case getenv("PHAROS_BRIDGE_PORT") {
     None -> config
     Some(raw) ->
       case int.parse(string.trim(raw)) {
@@ -1119,8 +1141,12 @@ fn env_bridge(config: Config) -> Config {
   }
 }
 
-fn read_bool_env(name: String, default: Bool) -> Bool {
-  case env.get(name) {
+fn read_bool_env(
+  getenv: fn(String) -> Option(String),
+  name: String,
+  default: Bool,
+) -> Bool {
+  case getenv(name) {
     None -> default
     Some(raw) ->
       case string.lowercase(string.trim(raw)) {

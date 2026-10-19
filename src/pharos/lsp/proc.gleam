@@ -34,6 +34,7 @@ import pharos/lsp/inflight
 import pharos/lsp/lifecycle
 import pharos/lsp/port
 import pharos/lsp/server_request_handlers.{type Handler}
+import pharos/session_ctx
 
 pub opaque type Proc {
   Proc(subject: Subject(Msg))
@@ -393,11 +394,13 @@ pub fn request_raw(
 }
 
 /// Read the calling process's correlation id (mcp request id) from
-/// the process dictionary. Empty string when no MCP context is set
-/// (boot-time calls, smoke tests, etc.).
+/// the process dictionary, qualified with its session (ADR-034) so
+/// the inflight table never confuses two clients' equal ids. Empty
+/// string when no MCP context is set (boot-time calls, smoke tests,
+/// etc.).
 fn current_cid() -> String {
   case cid_get() {
-    Ok(id) -> id
+    Ok(id) -> session_ctx.scoped(id)
     Error(_) -> ""
   }
 }

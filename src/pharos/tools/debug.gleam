@@ -1103,8 +1103,8 @@ fn runtime_set_tool_timeout_definition() -> Json {
       "description",
       json.string(
         "Set a session-scoped `default_timeout_ms` for one MCP tool, "
-        <> "optionally narrowed to one language. Survives until "
-        <> "pharos restarts; takes precedence over `[tool_config.*]` "
+        <> "optionally narrowed to one language. Lasts until this "
+        <> "session ends; takes precedence over `[tool_config.*]` "
         <> "in pharos.toml. Use when an LSP timeout suggests the "
         <> "default is too tight and you want every subsequent call "
         <> "in this session to inherit the bump without passing "

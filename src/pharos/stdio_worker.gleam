@@ -32,6 +32,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/mcp/request_workers.{type WriterMsg, WorkerDone, WriteResponse}
 import pharos/mcp/server
 import pharos/mcp/stdio
+import pharos/session_ctx.{type SessionCtx}
 
 pub type Worker {
   Worker(subject: Subject(Msg))
@@ -58,6 +59,9 @@ pub opaque type Msg {
 type State {
   State(
     pool: Pool,
+    /// The one session this worker serves (ADR-034). Direct mode
+    /// builds it from the process cwd and env.
+    session: SessionCtx,
     self: Subject(Msg),
     /// Subject the dispatcher processes send their replies to. The
     /// stdio_worker actor owns this Subject's mailbox; selector
@@ -96,6 +100,7 @@ pub fn start_supervised() -> Result(
         let state =
           State(
             pool: pool_handle,
+            session: session_ctx.direct(),
             self: self,
             writer: writer,
             inflight: 0,
@@ -257,11 +262,14 @@ fn init_stop() -> Nil
 fn dispatch_line(state: State, body: String) -> Nil {
   let mcp_id = peek_mcp_id(body)
   let pool_handle = state.pool
+  let session = state.session
   let writer = state.writer
   let _pid =
     process.spawn_unlinked(fn() {
+      session_ctx.bind(session)
+      let worker_key = session_ctx.scoped(mcp_id)
       let self_pid = process.self()
-      request_workers.insert(mcp_id, self_pid)
+      request_workers.insert(worker_key, self_pid)
       let result = server.handle_line(pool_handle, body)
       case result {
         server.Reply(json) ->
@@ -270,7 +278,7 @@ fn dispatch_line(state: State, body: String) -> Nil {
           request_workers.send_reply(writer, WriteResponse(json))
         server.NoReply -> request_workers.send_reply(writer, WorkerDone)
       }
-      request_workers.delete(mcp_id)
+      request_workers.delete(worker_key)
     })
   Nil
 }

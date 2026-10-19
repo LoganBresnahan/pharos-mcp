@@ -6,7 +6,9 @@
 ////   - user-type memories live at `~/.pharos/memories/user/`
 ////     (per-user, NOT committed to repo)
 ////   - project/feedback/reference memories live at `.pharos/memories/`
-////     under the project root (committed)
+////     under the session's working directory (committed). The
+////     session's, not the process's: a shared daemon (ADR-034) has
+////     one process cwd for every session.
 ////
 //// Both roots honor env-var overrides for test/dogfood isolation:
 ////   PHAROS_MEMORY_ROOT       — project layer override
@@ -21,6 +23,7 @@ import gleam/order
 import gleam/result
 import gleam/set
 import gleam/string
+import pharos/session_ctx
 import pharos/tools/memory_frontmatter.{type Frontmatter, Frontmatter}
 
 pub type MemoryEntry {
@@ -387,14 +390,14 @@ fn layer_root(layer: String) -> String {
 }
 
 fn project_root() -> String {
-  case getenv("PHAROS_MEMORY_ROOT") {
+  case session_ctx.getenv("PHAROS_MEMORY_ROOT") {
     Some(p) -> p
-    None -> ".pharos/memories"
+    None -> session_ctx.cwd() <> "/.pharos/memories"
   }
 }
 
 fn user_root() -> String {
-  case getenv("PHAROS_USER_MEMORY_ROOT") {
+  case session_ctx.getenv("PHAROS_USER_MEMORY_ROOT") {
     Some(p) -> p
     None -> home_dir_ffi() <> "/.pharos/memories"
   }
@@ -659,15 +662,6 @@ fn is_alnum(g: String) -> Bool {
   }
 }
 
-// -- env ----------------------------------------------------------------
-
-fn getenv(key: String) -> Option(String) {
-  case getenv_ffi(key) {
-    Ok(v) -> Some(v)
-    Error(_) -> None
-  }
-}
-
 // -- FFI ----------------------------------------------------------------
 
 @external(erlang, "pharos_fs_ffi", "read_file")
@@ -693,9 +687,6 @@ fn is_regular_file_ffi(path: String) -> Bool
 
 @external(erlang, "pharos_fs_ffi", "home_dir")
 fn home_dir_ffi() -> String
-
-@external(erlang, "pharos_fs_ffi", "getenv")
-fn getenv_ffi(key: String) -> Result(String, Nil)
 
 @external(erlang, "pharos_fs_ffi", "days_since_iso8601")
 fn days_since_iso8601_ffi(iso: String) -> Int

@@ -51,33 +51,49 @@ import pharos/lsp/languages.{
 /// boot. Subsequent lookups via `for_uri/1` do not re-parse.
 pub fn init() -> Nil {
   let cfg = config.cached()
-  let registry = case dict.size(cfg.languages) {
-    0 -> languages.default_registry()
-    _ -> {
+  case dict.size(cfg.languages) {
+    0 -> Nil
+    n ->
       log.fields_at(
         "pharos/lsp/registry",
         log_entry.Info,
         "applied language override(s) from pharos config",
-        [#("count", int_str(dict.size(cfg.languages)))],
+        [#("count", int_str(n))],
       )
-      merge_overrides(languages.default_registry(), cfg.languages)
-    }
   }
-  store(registry)
+  store(build(cfg))
   Nil
+}
+
+/// The effective registry for a Config: bundled defaults with the
+/// Config's `[languages.*]` overrides merged over them. Pure; a
+/// session context (ADR-034) builds its own from its own Config.
+pub fn build(cfg: config.Config) -> Dict(String, LanguageConfig) {
+  case dict.size(cfg.languages) {
+    0 -> languages.default_registry()
+    _ -> merge_overrides(languages.default_registry(), cfg.languages)
+  }
 }
 
 @external(erlang, "erlang", "integer_to_binary")
 fn int_str(n: Int) -> String
 
-/// Read the registry stored by `init/0`. Falls back to bundled
+/// The calling process's session registry when one is bound
+/// (ADR-034), else the registry stored by `init/0`, else bundled
 /// defaults if `init` was not yet called.
 pub fn cached() -> Dict(String, LanguageConfig) {
-  case load() {
+  case session_registry() {
     Ok(registry) -> registry
-    Error(_) -> languages.default_registry()
+    Error(_) ->
+      case load() {
+        Ok(registry) -> registry
+        Error(_) -> languages.default_registry()
+      }
   }
 }
+
+@external(erlang, "pharos_session_ctx_ffi", "registry")
+fn session_registry() -> Result(Dict(String, LanguageConfig), Nil)
 
 /// Resolve a file URI through the cached registry.
 pub fn for_uri(uri: String) -> Result(LanguageConfig, LookupError) {
