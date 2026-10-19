@@ -8,7 +8,8 @@ name: release
 #                       of the tarball from file://.
 #   2. publish        — only for a `v*` tag: a GitHub release (marked latest)
 #                       with the tarballs, SHA256SUMS and install.sh, then the
-#                       four npm platform packages and pharos-mcp.
+#                       four npm platform packages, then (once npm can install
+#                       all four) pharos-mcp.
 #   3. smoke          — only for a `v*` tag: smoke.yml installs the published
 #                       release from its public URLs on fresh runners.
 #
@@ -202,16 +203,51 @@ jobs:
             cp LICENSE "npm/$pkg/LICENSE"
           done
 
-      - name: Publish the platform packages, then pharos-mcp
+      - name: Publish the platform packages
         run: |
           set -e
           version=${GITHUB_REF_NAME#v}
           tag=latest
           if [[ "$version" == *-* ]]; then tag=next; fi
-          for pkg in @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64 pharos-mcp; do
+          for pkg in @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
             echo "==> $pkg $version ($tag)"
             (cd "npm/$pkg" && npm publish --provenance --access public --tag "$tag")
           done
+
+      # pharos-mcp only once npm can install every platform package. npm
+      # install reads the abbreviated install document, which the CDN
+      # caches apart from the full one and serves late: right after 0.2.0's
+      # publish, `npm i -g pharos-mcp` resolved the main package, then
+      # silently skipped its optional platform package (still 404 there),
+      # and the postinstall failed. Publishing the main package last, once
+      # every platform version is installable, closes most of that window
+      # for users.
+      - name: Wait until npm can install every platform package
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          for i in $(seq 1 60); do
+            missing=
+            for plat in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+              curl -fsS -H 'Accept: application/vnd.npm.install-v1+json' \
+                "https://registry.npmjs.org/@pharos-mcp%2f$plat" 2>/dev/null \
+                | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin)["versions"] else 1)' "$version" \
+                || missing="$missing $plat"
+            done
+            [ -z "$missing" ] && { echo "every platform package at $version is installable"; exit 0; }
+            echo "not installable yet:$missing (try $i)"
+            sleep 15
+          done
+          echo "platform packages still not installable after 15 min:$missing" >&2
+          exit 1
+
+      - name: Publish pharos-mcp
+        run: |
+          set -e
+          version=${GITHUB_REF_NAME#v}
+          tag=latest
+          if [[ "$version" == *-* ]]; then tag=next; fi
+          echo "==> pharos-mcp $version ($tag)"
+          (cd npm/pharos-mcp && npm publish --provenance --access public --tag "$tag")
 
   smoke:
     needs: publish
