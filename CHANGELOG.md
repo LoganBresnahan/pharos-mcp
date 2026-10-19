@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0-rc.1] — 2026-10-19
+## [0.2.0] — 2026-10-19
+
+0.2.0-rc.1, the same code, was its release candidate.
 
 pharos 0.2 changes how it runs and how it ships. MCP client configs keep
 working unchanged: the command is still `pharos`.
