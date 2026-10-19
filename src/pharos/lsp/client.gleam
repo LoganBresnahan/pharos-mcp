@@ -76,7 +76,19 @@ pub fn start(
   cwd: String,
   server_id: String,
 ) -> Result(Client, Error) {
-  case port.spawn(command, args, cwd) {
+  start_with_env(command, args, cwd, server_id, [])
+}
+
+/// `start/4` with the environment the LSP runs under (ADR-034); see
+/// `port.spawn_with_env/4`. An empty `env` inherits the BEAM's.
+pub fn start_with_env(
+  command: String,
+  args: List(String),
+  cwd: String,
+  server_id: String,
+  env: List(#(String, String)),
+) -> Result(Client, Error) {
+  case port.spawn_with_env(command, args, cwd, env) {
     Ok(p) -> {
       // ADR-030 S3: drop a tracking file under
       // `~/.local/share/pharos/instances/<pharos-pid>/` so the

@@ -20,7 +20,7 @@
 -module(pharos_lsp_dyn_sup).
 -behaviour(supervisor).
 
--export([start_link/0, start_child/9, terminate_child/1]).
+-export([start_link/0, start_child/11, terminate_child/1]).
 -export([init/1]).
 
 -define(NAME, pharos_lsp_dyn_sup).
@@ -47,11 +47,15 @@ start_link() ->
 %% abnormal exit + automatic restart calls start_link_supervised
 %% with the same (Language, Workspace) — overwriting the bridge
 %% row instead of leaking.
-start_child(Language, Workspace, ServerId, Cmd, Args, InitParams, TimeoutMs,
-            ReadinessToken, ReadinessTimeoutMs) ->
+%%
+%% `ServerKey` keys the bridge row (the server id plus any ADR-034
+%% spawn-fingerprint variant); `ServerId` is the registry id the
+%% client reports. `Env` is the LSP's environment, `[]` to inherit.
+start_child(Language, Workspace, ServerKey, ServerId, Cmd, Args, Env,
+            InitParams, TimeoutMs, ReadinessToken, ReadinessTimeoutMs) ->
     case supervisor:start_child(?NAME,
-            [Language, Workspace, ServerId, Cmd, Args, InitParams, TimeoutMs,
-             ReadinessToken, ReadinessTimeoutMs]) of
+            [Language, Workspace, ServerKey, ServerId, Cmd, Args, Env,
+             InitParams, TimeoutMs, ReadinessToken, ReadinessTimeoutMs]) of
         {ok, Pid} -> {ok, Pid};
         {ok, Pid, _Info} -> {ok, Pid};
         {error, {already_started, Pid}} -> {ok, Pid};

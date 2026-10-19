@@ -16,6 +16,8 @@
 //// params and rendering the response.
 
 import gleam/bit_array
+import gleam/crypto
+import gleam/dict
 import gleam/erlang/process
 import gleam/int
 import gleam/json
@@ -33,6 +35,7 @@ import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/registry
+import pharos/session_ctx
 import pharos/version
 import pharos/workspace_root
 
@@ -981,23 +984,76 @@ fn get_lsp_for_server(
 /// entry. Exposed so the boot-time warmup path
 /// (`pharos.warm_from_env`) can reuse the exact wiring tool calls
 /// use.
+///
+/// ADR-034: the LSP runs with the calling session's environment, and
+/// the spec carries a spawn fingerprint so sessions only share an
+/// LSP when they would have started the same one.
 pub fn build_spawn_spec(
   workspace: String,
   config: LanguageConfig,
   server: languages.ServerConfig,
 ) -> pool.SpawnSpec {
+  let env = dict.to_list(session_ctx.env())
+  let init_params = build_initialize_params(workspace, config, server)
   pool.SpawnSpec(
     server_id: server.id,
     command: server.command,
     args: server.args,
-    init_params: build_initialize_params(workspace, config, server),
+    init_params: init_params,
     workspace_configuration: server.workspace_configuration,
     readiness_token: server.readiness_token,
     ready_timeout_ms: server_ready_timeout_ms(server),
     initialize_timeout_ms: server_initialize_timeout_ms(server),
     warm_probe: server.warm_probe,
+    variant: spawn_fingerprint(config, server, init_params, env),
+    env: env,
   )
 }
+
+/// ADR-034 spawn fingerprint, 8 hex digits: the binary the command
+/// resolves to on the session's `PATH`, its args, the initialize
+/// params (initialization options included), the pushed workspace
+/// configuration, and the values of the language's `env_keys`.
+/// `PATH` itself stays out: the resolved binary already captures
+/// what it decided, and sessions' `PATH`s differ constantly.
+pub fn spawn_fingerprint(
+  config: LanguageConfig,
+  server: languages.ServerConfig,
+  init_params: json.Json,
+  env: List(#(String, String)),
+) -> String {
+  let workspace_configuration = case server.workspace_configuration {
+    option.None -> "null"
+    option.Some(settings) ->
+      settings |> dict.to_list |> json.object |> json.to_string
+  }
+  let env_values =
+    list.map(config.env_keys, fn(key) {
+      case list.key_find(env, key) {
+        Ok(value) -> key <> "=" <> value
+        Error(_) -> key <> " unset"
+      }
+    })
+  let material =
+    [
+      resolve_command(server.command, env),
+      string.join(server.args, "\u{0}"),
+      json.to_string(init_params),
+      workspace_configuration,
+      ..env_values
+    ]
+    |> string.join("\u{1}")
+  crypto.hash(crypto.Sha256, <<material:utf8>>)
+  |> bit_array.base16_encode
+  |> string.lowercase
+  |> string.slice(0, 8)
+}
+
+/// The absolute path `command` resolves to on `env`'s `PATH` (the
+/// same lookup the spawn does), or `command` unchanged when it does
+/// not resolve.
+@external(erlang, "pharos_lsp_port_ffi", "resolve_on_path")
+fn resolve_command(command: String, env: List(#(String, String))) -> String
 
 fn map_get_error(err: pool.GetError) -> SessionError {
   case err {
@@ -1422,6 +1478,12 @@ fn ensure_doc_opened_for_server_id(
   file_uri: String,
   server_id: String,
 ) -> Nil {
+  // The pool caches under the spec's server key (ADR-034 variant
+  // included), so didOpen must name the same one.
+  let server_id = case list.find(config.servers, fn(s) { s.id == server_id }) {
+    Ok(server) -> pool.server_key(build_spawn_spec(workspace, config, server))
+    Error(_) -> server_id
+  }
   case workspace_root.uri_to_path(file_uri) {
     Error(_) -> Nil
     Ok(path) ->

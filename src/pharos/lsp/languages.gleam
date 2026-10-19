@@ -297,6 +297,12 @@ pub type LanguageConfig {
     /// to dispatch the per-scheme LSP method. User-overridable from
     /// toml is post-v1.0 — defaults baked here for now.
     custom_uri_schemes: Dict(String, CustomUriScheme),
+    /// ADR-034. Environment variables that change this language's
+    /// LSP answers. Their values join the spawn fingerprint, so two
+    /// sessions sharing a root share an LSP only when they agree on
+    /// them; `PATH` is left out because the resolved binary path
+    /// already captures what it decided. Replace-not-merge from TOML.
+    env_keys: List(String),
   )
 }
 
@@ -469,6 +475,7 @@ fn rust() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: ["RUSTUP_TOOLCHAIN", "CARGO_HOME", "CARGO_TARGET_DIR"],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -501,6 +508,7 @@ fn go() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: ["GOFLAGS", "GOWORK", "GOPATH", "GOROOT"],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -561,6 +569,7 @@ fn typescript() -> LanguageConfig {
         warm_probe: ProbeNone,
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -633,6 +642,7 @@ fn elixir() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -665,6 +675,7 @@ fn ruby() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -694,6 +705,7 @@ fn zig() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -730,6 +742,7 @@ fn cpp() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -776,6 +789,7 @@ fn scala() -> LanguageConfig {
         warm_probe: ProbeNone,
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -808,6 +822,7 @@ fn clojure() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -841,6 +856,7 @@ fn haskell() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -876,6 +892,7 @@ fn perl() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -908,6 +925,7 @@ fn html() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -937,6 +955,7 @@ fn css() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -968,6 +987,7 @@ fn json_lang() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -997,6 +1017,7 @@ fn yaml() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1026,6 +1047,7 @@ fn markdown() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1057,6 +1079,7 @@ fn terraform() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1097,6 +1120,7 @@ fn erlang() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1159,6 +1183,7 @@ fn java() -> LanguageConfig {
     // session.gleam also uses this map to whitelist `jdt://` for
     // passthrough to existing navigation tools (hover,
     // find_references, goto_definition).
+    env_keys: ["JAVA_HOME"],
     custom_uri_schemes: dict.from_list([
       #(
         "jdt",
@@ -1206,6 +1231,7 @@ fn gleam() -> LanguageConfig {
         warm_probe: ProbeNone,
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1240,6 +1266,7 @@ fn lua() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1275,6 +1302,7 @@ fn bash() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1335,6 +1363,7 @@ fn python() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
       ),
     ],
+    env_keys: ["VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH"],
     custom_uri_schemes: dict.new(),
   )
 }

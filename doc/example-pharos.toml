@@ -163,6 +163,18 @@
 # [languages.typescript]
 # vendor_segments = ["/node_modules/"]
 #
+# Environment variables that change an LSP's answers (ADR-034). When
+# several MCP sessions share one pharos daemon, two sessions on the
+# same root share one LSP only if they agree on these, resolve the
+# same binary on their PATH, and use the same server config. An LSP
+# runs with the env of the session that started it. Replaces the
+# bundled list (python: VIRTUAL_ENV, CONDA_PREFIX, PYTHONPATH; java:
+# JAVA_HOME; go: GOFLAGS, GOWORK, GOPATH, GOROOT; rust:
+# RUSTUP_TOOLCHAIN, CARGO_HOME, CARGO_TARGET_DIR; others: none).
+#
+# [languages.typescript]
+# env_keys = ["NODE_OPTIONS"]
+#
 # 3) JSON-string overrides for the deep-nested fields.
 #
 # `initialization_options_json` and `workspace_configuration_json`

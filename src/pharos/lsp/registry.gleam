@@ -192,6 +192,7 @@ fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
     // ADR-029: user-defined language entries get no custom URI
     // schemes by default. Adding them via toml is deferred post-v1.0.
     custom_uri_schemes: dict.new(),
+    env_keys: option.unwrap(override.env_keys, []),
   )
 }
 
@@ -269,6 +270,8 @@ fn merge_one(
       default.custom_uri_schemes,
       override.custom_uri_schemes,
     ),
+    // ADR-034. Replace-not-merge, like `root_markers`.
+    env_keys: option.unwrap(override.env_keys, default.env_keys),
   )
 }
 

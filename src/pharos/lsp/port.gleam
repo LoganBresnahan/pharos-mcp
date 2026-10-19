@@ -45,11 +45,24 @@ pub type SendError {
 /// directory. The child inherits stdio; we read stdout in raw binary
 /// mode (no line discipline — the framing parser handles message
 /// boundaries).
-@external(erlang, "pharos_lsp_port_ffi", "spawn")
 pub fn spawn(
   command: String,
   args: List(String),
   cwd: String,
+) -> Result(Port, SpawnError) {
+  spawn_with_env(command, args, cwd, [])
+}
+
+/// `spawn/3` with an explicit environment (ADR-034): the child gets
+/// exactly `env`, with every variable the BEAM has but `env` lacks
+/// unset, and a bare `command` is resolved on `env`'s `PATH`. An
+/// empty `env` inherits the BEAM's environment unchanged.
+@external(erlang, "pharos_lsp_port_ffi", "spawn")
+pub fn spawn_with_env(
+  command: String,
+  args: List(String),
+  cwd: String,
+  env: List(#(String, String)),
 ) -> Result(Port, SpawnError)
 
 /// Write raw bytes to the subprocess's stdin. The body should already

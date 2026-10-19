@@ -121,6 +121,7 @@ type State {
 pub fn start(
   command: String,
   args: List(String),
+  env: List(#(String, String)),
   workspace: String,
   server_id: String,
   init_params: Json,
@@ -134,7 +135,7 @@ pub fn start(
   // transfer that, in dogfood, raced with gopls's unsolicited
   // post-initialize messages and starved its inbound queue.
   let initialise = fn(self) {
-    case client.start(command, args, workspace, server_id) {
+    case client.start_with_env(command, args, workspace, server_id, env) {
       Error(e) -> Error("client.start failed: " <> describe_client_error(e))
       Ok(c) ->
         case lifecycle.initialize(c, 0, init_params, initialize_timeout_ms) {
@@ -209,12 +210,19 @@ pub fn start(
 /// restart the same args are passed back here, so the ETS row is
 /// overwritten with the new Subject — avoiding the duplicate-spawn
 /// race that a Pid-keyed bridge would have.
+///
+/// `server_key` keys the bridge row and is the server id the pool
+/// caches under: the registry `server_id` plus, in a shared daemon,
+/// the spawn-fingerprint variant (ADR-034). `server_id` stays the
+/// registry id, because diagnostics are cached under it.
 pub fn start_link_supervised(
   language: String,
   workspace: String,
+  server_key: String,
   server_id: String,
   command: String,
   args: List(String),
+  env: List(#(String, String)),
   init_params: Json,
   initialize_timeout_ms: Int,
   readiness_token: Option(String),
@@ -224,6 +232,7 @@ pub fn start_link_supervised(
     start(
       command,
       args,
+      env,
       workspace,
       server_id,
       init_params,
@@ -236,7 +245,7 @@ pub fn start_link_supervised(
     Ok(handle) -> {
       let Proc(subject) = handle
       let p = pid(handle)
-      lsp_proc_subjects_insert(language, workspace, server_id, subject)
+      lsp_proc_subjects_insert(language, workspace, server_key, subject)
       Ok(p)
     }
   }

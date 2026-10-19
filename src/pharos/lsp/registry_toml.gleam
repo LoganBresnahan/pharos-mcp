@@ -46,6 +46,7 @@ pub fn render_language(config: LanguageConfig) -> String {
   let caches =
     "dependency_cache_fragments = "
     <> render_string_list(config.dependency_cache_fragments)
+  let env_keys = "env_keys = " <> render_string_list(config.env_keys)
   let promotion_comment = case config.root_promotion {
     languages.NoPromotion ->
       "# root_promotion is locked to NoPromotion (not user-overridable)"
@@ -53,7 +54,7 @@ pub fn render_language(config: LanguageConfig) -> String {
       "# root_promotion is locked to CargoWorkspacePromotion (not user-overridable; ADR-015)"
   }
   let lang_block =
-    [header, extensions, markers, vendors, caches, promotion_comment]
+    [header, extensions, markers, vendors, caches, env_keys, promotion_comment]
     |> string.join("\n")
 
   let server_blocks =

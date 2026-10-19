@@ -162,6 +162,9 @@ pub type LanguageOverride {
     /// matching semantics each one carries.
     vendor_segments: Option(List(String)),
     dependency_cache_fragments: Option(List(String)),
+    /// ADR-034. Env vars whose values split LSP sharing between
+    /// sessions. Replaces the bundled list.
+    env_keys: Option(List(String)),
     diagnostics_mode: Option(String),
     readiness_token: Option(String),
     servers: Option(List(ServerOverride)),
@@ -826,6 +829,7 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       value,
       "dependency_cache_fragments",
     ),
+    env_keys: decode_optional_string_list(value, "env_keys"),
     diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
     readiness_token: decode_optional_string(value, "readiness_token"),
     servers: decode_optional_servers_list(value),

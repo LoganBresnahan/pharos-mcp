@@ -74,6 +74,15 @@ pub fn cwd() -> String {
   }
 }
 
+/// The calling process's session env, or the process env when no
+/// session is bound.
+pub fn env() -> Dict(String, String) {
+  case env_ffi() {
+    Ok(session_env) -> session_env
+    Error(_) -> os_env()
+  }
+}
+
 /// Look `name` up in the calling process's session env, or in the
 /// process env when no session is bound.
 pub fn getenv(name: String) -> Option(String) {

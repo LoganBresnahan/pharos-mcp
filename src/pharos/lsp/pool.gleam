@@ -44,6 +44,7 @@ import gleam/option
 import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
+import gleam/string
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
@@ -97,7 +98,26 @@ pub type SpawnSpec {
     /// `ProbeWorkspaceSymbol("")` covers nearly every bundled LSP;
     /// per-server overrides land in `languages.gleam`.
     warm_probe: WarmProbe,
+    /// ADR-034 spawn fingerprint: a digest of the resolved binary,
+    /// the effective server config and the language's `env_keys`
+    /// values. Sessions whose specs agree share one LSP; any
+    /// difference gets its own, exactly as a second root would. `""`
+    /// keys by `server_id` alone.
+    variant: String,
+    /// The LSP's environment: that of the session that starts it.
+    /// `[]` inherits the BEAM's.
+    env: List(#(String, String)),
   )
+}
+
+/// The server component of a spec's cache key: `server_id`, plus
+/// `@<variant>` when the spec carries a spawn fingerprint.
+/// `runtime_kill_lsp` accepts the bare `server_id` for any variant.
+pub fn server_key(spec: SpawnSpec) -> String {
+  case spec.variant {
+    "" -> spec.server_id
+    variant -> spec.server_id <> "@" <> variant
+  }
 }
 
 /// Per-LSP spawn-time state (ADR-024). Tracked per cache key in
@@ -420,8 +440,8 @@ fn process_reason_as_dynamic(reason: process.ExitReason) -> dynamic.Dynamic {
 }
 
 /// Fetch a `Proc` for the given language and workspace, spawning a
-/// fresh LSP if none is cached. `spec.server_id` becomes part of the
-/// cache key.
+/// fresh LSP if none is cached. `server_key(spec)` (the server id plus
+/// any spawn-fingerprint variant) becomes part of the cache key.
 pub fn get(
   pool: Pool,
   language: String,
@@ -699,7 +719,7 @@ fn handle_kill_lsp(
       && w == workspace
       && case server_id {
         "" -> True
-        _ -> s == server_id
+        _ -> s == server_id || string.starts_with(s, server_id <> "@")
       }
     })
 
@@ -751,7 +771,7 @@ fn handle_get(
   spec: SpawnSpec,
   reply: Subject(Result(Proc, GetError)),
 ) -> actor.Next(State, Msg) {
-  let key = #(language, workspace, spec.server_id)
+  let key = #(language, workspace, server_key(spec))
 
   case dict.get(state.cache, key) {
     // Cache hit — reply immediately, no actor blocking.
@@ -1023,7 +1043,7 @@ fn recover_or_spawn(
   workspace: String,
   spec: SpawnSpec,
 ) -> Result(Proc, GetError) {
-  case proc.recover_subject(language, workspace, spec.server_id) {
+  case proc.recover_subject(language, workspace, server_key(spec)) {
     Ok(subject) -> Ok(proc.from_subject(subject))
     Error(_) -> spawn_proc(language, workspace, spec)
   }
@@ -1587,9 +1607,11 @@ fn spawn_proc(
       dyn_sup_start_child(
         language,
         workspace,
+        server_key(spec),
         spec.server_id,
         spec.command,
         spec.args,
+        spec.env,
         spec.init_params,
         spec.initialize_timeout_ms,
         spec.readiness_token,
@@ -1603,7 +1625,7 @@ fn spawn_proc(
   )
 
   use subject <- result.try(
-    case proc.recover_subject(language, workspace, spec.server_id) {
+    case proc.recover_subject(language, workspace, server_key(spec)) {
       Ok(s) -> Ok(s)
       Error(_) ->
         Error(ProcStartFailed(
@@ -1644,9 +1666,11 @@ fn spawn_proc(
 fn dyn_sup_start_child(
   language: String,
   workspace: String,
+  server_key: String,
   server_id: String,
   command: String,
   args: List(String),
+  env: List(#(String, String)),
   init_params: json.Json,
   initialize_timeout_ms: Int,
   readiness_token: option.Option(String),

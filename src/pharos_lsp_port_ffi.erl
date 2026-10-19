@@ -10,7 +10,7 @@
 
 -module(pharos_lsp_port_ffi).
 -include_lib("kernel/include/file.hrl").
--export([spawn/3, send/2, receive_data/2, close/1, connect/2, decode_port_data/1, decode_port_exit/1]).
+-export([spawn/4, env_options/2, resolve_on_path/2, send/2, receive_data/2, close/1, connect/2, decode_port_data/1, decode_port_exit/1]).
 
 %% Decode a raw mailbox payload that gleam_otp's selector handed us
 %% via `process.select_other`. Returns `{ok, Bytes}` if the payload
@@ -37,17 +37,21 @@ decode_port_exit(_) ->
     {error, nil}.
 
 %% Spawn a subprocess. `Command` is either an absolute path
-%% (starts with `/`) or a bare name resolved against the current
-%% PATH via `os:find_executable/1` (ADR-018). `Args` is a list of
-%% binary arguments; `Cwd` is the working directory the subprocess
-%% inherits.
+%% (starts with `/`) or a bare name resolved against PATH via
+%% `os:find_executable/2` (ADR-018). `Args` is a list of binary
+%% arguments; `Cwd` is the working directory the subprocess inherits.
+%%
+%% `Env` is the subprocess's whole environment as `{Name, Value}`
+%% binary pairs (ADR-034: the environment of the session that
+%% started it). A bare `Command` resolves on that env's PATH. `[]`
+%% inherits the BEAM's environment and PATH unchanged.
 %%
 %% Returns:
 %%   {ok, Port}                       — Port opened
 %%   {error, {binary_not_found, Cmd}} — bare name not on PATH
 %%   {error, {spawn_failed, R}}       — open_port raised
-spawn(Command, Args, Cwd) ->
-    case resolve_command(Command) of
+spawn(Command, Args, Cwd, Env) ->
+    case resolve_command(Command, search_path(Env)) of
         {error, not_found} ->
             {error, {binary_not_found, Command}};
         {ok, Resolved} ->
@@ -60,7 +64,7 @@ spawn(Command, Args, Cwd) ->
                     stream,
                     hide,
                     {cd, binary_to_list(Cwd)}
-                ]),
+                ] ++ env_options(Env, os:env())),
                 {ok, Port}
             catch
                 error:Reason ->
@@ -81,7 +85,7 @@ spawn(Command, Args, Cwd) ->
 %% executability check). Returns `{ok, StringPath}` (Erlang string,
 %% not binary, since open_port's spawn_executable wants a string) or
 %% `{error, not_found}` when no executable is reachable.
-resolve_command(Command) when is_binary(Command) ->
+resolve_command(Command, Path) when is_binary(Command) ->
     case Command of
         <<$/, _/binary>> ->
             CmdStr = binary_to_list(Command),
@@ -90,11 +94,61 @@ resolve_command(Command) when is_binary(Command) ->
                 false -> {error, not_found}
             end;
         _ ->
-            case os:find_executable(binary_to_list(Command)) of
+            case find_executable(binary_to_list(Command), Path) of
                 false -> {error, not_found};
-                Path -> {ok, Path}
+                Found -> {ok, Found}
             end
     end.
+
+%% `Command` resolved the way `spawn/4` would resolve it under `Env`,
+%% as a binary; `Command` itself when it does not resolve. Feeds the
+%% ADR-034 spawn fingerprint.
+resolve_on_path(Command, Env) ->
+    case resolve_command(Command, search_path(Env)) of
+        {ok, Path} -> unicode:characters_to_binary(Path);
+        {error, not_found} -> Command
+    end.
+
+find_executable(Name, inherit) -> os:find_executable(Name);
+find_executable(Name, Path) -> os:find_executable(Name, Path).
+
+%% The PATH a bare command resolves on: `Env`'s, or the BEAM's when
+%% `Env` is empty (inherit) or has none.
+search_path([]) ->
+    inherit;
+search_path(Env) ->
+    case lists:keyfind(<<"PATH">>, 1, Env) of
+        {_, Path} -> to_chars(Path);
+        false -> inherit
+    end.
+
+%% open_port options giving the child exactly `Env`: every pair in
+%% `Env` is set, and every variable in `Current` (the BEAM's own
+%% environment, `os:env()`) that `Env` lacks is unset. `[]` means
+%% inherit, so no option at all. Names open_port would reject (empty,
+%% or containing `=`) are dropped rather than failing the spawn.
+env_options([], _Current) ->
+    [];
+env_options(Env, Current) ->
+    Set = [{to_chars(K), to_chars(V)} || {K, V} <- Env, valid_env_name(K)],
+    Names = [K || {K, _} <- Set],
+    Unset = [{K, false} || {K, _} <- Current,
+                           not lists:member(K, Names),
+                           valid_env_name(K)],
+    [{env, Set ++ Unset}].
+
+to_chars(Bin) ->
+    case unicode:characters_to_list(Bin) of
+        Chars when is_list(Chars) -> Chars;
+        _ -> binary_to_list(Bin)
+    end.
+
+valid_env_name(<<>>) -> false;
+valid_env_name([]) -> false;
+valid_env_name(Name) when is_binary(Name) ->
+    binary:match(Name, <<"=">>) =:= nomatch;
+valid_env_name(Name) when is_list(Name) ->
+    not lists:member($=, Name).
 
 %% True when Path is a regular file (or a symlink that resolves to one)
 %% and has at least one executable bit set. Mirrors the implicit
