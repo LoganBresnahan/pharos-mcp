@@ -24,6 +24,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 
@@ -31,6 +32,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 STUB = os.path.join(REPO, "bin", "_stub_lsp.py")
 SECRET = "pharos-test-secret-%d" % os.getpid()
+
+# A scenario that runs past this fails with its name instead of hanging the
+# job (a pipe deadlock on macOS once burned a runner's 90 minutes).
+SCENARIO_TIMEOUT_SECS = 90
 
 INIT_PARAMS = {"protocolVersion": "2024-11-05", "capabilities": {},
                "clientInfo": {"name": "integration", "version": "0"}}
@@ -330,9 +335,18 @@ def t_daemon_death(sb):
     a.initialize()
     pid = sb.daemon_pid()
     big = "x" * (8 << 20)
-    for i in range(3):
-        a.send({"jsonrpc": "2.0", "id": 100 + i, "method": "tools/call",
-                "params": {"name": "echo", "arguments": {"message": big}}})
+    # Write from a thread while this one reads: the replies are as big as
+    # the requests, and with nobody reading stdout the pipes and socket
+    # buffers fill and the write blocks forever (macOS's small buffers hit
+    # it; Linux's absorbed it).
+    def send_all():
+        try:
+            for i in range(3):
+                a.send({"jsonrpc": "2.0", "id": 100 + i, "method": "tools/call",
+                        "params": {"name": "echo", "arguments": {"message": big}}})
+        except (BrokenPipeError, OSError):
+            pass  # the shim exited once the daemon died: expected
+    threading.Thread(target=send_all, daemon=True).start()
     time.sleep(0.3)
     os.kill(pid, signal.SIGKILL)
     t0 = time.time()
@@ -546,6 +560,10 @@ SCENARIOS = [
 ]
 
 
+def on_scenario_timeout(_signum, _frame):
+    raise Failure("timed out after %ds (a hang)" % SCENARIO_TIMEOUT_SECS)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--release", required=True)
@@ -567,8 +585,11 @@ def main():
                 continue
             sb = Sandbox(root, name, release, shim, extra_env)
             t0 = time.time()
+            signal.signal(signal.SIGALRM, on_scenario_timeout)
+            signal.alarm(SCENARIO_TIMEOUT_SECS)
             try:
                 fn(sb)
+                signal.alarm(0)
                 print("PASS %-18s %5.1fs" % (name, time.time() - t0), flush=True)
             except Exception as e:  # noqa: BLE001
                 failed.append(name)
@@ -582,6 +603,7 @@ def main():
                             print("  --- %s (tail)" % f)
                             print("  " + "\n  ".join(open(os.path.join(logdir, f)).read().splitlines()[-15:]))
             finally:
+                signal.alarm(0)
                 sb.teardown()
     finally:
         if not args.keep:

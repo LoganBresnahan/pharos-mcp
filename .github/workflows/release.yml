@@ -88,6 +88,7 @@ jobs:
         run: shellcheck -s sh install.sh rel/smoke.sh
 
       - name: Integration suite (ADR-034) against the release
+        timeout-minutes: 15
         run: python3 -I test/daemon/integration.py --release _build/prod/rel/pharos --shim _build/prod/rel/pharos/bin/pharos
 
       - uses: actions/setup-node@v4
@@ -98,6 +99,7 @@ jobs:
         run: npm install -g pyright
 
       - name: Smoke-test the tarball through install.sh
+        timeout-minutes: 10
         run: PHAROS_DOWNLOAD_URL="file://$PWD/_build/package" sh rel/smoke.sh --version "${{ steps.version.outputs.version }}" --lsp pyright
 
       - uses: actions/upload-artifact@v4

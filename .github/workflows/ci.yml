@@ -198,4 +198,5 @@ jobs:
           mix release --overwrite
 
       - name: Run the integration suite
+        timeout-minutes: 15
         run: python3 -I test/daemon/integration.py --release _build/prod/rel/pharos --shim _build/prod/rel/pharos/bin/pharos
