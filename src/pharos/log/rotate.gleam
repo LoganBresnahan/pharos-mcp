@@ -56,6 +56,7 @@ pub fn secure_crash_files() -> Nil
 pub fn boot_sweep() -> Nil {
   migrate_cwd_crash_dump()
   let _ = rotate_sessions()
+  let _ = rotate_lru("daemon-", default_session_keep)
   let _ = rotate_crash_dumps()
   secure_crash_files()
 }

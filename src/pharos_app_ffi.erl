@@ -71,4 +71,7 @@ stop(_State) ->
     %% the FFI swallows all failures so a slow filesystem cannot
     %% block BEAM teardown.
     _ = pharos_instance_track_ffi:clear_instance_dir(),
+    %% ADR-034: a daemon removes its socket and pid file (no-op for
+    %% every other mode).
+    _ = pharos_daemon_ffi:cleanup(),
     ok.

@@ -132,12 +132,12 @@ stdio_worker on receiving Write(json):
    can complete in any order without interleaving.
 
 cancel path:
-   stdio_worker reads notifications/cancelled. handler looks up
-   pharos_inflight[mcp_id] → finds (lsp_proc_subj, lsp_id).
-   Forwards $/cancelRequest to the lsp_proc. Also looks up
-   pharos_request_workers[mcp_id] → finds dispatcher pid. Sends
-   process.send_exit. Dispatcher's `actor.call` short-circuits
-   even when the LSP itself ignores $/cancelRequest.
+   stdio_worker reads notifications/cancelled; its dispatcher looks
+   up pharos_request_workers[session|mcp_id] → the request's
+   dispatcher pid, and kills it FIRST, so no reply goes out for a
+   cancelled request. Then pharos_inflight[session|mcp_id] →
+   (lsp_proc_subj, lsp_id): forwards $/cancelRequest to the lsp_proc.
+   The kill works even when the LSP ignores $/cancelRequest.
 ```
 
 Async-dispatch refactor: [src/pharos/stdio_worker.gleam](../src/pharos/stdio_worker.gleam),
@@ -173,6 +173,47 @@ HTTP transport: [src/pharos/mcp/http.gleam](../src/pharos/mcp/http.gleam)
 `pharos_request_workers` — the dispatcher table is stdio-only — so
 cancel on HTTP only fires the LSP-side `$/cancelRequest`, not the
 worker-kill arm.
+
+## Daemon mode (ADR-034)
+
+`pharos daemon --socket <path> --build <id> --key <key>` replaces the
+transport children with one `daemon` actor. Every MCP session arrives
+as a connection on a Unix socket and shares the one pool.
+
+```
+pharos_root
+  ├─ log_subtree, pool_subtree      (as above)
+  └─ daemon            permanent   pharos/daemon.gleam
+       │ owns the listening socket, the session registry, the idle timer
+       └─ acceptor      linked      blocks in accept/1
+            └─ conn-N   UNLINKED    pharos/daemon/conn.gleam, one per shim
+                 └─ dispatch_N      pharos/mcp/dispatch.gleam (as stdio)
+```
+
+Connection lifecycle:
+
+```
+accept → conn-N gets the socket → first line = hello
+   op=status|stop → one JSON reply, close
+   op=mcp, build matches → register (id sN), build SessionCtx from the
+     hello's cwd + env, bind it, send {"pharos_hello_ok":1,...}
+   then each NDJSON line → dispatch_N (bound to the session); replies
+     go back on the same socket. conn-N monitors each dispatcher and
+     counts it done on DOWN (a cancel kills it before it can reply).
+socket closed (shim stdin EOF / shim died)
+   → inflight 0: finish
+   → else wait PHAROS_SHUTDOWN_DRAIN_MS (2000), then kill the session's
+     leftover dispatchers + $/cancelRequest their LSP calls, finish
+finish → drop the session's timeout overrides, unregister, close
+last session gone → after PHAROS_DAEMON_IDLE_SECS (1800) with none:
+   init:stop → app stop removes the socket + pid file
+```
+
+A crashed connection is unlinked from the acceptor, so it takes only
+its own session down. A crashed acceptor or daemon actor takes the
+listener down; the supervisor rebuilds it, and `listen/1` replaces the
+stale socket file. The daemon's stderr is its boot log (the shim
+redirects it), and it logs to `<log dir>/daemon-<build>-<key>-<pid>.log`.
 
 ## pool spawn lifecycle (post-M14 refactor)
 
@@ -257,6 +298,8 @@ condition surfaces when it does.
 | 11 | **`proc.get_client`** | `proc.gleam` | 1s | not exposed | Cheap fetch of the underlying `Client` reference. |
 | 12 | **`sessions.{issue,validate,attach,detach}` `actor.call`** | `sessions.gleam` | 60s (`default_call_timeout_ms`) | not exposed | HTTP session bookkeeping — should never fire in practice. |
 | 13 | **HTTP request timeout** | mist | mist defaults | not exposed | Per-HTTP-request wall-clock. |
+| 15 | **Daemon idle exit** | `daemon.gleam` | 1800s | `PHAROS_DAEMON_IDLE_SECS` | No session connected for this long: the daemon stops itself (ADR-034). |
+| 16 | **Session drain on disconnect** | `daemon/conn.gleam` | 2000ms | `PHAROS_SHUTDOWN_DRAIN_MS` | A closed connection's in-flight requests get this long before they are cancelled. |
 | 14 | **Harness wall-clock** | `bin/dogfood-23lang.py` | `timeout_ms / 1000 + 45s` | `PER_LANG_TIMEOUT_MS` const + per-target override | Harness gives up + sends `notifications/cancelled`. M14 dogfood-only. |
 
 Resolution stack at request time (ADR-021): #5 wins → #4 → #3 → #2
@@ -397,6 +440,9 @@ Tracing the cascade observed in M14 Pass 1 ([doc/m14-test-plan.md](m14-test-plan
 | Per-tool defaults | `src/pharos/tools/<tool>.gleam` (`default_timeout_ms` const) |
 | Session timeout overrides | [src/pharos/tools/session_overrides.gleam](../src/pharos/tools/session_overrides.gleam) |
 | Per-session context | [src/pharos/session_ctx.gleam](../src/pharos/session_ctx.gleam) |
+| Per-line dispatch (stdio + daemon) | [src/pharos/mcp/dispatch.gleam](../src/pharos/mcp/dispatch.gleam) |
+| Daemon listener, registry, idle timer | [src/pharos/daemon.gleam](../src/pharos/daemon.gleam) |
+| Daemon connection (hello, session, drain) | [src/pharos/daemon/conn.gleam](../src/pharos/daemon/conn.gleam) |
 | Log subtree | [src/pharos/log/](../src/pharos/log/) |
 | Inflight table | [src/pharos/lsp/inflight.gleam](../src/pharos/lsp/inflight.gleam) |
 | Cancel routing | [src/pharos/mcp/server.gleam](../src/pharos/mcp/server.gleam) `log_cancel_notification` |

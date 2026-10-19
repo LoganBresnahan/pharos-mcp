@@ -11,7 +11,8 @@
 ////     │   └─ lsp_dyn_sup_stub   (permanent — structural only)
 ////     ├─ sessions_actor         (permanent)         ◄── HTTP/Both
 ////     ├─ http_listener_subtree  (permanent)         ◄── HTTP/Both
-////     └─ stdio_worker           (transient)        ◄── Stdio/Both
+////     ├─ stdio_worker           (transient)        ◄── Stdio/Both
+////     └─ daemon                 (permanent)        ◄── Daemon (ADR-034)
 ////
 //// Restart strategies are per ADR-013/017. `intensity 5 / period 60`
 //// applies to every internal supervisor: 5 child failures in 60s
@@ -25,6 +26,7 @@ import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
 
+import pharos/daemon
 import pharos/log/filter
 import pharos/log/ring_keeper
 import pharos/log/writer
@@ -45,6 +47,9 @@ pub type Transport {
   /// connections. The warm post-boot dispatch handles the lifecycle:
   /// runs `warm_langs/1`, calls `init:stop/0`, BEAM halts.
   Disabled
+  /// `pharos daemon …` (ADR-034): no stdio, no HTTP; MCP sessions
+  /// arrive on a Unix socket, one per shim connection.
+  Daemon(args: daemon.Args)
 }
 
 pub type StartError {
@@ -111,7 +116,7 @@ pub fn start(
   // sessions must register its global before the listener starts
   // accepting connections that reference it.
   let root_with_http = case config.transport {
-    Stdio | Disabled -> root
+    Stdio | Disabled | Daemon(_) -> root
     Http | Both ->
       root
       |> supervisor.add(supervision.worker(sessions.start_supervised))
@@ -136,6 +141,11 @@ pub fn start(
     Stdio | Both ->
       root_with_http
       |> supervisor.add(transient_worker(stdio_worker.start_supervised))
+    Daemon(args) ->
+      root_with_http
+      |> supervisor.add(
+        supervision.worker(fn() { daemon.start_supervised(args) }),
+      )
   }
 
   case supervisor.start(root_complete) {

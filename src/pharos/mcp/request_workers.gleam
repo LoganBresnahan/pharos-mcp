@@ -50,6 +50,10 @@ pub fn lookup(mcp_id: String) -> Result(Pid, Nil)
 @external(erlang, "pharos_runtime_ffi", "request_workers_delete")
 pub fn delete(mcp_id: String) -> Nil
 
+/// Every `(key, pid)` registered under `session_id` (ADR-034).
+@external(erlang, "pharos_runtime_ffi", "request_workers_for_session")
+pub fn for_session(session_id: String) -> List(#(String, Pid))
+
 /// Number of live worker registrations. Useful for runtime
 /// diagnostics — a positive size after the host has gone idle
 /// indicates a leak.

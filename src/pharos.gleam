@@ -20,6 +20,7 @@
 //// and the README for the full surface.
 
 import gleam/dict
+import gleam/erlang/charlist
 import gleam/erlang/process.{type Pid}
 import gleam/io
 import gleam/list
@@ -27,6 +28,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import pharos/cli
 import pharos/config.{type Config}
+import pharos/daemon
 import pharos/env
 import pharos/heartbeat
 import pharos/log
@@ -172,9 +174,18 @@ fn do_boot() -> Result(Pid, String) {
   // does not race the warm-then-exit dispatch into a half-stopped
   // application_controller (which would skip the stop/1 callback
   // and leak the instance dir).
-  let resolved_transport = case parse_warm_args(argv()) {
-    Some(_) -> root_supervisor.Disabled
-    None -> map_transport(cfg.transport)
+  let daemon_args = daemon.parse_args(argv())
+  let resolved_transport = case parse_warm_args(argv()), daemon_args {
+    Some(_), _ -> root_supervisor.Disabled
+    None, Some(args) -> root_supervisor.Daemon(args)
+    None, None -> map_transport(cfg.transport)
+  }
+  // ADR-034: a daemon's stderr is its boot log, not a terminal, and it
+  // outlives any one session, so it logs to its own file and keeps
+  // stderr quiet unless asked.
+  let cfg = case daemon_args {
+    None -> cfg
+    Some(args) -> daemon_log_config(cfg, args)
   }
 
   let supervisor_config =
@@ -206,6 +217,45 @@ fn do_boot() -> Result(Pid, String) {
       Ok(started.pid)
     }
   }
+}
+
+/// Daemon-mode log defaults: `<log dir>/daemon-<build>-<key>-<pid>.log`
+/// unless `PHAROS_LOG_FILE` names one, and no stderr sink unless
+/// `PHAROS_LOG_STDERR` turns it on.
+fn daemon_log_config(cfg: Config, args: daemon.Args) -> Config {
+  let file = case env.get("PHAROS_LOG_FILE") {
+    Some(_) -> cfg.log.file
+    None ->
+      case log_rotate.log_cache_dir() {
+        "" -> cfg.log.file
+        dir ->
+          Some(
+            dir
+            <> "/daemon-"
+            <> args.build
+            <> "-"
+            <> args.key
+            <> "-"
+            <> os_pid_text()
+            <> ".log",
+          )
+      }
+  }
+  let stderr_enabled = case env.get("PHAROS_LOG_STDERR") {
+    Some(_) -> cfg.log.stderr_enabled
+    None -> False
+  }
+  config.Config(
+    ..cfg,
+    log: config.LogConfig(..cfg.log, file: file, stderr_enabled: stderr_enabled),
+  )
+}
+
+@external(erlang, "os", "getpid")
+fn os_pid_chars() -> charlist.Charlist
+
+fn os_pid_text() -> String {
+  charlist.to_string(os_pid_chars())
 }
 
 @external(erlang, "pharos_runtime_ffi", "register_root_supervisor")
@@ -443,10 +493,16 @@ pub fn post_boot_dispatch() -> Nil {
         })
       Nil
     }
-    None -> {
-      let _ = process.spawn(fn() { warm_from_env() })
-      Nil
-    }
+    // A daemon's own env is just its first shim's; warming belongs to
+    // sessions, not the daemon (ADR-034).
+    None ->
+      case daemon.parse_args(argv()) {
+        Some(_) -> Nil
+        None -> {
+          let _ = process.spawn(fn() { warm_from_env() })
+          Nil
+        }
+      }
   }
 }
 

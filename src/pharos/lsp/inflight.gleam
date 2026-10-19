@@ -36,5 +36,9 @@ pub fn lookup(mcp_id: String) -> Result(#(Dynamic, Int), Nil)
 @external(erlang, "pharos_runtime_ffi", "inflight_delete")
 pub fn delete(mcp_id: String) -> Nil
 
+/// Every `(key, proc_subject, lsp_id)` of `session_id` (ADR-034).
+@external(erlang, "pharos_runtime_ffi", "inflight_for_session")
+pub fn for_session(session_id: String) -> List(#(String, Dynamic, Int))
+
 @external(erlang, "pharos_runtime_ffi", "inflight_size")
 pub fn size() -> Int

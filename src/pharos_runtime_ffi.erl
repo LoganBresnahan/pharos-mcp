@@ -38,11 +38,13 @@
     inflight_lookup/1,
     inflight_delete/1,
     inflight_size/0,
+    inflight_for_session/1,
     request_workers_init/0,
     request_workers_insert/2,
     request_workers_lookup/1,
     request_workers_delete/1,
     request_workers_size/0,
+    request_workers_for_session/1,
     pool_register/1,
     pool_lookup/0,
     sessions_register/1,
@@ -454,6 +456,10 @@ inflight_size() ->
         N -> N
     end.
 
+%% ADR-034: every `{Key, ProcSubject, LspId}` row of `SessionId`.
+inflight_for_session(SessionId) when is_binary(SessionId) ->
+    session_rows(?INFLIGHT_TABLE, SessionId).
+
 %% ETS-backed MCP request worker tracker (M10 cancel worker, ADR-016
 %% follow-up). Keyed by MCP request id. Value: worker process pid.
 %% Populated by `pharos@stdio_worker` immediately before handing the
@@ -507,6 +513,27 @@ request_workers_size() ->
     case ets:info(?REQUEST_WORKERS_TABLE, size) of
         undefined -> 0;
         N -> N
+    end.
+
+%% ADR-034: every `{Key, Pid}` row whose key belongs to `SessionId`
+%% (keys are `<<SessionId/binary, "|", McpId/binary>>`). A daemon
+%% connection that closes cancels its session's leftovers with this.
+request_workers_for_session(SessionId) when is_binary(SessionId) ->
+    session_rows(?REQUEST_WORKERS_TABLE, SessionId).
+
+session_rows(Table, SessionId) ->
+    Prefix = <<SessionId/binary, "|">>,
+    Size = byte_size(Prefix),
+    case ets:info(Table) of
+        undefined -> [];
+        _ ->
+            ets:foldl(
+                fun(Row, Acc) ->
+                    case element(1, Row) of
+                        <<Prefix:Size/binary, _/binary>> -> [Row | Acc];
+                        _ -> Acc
+                    end
+                end, [], Table)
     end.
 
 %% Persistent-term backing for the language registry. One slot,

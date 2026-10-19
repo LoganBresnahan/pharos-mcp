@@ -12,6 +12,13 @@ Behavior is controlled via env vars:
                               "content_modified" (return -32801 first
                               call, then real content on retry)
   STUB_LSP_FAIL_HANDSHAKE=0   if 1, never reply to initialize
+  STUB_LSP_LOG=path           append "<pid> <method>" for every message
+                              received (proves e.g. that a cancel
+                              reached the LSP as $/cancelRequest)
+
+STUB_LSP_HOVER_RESPONSES=whoami answers hover with the stub's pid and
+the value of STUB_LSP_TAG, so a test can tell which LSP process, started
+under which environment, answered (ADR-034 sharing).
 
 Used by `bin/test-edges.py` to simulate cold-start races, transport
 errors, content-modified races deterministically — without depending
@@ -82,6 +89,15 @@ def handle_hover(req):
     if mode == "panic":
         # Crash the process — pharos should detect via port DOWN.
         sys.exit(1)
+    if mode == "whoami":
+        tag = os.environ.get("STUB_LSP_TAG", "")
+        return {
+            "jsonrpc": "2.0",
+            "id": req["id"],
+            "result": {
+                "contents": {"kind": "markdown", "value": f"pid={os.getpid()} tag={tag}"},
+            },
+        }
     if mode == "content_modified":
         attempts = HOVER_RETRY_STATE.get("hover", 0) + 1
         HOVER_RETRY_STATE["hover"] = attempts
@@ -116,6 +132,10 @@ def main():
         if msg is None:
             return
         method = msg.get("method")
+        log_path = os.environ.get("STUB_LSP_LOG")
+        if log_path:
+            with open(log_path, "a") as log:
+                log.write(f"{os.getpid()} {method}\n")
         if method == "initialize":
             resp = handle_initialize(msg)
             if resp is not None:
