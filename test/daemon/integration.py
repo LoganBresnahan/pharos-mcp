@@ -561,6 +561,13 @@ SCENARIOS = [
 
 
 def on_scenario_timeout(_signum, _frame):
+    # What was running when it hung, for the CI log.
+    ps = subprocess.run(["ps", "-A", "-o", "pid,ppid,stat,etime,args"],
+                        capture_output=True, text=True).stdout
+    print("  --- processes at the timeout (pharos, beam, python):", flush=True)
+    for line in ps.splitlines():
+        if any(k in line for k in ("pharos", "beam", "python", "PID")):
+            print("  " + line[:200], flush=True)
     raise Failure("timed out after %ds (a hang)" % SCENARIO_TIMEOUT_SECS)
 
 
@@ -584,6 +591,7 @@ def main():
             if only and name not in only:
                 continue
             sb = Sandbox(root, name, release, shim, extra_env)
+            print("---- %s" % name, flush=True)
             t0 = time.time()
             signal.signal(signal.SIGALRM, on_scenario_timeout)
             signal.alarm(SCENARIO_TIMEOUT_SECS)
