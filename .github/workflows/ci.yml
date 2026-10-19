@@ -150,3 +150,57 @@ jobs:
           # Notification line must produce no response — exactly 3 result lines.
           lines=$(echo "$out" | grep -c '^{"jsonrpc"')
           [ "$lines" = "3" ] || { echo "expected 3 response lines, got $lines"; exit 1; }
+
+  # ADR-034: the shim against an assembled release, with the stub LSP:
+  # sharing, spawn race, build isolation, idle exit, daemon death,
+  # stdout purity, per-session isolation, surviving the spawning
+  # terminal, stale/slow sockets, fd hygiene, cancel, restart.
+  daemon-integration:
+    name: daemon integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      MIX_ENV: prod
+      PHAROS_ASSEMBLE_ONLY: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Erlang, Elixir, Gleam, and rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.1"
+          elixir-version: "1.19.5"
+          gleam-version: "1.17.0"
+          rebar3-version: "3.27.0"
+
+      - name: Cache Mix and Gleam build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            build
+          key: ${{ runner.os }}-prod-otp28-elixir1.19-gleam1.17-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-prod-otp28-elixir1.19-gleam1.17-mix-
+
+      - name: Install mix_gleam archive (LoganBresnahan/mix_gleam fork)
+        run: mix archive.install --force github LoganBresnahan/mix_gleam
+
+      - name: Assemble the release (no Burrito wrap)
+        run: |
+          mix deps.get
+          mix release --overwrite
+
+      - name: Build the shim
+        working-directory: shim
+        run: cargo build --release
+
+      - name: Write BUILD_ID
+        run: bin/build-id _build/prod/rel/pharos shim/target/release/pharos
+
+      - name: Run the integration suite
+        run: python3 -I test/daemon/integration.py --release _build/prod/rel/pharos --shim shim/target/release/pharos
