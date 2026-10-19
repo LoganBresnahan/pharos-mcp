@@ -30,7 +30,7 @@ impl Release {
         let root = match env::var_os("PHAROS_RELEASE_ROOT") {
             Some(root) if !root.is_empty() => PathBuf::from(root),
             _ => {
-                let exe = env::current_exe()?.canonicalize()?;
+                let exe = plain_path(env::current_exe()?.canonicalize()?);
                 exe.parent()
                     .and_then(Path::parent)
                     .map(Path::to_path_buf)
@@ -79,6 +79,21 @@ impl Release {
     pub fn version_dir(&self) -> PathBuf {
         self.root.join("releases").join(&self.version)
     }
+}
+
+/// On Windows `canonicalize` returns a verbatim `\\?\C:\…` path, which
+/// erl.exe would get as its -boot, -config and ROOTDIR values. Drive
+/// paths go back to the plain form; anything else is left alone.
+fn plain_path(path: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        let s = path.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            if rest.as_bytes().get(1) == Some(&b':') {
+                return PathBuf::from(rest.to_string());
+            }
+        }
+    }
+    path
 }
 
 pub fn other(message: &str) -> io::Error {
