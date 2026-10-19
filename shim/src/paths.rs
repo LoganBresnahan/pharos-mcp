@@ -116,20 +116,13 @@ fn absolute_env(name: &str) -> Option<PathBuf> {
     }
 }
 
-#[cfg(unix)]
 fn uid() -> u32 {
     unsafe { libc::getuid() }
-}
-
-#[cfg(not(unix))]
-fn uid() -> u32 {
-    0
 }
 
 /// Create `dir` (and parents) owner-only, then refuse it unless it is a
 /// real directory (not a symlink), owned by us, with no group or other
 /// access. Directory permissions are the daemon's access control.
-#[cfg(unix)]
 pub fn ensure_private_dir(dir: &Path) -> Result<(), String> {
     use std::fs::{self, DirBuilder};
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -220,7 +213,6 @@ mod tests {
         assert_eq!(paths.pid.extension().unwrap(), "pid");
     }
 
-    #[cfg(unix)]
     #[test]
     fn private_dir_is_created_owner_only_and_an_open_one_refused() {
         use std::os::unix::fs::PermissionsExt;
@@ -234,7 +226,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_symlinked_dir_is_refused() {
         let base = env::temp_dir().join(format!("pharos-shim-link-{}", std::process::id()));

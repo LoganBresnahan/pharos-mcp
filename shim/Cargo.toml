@@ -10,17 +10,10 @@ publish = false
 name = "pharos"
 path = "src/main.rs"
 
-# Deliberately tiny: the shim is resident once per MCP session.
-[target.'cfg(unix)'.dependencies]
+# Deliberately tiny: the shim is resident once per MCP session. Linux and
+# macOS only (ADR-035): Windows users run pharos inside WSL.
+[dependencies]
 libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
-  "Win32_Foundation",
-  "Win32_Security",
-  "Win32_System_JobObjects",
-  "Win32_System_Threading",
-] }
 
 [profile.release]
 opt-level = "s"

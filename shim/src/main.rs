@@ -1,26 +1,27 @@
 //! `pharos`: the front-end executable (ADR-034).
 //!
-//! - No arguments (Linux, macOS): the MCP stdio shim. It connects this
-//!   session to the shared daemon for this build, starting it if none
-//!   runs. `PHAROS_MODE` picks `auto` (the default: fall back to direct
-//!   mode, loudly, if the daemon cannot be reached), `daemon` (fail
-//!   instead; tests and CI) or `direct`.
-//! - No arguments on Windows, `--direct`, or a `PHAROS_TRANSPORT` other
-//!   than `stdio`: direct mode, the in-process server, as before 0.2.0.
+//! - No arguments: the MCP stdio shim. It connects this session to the
+//!   shared daemon for this build, starting it if none runs.
+//!   `PHAROS_MODE` picks `auto` (the default: fall back to direct mode,
+//!   loudly, if the daemon cannot be reached), `daemon` (fail instead;
+//!   tests and CI) or `direct`.
+//! - `--direct`, or a `PHAROS_TRANSPORT` other than `stdio`: direct mode,
+//!   the in-process server, as before 0.2.0.
+//!
+//! Linux and macOS only. Windows users run pharos inside WSL (ADR-035).
 //! - `daemon status|stop [--all]`: operator requests to running daemons.
 //! - `daemon` alone: run this build's daemon in the foreground.
 //! - `--version`: answered here, without booting the runtime.
 //! - Anything else: handed to the bundled runtime unchanged.
 
-mod launch;
-mod release;
+#[cfg(not(unix))]
+compile_error!("pharos runs on Linux and macOS; on Windows, build and run it inside WSL (ADR-035)");
 
-#[cfg(unix)]
 mod client;
-#[cfg(unix)]
 mod json;
-#[cfg(unix)]
+mod launch;
 mod paths;
+mod release;
 
 use std::env;
 use std::ffi::OsString;
@@ -60,13 +61,12 @@ fn direct(release: &Release, args: &[OsString]) -> ExitCode {
 fn mcp(release: &Release) -> ExitCode {
     let transport = env::var("PHAROS_TRANSPORT").unwrap_or_default();
     let mode = env::var("PHAROS_MODE").unwrap_or_default();
-    if cfg!(windows) || mode == "direct" || !(transport.is_empty() || transport == "stdio") {
+    if mode == "direct" || !(transport.is_empty() || transport == "stdio") {
         return direct(release, &[]);
     }
     shim(release, mode == "daemon")
 }
 
-#[cfg(unix)]
 fn shim(release: &Release, require_daemon: bool) -> ExitCode {
     match client::run(release) {
         client::Outcome::Exit(code) => ExitCode::from(code as u8),
@@ -85,12 +85,6 @@ fn shim(release: &Release, require_daemon: bool) -> ExitCode {
     }
 }
 
-#[cfg(not(unix))]
-fn shim(release: &Release, _require_daemon: bool) -> ExitCode {
-    direct(release, &[])
-}
-
-#[cfg(unix)]
 fn daemon_command(release: &Release, args: &[OsString]) -> ExitCode {
     let rest: Vec<&str> = args[1..].iter().filter_map(|a| a.to_str()).collect();
     let key = paths::daemon_key(|name| env::var_os(name));
@@ -141,13 +135,6 @@ fn daemon_command(release: &Release, args: &[OsString]) -> ExitCode {
     }
 }
 
-#[cfg(not(unix))]
-fn daemon_command(_release: &Release, _args: &[OsString]) -> ExitCode {
-    eprintln!("pharos: there is no daemon on Windows; pharos runs in direct mode");
-    ExitCode::from(2)
-}
-
-#[cfg(unix)]
 fn all_sockets(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut sockets: Vec<_> = std::fs::read_dir(dir)
         .map(|entries| {
