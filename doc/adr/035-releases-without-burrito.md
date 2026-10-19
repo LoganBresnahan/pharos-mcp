@@ -1,6 +1,6 @@
 # 035. Releases without Burrito: a release per target, the shim as launcher, npm and install.sh
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-19
 **Supersedes:** [ADR-033](033-burrito-fork-embedded-mode-in-use-lock.md) (the Burrito fork),
 and the Burrito half of [ADR-004](004-distribution-npm-and-releases.md)
@@ -119,7 +119,12 @@ this change.
 ### 5. npm without a resident node
 
 - Each platform package ships the unpacked release under `release/`: `bin/pharos` (the shim),
-  `erts-*`, `lib`, `releases`, `BUILD_ID`. It declares `os` and `cpu` as today.
+  `erts-*`, `lib`, `releases`, `BUILD_ID`. It declares `os` and `cpu` as today, and the Linux
+  packages also declare `"libc": ["glibc"]`.
+- **Unsupported Linux is loud.** When no usable platform package is installed, or glibc is older
+  than 2.35, `bin/pharos.js` and the postinstall both print "pharos 0.2 needs glibc 2.35+
+  (Alpine/musl and older distros aren't supported yet); pharos-mcp@0.1.4 still runs there" and
+  exit non-zero. The release notes carry the same line.
 - `pharos-mcp`'s `bin` stays `bin/pharos.js`. Its **postinstall** (esbuild's pattern) replaces
   that file, on Linux and macOS, with a symlink to the installed platform package's
   `release/bin/pharos`. npm's own bin link then resolves to the native shim, with no node in the
@@ -142,7 +147,8 @@ this change.
   history and pharos's.
 - **`pharos --purge-cache`** keeps its name for one release, with a new job: it removes the
   Burrito unpacks that pharos 0.1.x left (`<data>/.burrito/pharos_*`) that no running process's
-  command line names. It is the same `ps` rule as install.sh. pharos can no longer take the
+  command line names. It touches only `pharos_*`, never `geex_*` or anything else in that
+  directory: geex 0.2.0's unpacks live there too. It is the same `ps` rule as install.sh. pharos can no longer take the
   fork's `.burrito-in-use` lock, but a 0.1.x process names its unpack in its argv either way.
   It says so and points at `install.sh` for versions.
 - `bin/test-burrito.sh`, the Burrito fossil-guard entries and the Burrito wording in the README
@@ -166,7 +172,10 @@ this change.
   - MCP `initialize` and `tools/list`;
   - a real LSP answer: pyright from npm, a hover on a fixture Python file;
   - a second shim joins the same daemon (`pharos daemon status` shows 2 sessions);
-  - the daemon exits when idle (`PHAROS_DAEMON_IDLE_SECS=5`).
+  - the daemon exits when idle (`PHAROS_DAEMON_IDLE_SECS=5`);
+  - after `npm i -g`, no `node` process sits in the MCP server's process tree, which proves the
+    postinstall swap worked;
+  - an `npm i -g --ignore-scripts` job proves the JS fallback still answers `initialize`.
 
   `PHAROS_MODE=daemon` is set throughout, so a fallback would fail the run. Windows gets an npm
   install and a direct-mode `initialize`.
@@ -178,8 +187,11 @@ this change.
 - Building OTP is our job now: an OTP or OpenSSL update is a change to `rel/build-runtime.sh`,
   made in geex and copied here (or the other way), and CI rebuilds it once per target.
 - Linux needs glibc 2.35+: Ubuntu 22.04, Debian 12, RHEL 9 or newer. Alpine and older distros
-  lose pharos, where Burrito's musl ERTS ran there. install.sh says so, and npm users on such
-  systems get a clear error from the fallback wrapper.
+  lose pharos, where Burrito's musl ERTS ran there. With about 61 npm downloads a month, a
+  manylinux or musl build isn't worth it yet, so the loss is made loud instead (§5, and the
+  release notes), and pharos-mcp@0.1.4 stays installable there. A lower floor (a
+  manylinux_2_28 container build) and a musl target are on the roadmap, for when someone asks.
+- `PHAROS_INSTALL_DIR`'s change of meaning (§4) goes in the release notes.
 - darwin-x64 depends on the macos-15-intel image, which GitHub will retire too. When it goes,
   `@pharos-mcp/darwin-x64` stops getting releases unless we cross-build.
 - npm installs and curl installs differ in one way, the in-place update (§5). Both are documented.
