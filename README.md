@@ -87,7 +87,7 @@ removes older ones once no running pharos uses them, and never edits
 shell or MCP client config. `--uninstall` removes it. Overrides:
 `PHAROS_INSTALL_DIR`, `PHAROS_BIN_DIR`.
 
-### 2. npm (Linux, macOS, Windows)
+### 2. npm (Linux, macOS)
 
 ```bash
 npm install -g pharos-mcp
@@ -107,8 +107,11 @@ Either way, add pharos to your MCP host's config:
 }
 ```
 
-On Windows, pharos runs each session in its own process (no daemon).
-Anywhere, `PHAROS_MODE=direct` does the same.
+`PHAROS_MODE=direct` runs a session in its own process instead of the
+shared daemon.
+
+pharos 0.2 runs on Linux and macOS; on Windows, install it inside WSL
+(`pharos-mcp@0.1.4` was the last native Windows build).
 
 ### 3. Build from source
 

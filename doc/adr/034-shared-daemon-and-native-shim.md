@@ -1,6 +1,6 @@
 # 034. One shared daemon per build, reached through a native stdio shim
 
-**Status:** Accepted
+**Status:** Accepted; amended 2026-10-19: Windows unsupported, use WSL
 **Date:** 2026-10-19
 
 ## Context
@@ -23,8 +23,10 @@ Decisions already made by the project owner:
 - pharos starts **on demand**, not at login or boot.
 - Claude reaches the daemon through a **stdio shim** that spawns the
   daemon when none is running.
-- **Windows** keeps `--direct` mode (in-process stdio, today's
-  behaviour) and gets no daemon.
+- **Windows** is unsupported: Windows users run pharos inside WSL.
+  (Amended 2026-10-19. The first decision kept Windows in `--direct`
+  mode; the owner then dropped native Windows for all three apps, so
+  the Windows code below went with it.)
 - The geex ↔ pharos LSP bridge ([ADR-028](028-universal-editor-bridge.md))
   is deferred.
 - The release that ships this is 0.2.0.
@@ -128,9 +130,8 @@ Every shim diagnostic goes to stderr, prefixed `pharos:`. The shim runs
 two threads with blocking I/O, so it holds about a megabyte per
 session.
 
-`PHAROS_MODE=direct`, the `--direct` flag, any `PHAROS_TRANSPORT`
-other than `stdio`, and every Windows build exec the BEAM in-process
-exactly as today. The HTTP transport stays a direct-mode feature: the
+`PHAROS_MODE=direct`, the `--direct` flag, and any `PHAROS_TRANSPORT`
+other than `stdio` exec the BEAM in-process exactly as before 0.2. The HTTP transport stays a direct-mode feature: the
 daemon multiplexes stdio sessions only.
 
 ### The launcher
@@ -143,11 +144,10 @@ ERTS directly: `erlexec` from `<release>/erts-*/bin` with `ROOTDIR`,
 `-boot <release>/releases/<vsn>/start -mode embedded -boot_var
 RELEASE_LIB <release>/lib`, the release's `sys.config` and `vm.args`,
 `-noshell -noinput`, and the pharos arguments after `-extra`. `-mode` and
-`embedded` are separate argv elements, as ADR-033 found the hard way. On
-Unix this is a real `execve`, so the BEAM takes over the shim's pid and
-stdio. On Windows, which has no `exec`, the shim spawns the BEAM with
-inherited handles inside a kill-on-close Job Object and returns its
-exit code.
+`embedded` are separate argv elements, as ADR-033 found the hard way.
+This is a real `execve`, so the BEAM takes over the shim's pid and
+stdio. A Windows build of the shim stops at a `compile_error!` that
+points to WSL.
 
 The shim finds its release relative to its own resolved path, so it
 works in the npm package and in the versioned install layout without
@@ -396,7 +396,7 @@ In direct mode the invariant applies exactly as today.
   `PHAROS_MODE=auto` falls back to `--direct` when the daemon cannot
   start.
 - Two languages to maintain: a Rust crate (`shim/`) with its own CI
-  job (fmt, clippy, tests) on Linux, macOS and Windows. Mix stays
+  job (fmt, clippy, tests) on Linux and macOS. Mix stays
   authoritative for the BEAM side (invariant 2). Cargo builds the shim
   and the release step pairs them.
 - macOS arm64: anything stripped or patched after linking is re-signed

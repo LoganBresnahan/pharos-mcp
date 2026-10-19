@@ -692,10 +692,10 @@ lives in TOML and environment variables — there are no runtime
 configuration CLI flags.
 
 With no arguments pharos is the MCP stdio server an MCP client runs.
-On Linux and macOS each session connects to one shared pharos daemon
+Each session connects to one shared pharos daemon
 per version, started on demand, so sessions share language servers;
 PHAROS_MODE=direct (or --direct) runs a session in its own process
-instead, as on Windows. PHAROS_MODE=daemon fails rather than falling
+instead. PHAROS_MODE=daemon fails rather than falling
 back to direct mode when the daemon can't be reached.
 
 Commands

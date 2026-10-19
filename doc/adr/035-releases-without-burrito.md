@@ -1,6 +1,6 @@
 # 035. Releases without Burrito: a release per target, the shim as launcher, npm and install.sh
 
-**Status:** Accepted
+**Status:** Accepted; amended 2026-10-19: Windows unsupported, use WSL
 **Date:** 2026-10-19
 **Supersedes:** [ADR-033](033-burrito-fork-embedded-mode-in-use-lock.md) (the Burrito fork),
 and the Burrito half of [ADR-004](004-distribution-npm-and-releases.md)
@@ -20,11 +20,15 @@ says otherwise.
 Constraints:
 
 - **The npm package names stay**: `pharos-mcp` plus `@pharos-mcp/{linux-x64,linux-arm64,
-  darwin-x64,darwin-arm64,win-x64}`. Trusted publishing is configured for them, and a rename
-  would need the owner on npmjs.com.
+  darwin-x64,darwin-arm64}`. Trusted publishing is configured for them, and a rename
+  would need the owner on npmjs.com. (`@pharos-mcp/win-x64` stops at 0.1.x; see below.)
 - **No resident node per session.** Today every session is a 44 MB `node` running `bin/pharos.js`
   around the binary.
-- **Windows** stays in direct mode (ADR-034).
+- **Windows is unsupported** (amended 2026-10-19, the owner's decision for all three apps):
+  Windows users run pharos inside WSL. There is no Windows build, package or CI job;
+  `pharos-mcp` on win32 and a Windows build of the shim both stop with a pointer to WSL.
+  `pharos-mcp@0.1.4` was the last native Windows build, and its published win-x64 package
+  stays on npm (nothing is unpublished).
 - **The install convention** shared by all three apps: `<app>-<version>-<os>-<arch>.tar.gz`,
   `SHA256SUMS` and `install.sh` on the release; `~/.local/share/<app>/versions/<version>/` plus a
   file symlink in `~/.local/bin`, switched by rename; fail closed on the hash; keep the current
@@ -59,7 +63,6 @@ OTP:
 | `@pharos-mcp/linux-arm64` | `pharos-<v>-linux-arm64.tar.gz` | ubuntu-22.04-arm |
 | `@pharos-mcp/darwin-arm64` | `pharos-<v>-darwin-arm64.tar.gz` | macos-14 |
 | `@pharos-mcp/darwin-x64` | `pharos-<v>-darwin-x64.tar.gz` | macos-15-intel (new: geex has not tried it yet, and the result goes back to geex-e1) |
-| `@pharos-mcp/win-x64` | `pharos-<v>-win32-x64.zip` (npm only, not install.sh) | windows-2022, OTP 28.1.1's official Windows build via setup-beam |
 
 ### 3. The release build
 
@@ -72,9 +75,10 @@ OTP:
   `erl_child_setup` (every LSP spawn goes through it) and `inet_gethost`. Those are stripped with
   `strip -S` and re-signed ad hoc on macOS. crypto's `otp_test_engine.so` is dropped. Mix's own
   scripts (`bin/pharos`, `releases/V/{elixir,iex,env.sh,…,start_clean.*}`) and `releases/COOKIE`
-  are removed. The cookie matters because a published cookie would be everyone's. Windows keeps
-  its ERTS whole.
-- **`build_shim`**: `cargo build --release` in `shim/`, copied to `bin/pharos` (`pharos.exe`),
+  are removed. The cookie matters because a published cookie would be everyone's. Every
+  `lib/*/priv/**/*.so` is signed ad hoc on macOS too: the Intel linker leaves dylibs unsigned
+  (found on macos-15-intel).
+- **`build_shim`**: `cargo build --release` in `shim/`, copied to `bin/pharos`,
   and re-signed ad hoc on macOS.
 - **`check_native`**, ported from geex's `native_problems/2`, covers every ERTS program, every
   `priv/**/*.so` and the shim:
@@ -126,13 +130,12 @@ this change.
   (Alpine/musl and older distros aren't supported yet); pharos-mcp@0.1.4 still runs there" and
   exit non-zero. The release notes carry the same line.
 - `pharos-mcp`'s `bin` stays `bin/pharos.js`. Its **postinstall** (esbuild's pattern) replaces
-  that file, on Linux and macOS, with a symlink to the installed platform package's
+  that file with a symlink to the installed platform package's
   `release/bin/pharos`. npm's own bin link then resolves to the native shim, with no node in the
   process tree. The shim canonicalizes its path, so it still finds its release.
 - With `--ignore-scripts`, or if the swap fails, `bin/pharos.js` stays: a fallback that spawns the
   native shim with inherited stdio and passes signals and the exit status through. That costs a
-  node per session again, but only in that case. Windows always uses it, because npm's `.cmd`
-  shims need a script target.
+  node per session again, but only in that case.
 - **`npm update` replaces the platform package in place**, so a daemon running from it loses its
   files. Embedded mode makes this survivable: every module is loaded at boot, and
   `erl_child_setup`, which every LSP spawn goes through, is already running. What is left is
@@ -161,7 +164,7 @@ this change.
     ADR-034 integration suite run against the packaged tarball (Linux and macOS), and an
     install.sh smoke from `file://`;
   - `publish`, only on `refs/tags/v*`: a normal GitHub release (marked latest) with the
-    tarballs, `SHA256SUMS`, `install.sh` and the Windows zip. Then npm publish of the five
+    tarballs, `SHA256SUMS` and `install.sh`. Then npm publish of the four
     platform packages, then `pharos-mcp`, all on `latest` and through the existing trusted
     publishing.
   - Branch runs (`ci/**`) build and test everything and publish nothing.
@@ -177,8 +180,7 @@ this change.
     postinstall swap worked;
   - an `npm i -g --ignore-scripts` job proves the JS fallback still answers `initialize`.
 
-  `PHAROS_MODE=daemon` is set throughout, so a fallback would fail the run. Windows gets an npm
-  install and a direct-mode `initialize`.
+  `PHAROS_MODE=daemon` is set throughout, so a fallback would fail the run.
 
 ## Consequences
 

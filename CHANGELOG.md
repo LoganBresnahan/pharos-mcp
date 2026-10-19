@@ -22,8 +22,8 @@ working unchanged: the command is still `pharos`.
   ([ADR-034](doc/adr/034-shared-daemon-and-native-shim.md)). Each
   session keeps its own tool filter, timeout overrides, project config
   (`.pharos.toml` above its working directory) and environment, which
-  its LSPs run with. On Windows, and with `PHAROS_MODE=direct` or
-  `--direct` anywhere, a session runs in its own process as before.
+  its LSPs run with. With `PHAROS_MODE=direct` or `--direct`, a session
+  runs in its own process as before.
 - **`pharos daemon status|stop [--all]`** to see and stop daemons.
 - **install.sh**: `curl -fsSL https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/install.sh | sh`
   installs into `~/.local/share/pharos/versions/<version>/`, links
@@ -43,6 +43,9 @@ working unchanged: the command is still `pharos`.
   ([ADR-035](doc/adr/035-releases-without-burrito.md)). After
   `npm install -g pharos-mcp`, `pharos` is the native binary on Linux and
   macOS: no node process per session.
+- **Windows is no longer supported natively.** pharos 0.2 runs on Linux
+  and macOS; on Windows, install it inside WSL (pharos-mcp@0.1.4 was the
+  last native Windows build).
 - **Linux needs glibc 2.35 or newer** (Ubuntu 22.04, Debian 12, RHEL 9 or
   newer). pharos 0.2 needs glibc 2.35+ (Alpine/musl and older distros
   aren't supported yet); pharos-mcp@0.1.4 still runs there.
