@@ -70,19 +70,19 @@ jobs:
           for i in $(seq 1 45); do
             missing=
             for pkg in pharos-mcp @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
-              [ "$(npm view "$pkg@$v" version 2>/dev/null)" = "$v" ] || missing="$missing $pkg"
+              [ "$(npm view "$pkg@$v" version --prefer-online 2>/dev/null)" = "$v" ] || missing="$missing $pkg"
             done
             [ -z "$missing" ] && { echo "all packages at $v resolve"; exit 0; }
             echo "not yet:$missing (try $i)"
             sleep 20
           done
-          echo "the registry still doesn't serve$missing at $v" >&2
+          echo "not visible on the registry after 15 min:$missing at $v" >&2
           exit 1
       - name: Install
         shell: bash
         run: |
           for i in 1 2 3; do
-            npm install -g pyright "pharos-mcp@${{ inputs.version }}" && exit 0
+            npm install -g --prefer-online pyright "pharos-mcp@${{ inputs.version }}" && exit 0
             sleep 30
           done
           exit 1
@@ -121,19 +121,19 @@ jobs:
           for i in $(seq 1 45); do
             missing=
             for pkg in pharos-mcp @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
-              [ "$(npm view "$pkg@$v" version 2>/dev/null)" = "$v" ] || missing="$missing $pkg"
+              [ "$(npm view "$pkg@$v" version --prefer-online 2>/dev/null)" = "$v" ] || missing="$missing $pkg"
             done
             [ -z "$missing" ] && { echo "all packages at $v resolve"; exit 0; }
             echo "not yet:$missing (try $i)"
             sleep 20
           done
-          echo "the registry still doesn't serve$missing at $v" >&2
+          echo "not visible on the registry after 15 min:$missing at $v" >&2
           exit 1
       - name: Install
         shell: bash
         run: |
           for i in 1 2 3; do
-            npm install -g --ignore-scripts "pharos-mcp@${{ inputs.version }}" && exit 0
+            npm install -g --prefer-online --ignore-scripts "pharos-mcp@${{ inputs.version }}" && exit 0
             sleep 30
           done
           exit 1
