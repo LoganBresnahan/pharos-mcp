@@ -233,7 +233,16 @@ jobs:
                 | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin)["versions"] else 1)' "$version" \
                 || missing="$missing $plat"
             done
-            [ -z "$missing" ] && { echo "every platform package at $version is installable"; exit 0; }
+            if [ -z "$missing" ]; then
+              # This runner's CDN edge is fresh, but the install document is
+              # served with `cache-control: public, max-age=300`, so another
+              # Cloudflare edge can serve its stale copy for up to five more
+              # minutes. Wait out one max-age so every user sees the platform
+              # packages before the main package's new version appears.
+              echo "every platform package at $version is installable here; waiting out max-age=300 for other edges"
+              sleep 300
+              exit 0
+            fi
             echo "not installable yet:$missing (try $i)"
             sleep 15
           done
