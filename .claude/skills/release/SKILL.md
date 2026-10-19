@@ -1,183 +1,159 @@
 ---
 name: release
-description: Cut a versioned pharos release — bump the version in both files, build all five Burrito targets locally, verify the binaries actually run, then push the tag that drives the GitHub Actions build → smoke → npm-publish pipeline. Handles the Burrito extraction-cache foot-gun and the two-lockfile/two-version-file duality. Run when shipping a new version; requires the suite green twice first.
+description: Cut a versioned pharos release — bump the version in both files, build and run this machine's release locally, dry-run the per-target pipeline on a ci/** branch, then push the tag that drives the GitHub Actions build → publish (GitHub release with install.sh, npm) → post-release smoke. Handles the two-version-file duality and npm's install-document lag. Run when shipping a new version; requires the suite green twice first.
 ---
 
 # /release — cut and ship a version
 
-A pharos release moves **six npm packages and five cross-compiled binaries**, and
-publishes to a public registry under the maintainer's identity. Publishing is
-irreversible in practice (npm unpublish is heavily restricted), so this skill is
+A pharos release (ADR-035) publishes **a GitHub release** (four tarballs,
+`SHA256SUMS`, `install.sh`) and **five npm packages** (four
+`@pharos-mcp/<platform>` packages plus `pharos-mcp`), under the maintainer's
+identity. Publishing is irreversible in practice (npm unpublish is heavily
+restricted, and `install.sh` users fetch `releases/latest`), so this skill is
 deliberate about the order and about what gets verified *before* the tag is
 pushed.
+
+Targets: `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`. There is no
+Windows build; Windows users run pharos inside WSL.
 
 **Preconditions — refuse to proceed if unmet:**
 
 1. Working tree clean (the version bump commits, so dirty state would sweep
    unrelated work into a release commit).
 2. Ship bar: suite green **twice** — run it, don't trust memory.
-3. `mix release.dev` succeeds locally (Zig **0.15.2** and `xz` present).
+3. `mix release.dev` succeeds locally (needs `cargo` for `shim/`).
 4. `/shipshape` clean, or its findings explicitly accepted by the user.
 
-**Never push the tag before the local build passes.** The tag *is* the trigger —
-`.github/workflows/release.yml` fires on `push: tags`, and a bad tag means a
-failed public pipeline you then have to clean up.
+**Never push the tag before the dry run passes.** The tag *is* the trigger —
+`.github/workflows/release.yml` publishes only for `refs/tags/v*`, and a bad tag
+means a failed public pipeline you then have to clean up.
 
-## 0. History — `mix release.prod` had never worked until 6b24d79
+## 0. History
 
-Worth knowing, because it means the tags in this repo were **not** produced by
-the process below. `prod.ex` bumped `mix.exs` by matching `@version "..."`, but
-`d4e9058` (2026-05-21) renamed that attribute to `@version_base` without
-updating the task. That was four days before the `v0.1.0` tag, so every release
-from `v0.1.0` through `v0.1.4` was bumped and tagged **by hand** — which is why
-no `chore: release v<vsn>` commit (this task's signature) appears anywhere in
-the history, and why the tags sit on ordinary `fix(...)` commits.
+`mix release.prod` had never worked until 6b24d79: `d4e9058` renamed
+`@version` to `@version_base` without updating the task, so `v0.1.0` through
+`v0.1.4` were bumped and tagged **by hand**, on ordinary `fix(...)` commits.
+`v0.2.0-rc.1` (ada6289) and `v0.2.0` (fc29e0c) are the first tags with the
+task's `chore: release v<vsn>` signature.
 
-The regex is fixed now, but treat the task as **lightly exercised**: it has one
-verified run behind it, not five releases' worth. Two consequences:
-
-- Verify each step's effect rather than trusting the task — after it returns,
-  confirm both version files, the commit, and the tag.
-- If you change it, re-verify on a **throwaway branch**, because its failure
-  mode is *after* `git commit` and `git tag` for every step past the first.
-  Delete the branch, the tag, and the test build afterwards.
-
-The failure mode it did have was at least safe: `bump_mix_exs!` raises before
-`gleam.toml` is touched and before anything is committed, so a mismatch leaves
-no partial state.
+Still treat the task as lightly exercised. Verify each step's effect rather than
+trusting it — after it returns, confirm both version files, the commit, and the
+tag. If you change it, re-verify on a **throwaway branch**: its failure modes
+past the first step come *after* `git commit` and `git tag`. Delete the branch,
+the tag, and the test build afterwards.
 
 ## 1. Decide the version, confirm it
 
 SemVer; `0.x.y` still signals breaking-changes-allowed. Confirm the number with
-the user rather than inferring it — the tag is public and permanent.
+the user rather than inferring it — the tag is public and permanent. A
+prerelease (`0.3.0-rc.1`) publishes to npm's `next` tag instead of `latest`,
+which makes it the safe way to try a risky release first.
 
 Check what's already out so you don't collide:
 
 ```bash
 git tag --list 'v*' | sort -V | tail -5
-npm view pharos-mcp versions --json | tail -5
+npm view pharos-mcp dist-tags
 ```
 
-## 2. Bump the version — BOTH files, they must agree
+## 2. Dry-run the pipeline on a `ci/**` branch
+
+`release.yml` runs on any `ci/**` branch push and does everything except
+publish: each target builds natively on its own runner (linux on
+ubuntu-22.04 for the glibc 2.35 floor, macOS on macos-14 and macos-15-intel)
+with `PHAROS_RELEASE=1` and the runtime `rel/build-runtime.sh` builds, so the
+native check is enforced; then the ADR-034 integration suite runs against the
+release, and `rel/smoke.sh` installs the tarball through `install.sh` and
+drives it as an MCP client, a pyright hover included.
 
 ```bash
-# mix.exs      → @version_base "<vsn>"
-# gleam.toml   → version = "<vsn>"
+git push origin HEAD:ci/release-<vsn>
+gh run watch          # all four builds must pass
 ```
 
-Both, or the build is inconsistent: `mix.exs` drives the OTP application `vsn`
+This is the only place the macOS and arm64 builds run before a publish, so do
+it for anything but a trivial patch. Delete the branch afterwards.
+
+## 3. Bump the version, build locally
+
+```bash
+mix release.prod <vsn>
+```
+
+It bumps **both** version files, commits `chore: release v<vsn>`, tags
+`v<vsn>`, and builds this machine's target. Both files, or the build is
+inconsistent: `mix.exs` (`@version_base`) drives the OTP application `vsn`
 that `pharos/version` reads for `--version`, MCP `serverInfo`, and outbound
-`clientInfo`; `gleam.toml` drives the Gleam compiler's view. Shipping them out of
-sync is exactly the class of bug commit `9b92aec` fixed (0.1.3 shipped
-identifying itself as "0.1.2").
+`clientInfo`; `gleam.toml` drives the Gleam compiler's view. Shipping them out
+of sync is exactly the class of bug `9b92aec` fixed (0.1.3 shipped identifying
+itself as "0.1.2"). CI also refuses a tag that doesn't match `mix.exs`.
 
-Then commit and tag:
+Two things about the build are load-bearing:
 
-```bash
-git commit -am "chore: release v<vsn>"
-git tag v<vsn>
-```
+- **`mix do compile + release` in ONE invocation** (the task does this).
+  Splitting it into two `mix` calls breaks
+  [ADR-011](../../../doc/adr/011-mix-app-name-symlink-workaround.md)'s `hpack`
+  workaround — the second VM re-walks deps without re-firing the alias and fails
+  with `Could not find application :hpack`.
+- **A local build is not a release build.** Without `PHAROS_RELEASE=1` the
+  version carries a `+<sha>` suffix and the native check only prints notes;
+  with the system OTP instead of `rel/build-runtime.sh`'s, it would fail. That
+  is fine: the local build checks that the tree builds and runs, and step 2's
+  dry run checks the real thing.
 
-## 3. Build all five targets locally
-
-```bash
-MIX_ENV=prod PHAROS_RELEASE=1 mix do compile + release --overwrite
-```
-
-`PHAROS_RELEASE=1` drops the `+<sha>` dev suffix so the artifact reports the
-clean SemVer — this is what CI sets, and what the smoke job asserts against.
-
-Two things about this command are load-bearing:
-
-- **`mix do compile + release` in ONE invocation.** Splitting it into two `mix`
-  calls breaks [ADR-011](../../../doc/adr/011-mix-app-name-symlink-workaround.md)'s
-  `hpack` workaround — the second VM re-walks deps without re-firing the alias
-  and fails with `Could not find application :hpack`.
-- **A cold `_build` fails before it starts** for the same reason. Run
-  `mix compile` first if `_build/prod` was wiped.
-
-Because the version changed, Burrito's extraction cache keys on a *new*
-directory, so no cache wipe is needed here — that is `mix release.dev`'s problem,
-not this one.
-
-## 4. Verify the binaries — locally, before the tag leaves your machine
+## 4. Verify the local build
 
 ```bash
-ls -la burrito_out/          # all five, freshly dated
-./burrito_out/pharos_linux_x64 --version    # must print exactly "pharos <vsn>"
-./burrito_out/pharos_linux_x64 --doctor
+ls -l _build/package/                                   # pharos-<vsn>+<sha>-<target>.tar.gz, SHA256SUMS
+_build/prod/rel/pharos/bin/pharos --version             # pharos <vsn>+<sha>
+_build/prod/rel/pharos/bin/pharos --doctor
+python3 -I test/daemon/integration.py --release _build/prod/rel/pharos --shim _build/prod/rel/pharos/bin/pharos
 ```
 
-Check by **exit status and artifact timestamps**, never by scrollback — Burrito
-prints a lot and a stale binary from a previous build looks identical in a
-listing until you read the date. If you backgrounded the build, do not trust a
-wrapper's exit code; read the build's own status.
+Check by **exit status and artifact timestamps**, never by scrollback. If you
+backgrounded the build, do not trust a wrapper's exit code; read the build's
+own status.
 
-Then the MCP handshake, the same one CI runs:
-
-```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
-  '{"jsonrpc":"2.0","method":"initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"message":"smoke"}}}' \
-  | ./burrito_out/pharos_linux_x64
-```
-
-Only `linux_x64` is locally verifiable; the other four are cross-compiled and get
-their first real execution in CI's smoke matrix. That asymmetry is why the tag
-push is a checkpoint, not the finish line.
-
-## 5. Dry-run the pipeline first (recommended)
-
-`release.yml` has a `workflow_dispatch` with a `dry_run` input that builds and
-smoke-tests all five platforms but skips npm publish and the GH Release:
-
-```bash
-gh workflow run release.yml -f dry_run=true
-gh run watch
-```
-
-This is the only way to exercise the macOS and Windows binaries before
-committing to a publish. Worth it for anything but a trivial patch.
-
-## 6. Push the tag — this triggers the public pipeline
+## 5. Push the tag — this triggers the public pipeline
 
 ```bash
 git push && git push --tags
 ```
 
-Three jobs run in sequence, each gating the next:
+Three stages, each gating the next:
 
-1. **build** — all five targets on one Linux host, `PHAROS_RELEASE=1`, version
-   extracted from the tag; stages the `npm/` tree and raw binaries as artifacts.
-2. **smoke** — per-platform matrix: `--version` must equal `pharos <vsn>` exactly,
-   `--doctor` must pass, and the MCP init + `tools/list` + `echo` handshake must
-   answer. This is where a broken cross-compile surfaces.
-3. **publish** — the five `@pharos-mcp/<platform>` packages, then the main
-   `pharos-mcp` package, via **npm OIDC trusted publishing with provenance**
-   (needs `id-token: write`), plus the GitHub Release.
+1. **build** — the four native builds, exactly as in the dry run.
+2. **publish** — the GitHub release (marked latest) with the tarballs,
+   `SHA256SUMS` and `install.sh`; then the four platform packages; then a wait
+   until npm can install every one of them, plus npm's install-document
+   max-age (300 s); then `pharos-mcp`, via **npm OIDC trusted publishing with
+   provenance** (no token). The wait exists because publishing `pharos-mcp`
+   while the CDN still serves an install document without the new platform
+   version makes installs skip the optional dependency (4ed8d23, eb5ec52).
+3. **smoke** — `smoke.yml` on fresh runners: `curl … install.sh | sh` on
+   seven runners, `npm i -g pharos-mcp` on the same seven, and an
+   `--ignore-scripts` install that exercises the JS fallback launcher.
 
-Concurrency is set to `cancel-in-progress: false` — a release is never cancelled
-mid-publish. Do not try to abort a running publish job; let it finish and correct
-forward.
+A tag's run is never cancelled. Do not try to abort a running publish job; let it
+finish and correct forward.
+
+If an npm smoke fails with `ETARGET` or a missing platform package right after
+publish, suspect registry/CDN lag before suspecting the release: rerun the
+failed jobs a few minutes later (`gh run rerun <id> --failed`).
+
+## 6. Verify what actually shipped
 
 ```bash
-gh run watch          # follow it
-```
-
-## 7. Verify what actually shipped
-
-```bash
-npm view pharos-mcp version
+gh release view v<vsn>
+npm view pharos-mcp dist-tags
 npm view pharos-mcp optionalDependencies
 ```
 
-Then install clean and run it — the postinstall path (platform detection, binary
-resolution) is only exercised by a real install:
+The smoke stage installs both ways on clean runners; to check by hand, install
+into a throwaway HOME so your own install is untouched:
 
 ```bash
-cd "$(mktemp -d)" && npm i pharos-mcp && npx pharos --version
+sh rel/smoke.sh --version <vsn> --lsp pyright
 ```
 
 ## Report
@@ -185,9 +161,8 @@ cd "$(mktemp -d)" && npm i pharos-mcp && npx pharos --version
 ```
 RELEASE — pharos v<vsn>
   preconditions  suite ×2 ✓ · tree clean ✓ · shipshape <state>
-  local build    5/5 targets · linux_x64 --version/--doctor/handshake ✓
-  dry run        <ran|skipped>
-  pipeline       build ✓ · smoke <n>/5 ✓ · publish ✓
-  published      npm pharos-mcp@<vsn> (+5 platform pkgs) · GH Release ✓
-  verified       clean install ✓
+  dry run        ci/release-<vsn> · 4/4 builds ✓
+  local build    --version/--doctor ✓ · integration ✓
+  pipeline       build 4/4 ✓ · publish ✓ · smoke <n>/15 ✓
+  published      GH release v<vsn> · npm pharos-mcp@<vsn> (<dist-tag>) + 4 platform pkgs
 ```

@@ -1,6 +1,6 @@
 ---
 name: dogfood
-description: Drive a real pharos against real LSP servers to verify behaviour the gleeunit suite structurally cannot reach — no fake LSP, real rust-analyzer / gopls / pyright / jdtls answering real requests. Covers the four handles (Tier-1 regression, 23-language sweep, out-of-band stdio probes, live MCP host), the dev-wrapper-vs-binary trap that hides a whole bug class, and the Burrito cache staleness that silently runs old code. Use after changes to the tool surface, the transports, or anything touching stdio framing.
+description: Drive a real pharos against real LSP servers to verify behaviour the gleeunit suite structurally cannot reach — no fake LSP, real rust-analyzer / gopls / pyright / jdtls answering real requests. Covers the four handles (Tier-1 regression, 23-language sweep, out-of-band stdio probes, live MCP host), the dev-wrapper-vs-binary trap that hides a whole bug class, and the shared daemon that keeps serving the previous build (and its warm LSPs) after a rebuild. Use after changes to the tool surface, the transports, or anything touching stdio framing.
 ---
 
 # /dogfood — drive pharos against real LSPs
@@ -13,34 +13,41 @@ layer ([ADR-009](../../../doc/adr/009-dogfood-via-claude-code.md)).
 ## Two traps to internalise before running anything
 
 **1. `bin/pharos-dev` cannot see a whole bug class.** The dev wrapper runs
-*interactive* Erlang; the Burrito release runs `-noshell -mode embedded
--noinput`. The stdio bug class fixed in commit `e857dce` is **invisible under
+*interactive* Erlang; the release runs `-noshell -mode embedded
+-noinput`, behind the native shim and the shared daemon (ADR-034). The stdio bug class fixed in commit `e857dce` is **invisible under
 `pharos-dev`**. So:
 
 > Any change touching `pharos_stdin_ffi`, the log writer, NDJSON framing, or port
 > operations must be verified against the **binary**, not just `pharos-dev`.
 
-**2. The Burrito cache will silently run old code.** The cache key is
-`pharos_erts-<erts>_<app_vsn>` and does **not** include payload bytes, so
-rebuilding at the same version re-runs the previous extract. Full sequence:
+**2. A running daemon keeps serving the previous build.** Since 0.2 nothing
+extracts at run time ([ADR-035](../../../doc/adr/035-releases-without-burrito.md)),
+and a rebuild gets a new `BUILD_ID` and so its own daemon socket. But sessions
+already connected stay on the old build's daemon until they end, and an MCP host
+pointed at the installed `~/.local/bin/pharos` runs whatever install.sh last put
+there, not your `_build`. Full sequence:
 
 ```sh
-rm -rf ~/.local/share/.burrito/pharos_erts-*
-MIX_ENV=prod mix release --overwrite
-node npm/pharos-mcp/scripts/postinstall.js    # warm re-extract
-# then /mcp reconnect pharos in the host
+mix release.dev                                   # clean rebuild + _build/package/
+PHAROS_DOWNLOAD_URL=file://$PWD/_build/package sh install.sh --force --version <version>
+pharos daemon stop --all                          # end the old build's daemons
+# then /mcp reconnect pharos in the host; `pharos daemon status` shows the new build
 ```
 
-Prefer `mix release.dev`, which does the cache wipe for you and is the reason
-that task exists.
+`daemon stop --all` stops every pharos daemon on the machine, every build's:
+pharos in your *other* MCP host sessions (other Claude Code windows) drops too
+and needs its own `/mcp` reconnect. Say so before running it in someone's live
+environment. `mix release.dev` prints the exact install.sh line, version
+included. Or
+skip the install and point the harness or host straight at
+`_build/prod/rel/pharos/bin/pharos`.
 
-> **[doc/dogfood.md](../../../doc/dogfood.md) is stale on this point** — it warns
-> about copying `burrito_out/` into `npm/vendor/` before running postinstall.
-> That layout is gone: `npm/vendor/` no longer exists, `mix release`'s
-> `refresh_npm_platform_packages` step now copies each binary into
-> `npm/@pharos-mcp/<platform>/bin/` automatically, and postinstall resolves it
-> via `require.resolve` on the platform sub-package. The staleness trap it
-> describes no longer applies; the *cache* trap above still does.
+The daemon also outlives a harness run (it idles out after
+`PHAROS_DAEMON_IDLE_SECS`, 30 min by default), and so do its LSPs. A second run
+right after the first finds rust-analyzer or jdtls already indexed — `pharos
+daemon stop --all` before any run that is meant to measure cold starts. To take
+the daemon out of the picture entirely, `PHAROS_MODE=direct` (or `pharos
+--direct`) runs one independent BEAM per session, as 0.1.x did.
 
 If results look inexplicably like the previous build, this is why — check it
 first, not last.
@@ -81,7 +88,7 @@ bin/dogfood-fixtures.sh                                  # clone into tmp/fixtur
 python3 bin/dogfood-23lang.py                            # dev / stdio / all
 python3 bin/dogfood-23lang.py --transport http
 python3 bin/dogfood-23lang.py --profile default
-PHAROS_TEST_BIN=burrito_out/pharos_linux_x64 \
+PHAROS_TEST_BIN=_build/prod/rel/pharos/bin/pharos \
   python3 bin/dogfood-23lang.py --label "binary, post-rebuild"
 ```
 
@@ -126,7 +133,8 @@ and use it for real work. This is the only handle that evaluates what an LLM
 description in context, whether the agent picks the right tool, whether a compact
 response is still legible.
 
-After rebuilding, `/mcp` reconnect so the host spawns the fresh binary.
+After rebuilding, install it and stop the old daemons (trap 2), then `/mcp`
+reconnect so the host spawns the fresh shim.
 
 Findings here are not version-controlled by default (ADR-009). A significant one
 graduates into a commit message, an ADR, or a dated `doc/dogfood-*.md` report —
@@ -140,6 +148,7 @@ otherwise it evaporates.
 | Tool surface / new tool | 1 full, then 4 |
 | Config, binary resolution | 3 |
 | `pharos_stdin_ffi`, writer, framing, ports | 1 **against the binary** — dev wrapper cannot see it |
+| Daemon, shim, session context | `test/daemon/integration.py`, then 1 against the binary with ≥ 2 concurrent sessions |
 | Transports (stdio/HTTP) | `test-both-transports.py` |
 | Release-shaped change | 2 against the binary, plus 4 |
 
@@ -148,7 +157,7 @@ otherwise it evaporates.
 ```
 DOGFOOD — pharos <dev|binary vX.Y.Z+sha>
   handle      <which, and why that one>
-  cache       <wiped + vendor refreshed | n/a for dev wrapper>
+  build       <dev wrapper | binary BUILD_ID, old daemons stopped ✓ | direct mode>
   results     <n> pass · <n> fail · <n> PASS(-32601) · <n> timeout-retried
   failures    <cell> — <reason> — <is it pharos or the LSP?>
   findings    <what a commit/ADR should capture; else "none">

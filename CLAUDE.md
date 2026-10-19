@@ -91,7 +91,8 @@ changing anything that spawns, blocks, or times out — it is written to answer
    so a rebuilt release never joins a daemon running other code. But sessions
    already connected stay on the old build's daemon until they end: after a
    rebuild, `pharos daemon stop --all` (or reconnect `/mcp`) before trusting a
-   dogfood result. Nothing extracts at run time any more
+   dogfood result — and know that `--all` also drops pharos in every other
+   session on the machine. Nothing extracts at run time any more
    ([ADR-035](doc/adr/035-releases-without-burrito.md)).
 
 ## Build / test / run
@@ -103,11 +104,13 @@ mix start                          # run the stdio server on this shell
 bin/pharos-dev                     # dev wrapper for MCP-client use
 mix release.dev                    # clean rebuild of this machine's release + package
 mix release.prod <vsn>             # bump both version files, commit, tag, build
-python3 test/daemon/integration.py # daemon + shim scenarios (CI's daemon-integration job)
+python3 -I test/daemon/integration.py --release _build/prod/rel/pharos \
+  --shim _build/prod/rel/pharos/bin/pharos  # ADR-034 daemon + shim scenarios
 ```
 
-Toolchain is pinned in [.tool-versions](.tool-versions) and must match the
-versions in both CI workflows — those pins have drifted apart before. The
+Toolchain is pinned in [.tool-versions](.tool-versions) and must match `ci.yml`
+and the release toolchain (`rel/build-runtime.sh`, `.github/actions/setup`) —
+those pins have drifted apart before. The
 release path additionally needs **Rust** (cargo builds `shim/`; pinned in
 `shim/rust-toolchain.toml`). Release builds run on the OTP that
 `rel/build-runtime.sh` builds (geex's script, byte for byte); with another OTP

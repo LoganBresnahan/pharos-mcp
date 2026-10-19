@@ -1,6 +1,6 @@
 ---
 name: shipshape
-description: Verify pharos is shipshape — the build compiles warnings-clean, the suite is green twice, the release path still wraps, docs (architecture.md / ADR index / roadmap) match the code, and the conventions hold (fossil guard, logging shape, stdout purity, lockfile agreement, toolchain pins). Use after substantive changes, before commits, or when asked whether the project is in order.
+description: Verify pharos is shipshape — the build compiles warnings-clean, the suite is green twice, the release path still builds, docs (architecture.md / ADR index / roadmap) match the code, and the conventions hold (fossil guard, logging shape, stdout purity, lockfile agreement, toolchain pins). Use after substantive changes, before commits, or when asked whether the project is in order.
 ---
 
 # /shipshape — repo verification pass
@@ -34,26 +34,48 @@ mix gleam.test
 mix gleam.test
 ```
 
+If `shim/` moved, the shim gates CI runs (on Linux and macOS):
+
+```bash
+(cd shim && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)
+```
+
+If the daemon, the shim, or anything they share (`src/pharos/daemon*`,
+`src/pharos_daemon_ffi.erl`, session context, the pool) moved, run the ADR-034
+integration suite against a fresh `mix release.dev` (below) — a dozen
+scenarios no gleeunit test reaches (concurrent spawn races, daemon death, idle
+exit, cancel):
+
+```bash
+python3 -I test/daemon/integration.py --release _build/prod/rel/pharos --shim _build/prod/rel/pharos/bin/pharos
+```
+
 **The release gate is conditional and load-bearing.** If anything under
-`mix.exs`, `mix.lock`, `manifest.toml`, `gleam.toml`, `rel/`, or `.tool-versions`
-moved, a green suite proves nothing about releases: Burrito failures land at the
-*wrap* step, after compile and assemble both succeed. Run it:
+`mix.exs`, `mix.lock`, `manifest.toml`, `gleam.toml`, `rel/`, `shim/`,
+`lib/mix/pharos/`, or `.tool-versions` moved, a green suite proves nothing about
+releases: release failures land in the release steps (boot-script check, trim,
+shim build, native check, package), after compile and assemble both succeed.
+Run it:
 
 ```bash
 mix release.dev
 ```
 
 Verify by **exit status and artifact timestamps**, not by scrollback — and not by
-a wrapper's exit code if you backgrounded it. All five files in `burrito_out/`
-must be freshly dated, and the binary must run:
+a wrapper's exit code if you backgrounded it. The tarball in `_build/package/`
+must be freshly dated, and the release must run:
 
 ```bash
-ls -la burrito_out/ && ./burrito_out/pharos_linux_x64 --version
+ls -l _build/package/ && _build/prod/rel/pharos/bin/pharos --version
 ```
 
-Needs Zig 0.15.2 and `xz`. A cold `_build/dev` makes `mix release.dev` fail on
-`hpack_erl` before it starts — that is the [ADR-011](../../../doc/adr/011-mix-app-name-symlink-workaround.md)
-alias not having fired yet, not a regression. Run `mix compile` first.
+Needs `cargo`. A local build runs on the system OTP, so the native check only
+prints notes; the enforced check (`PHAROS_RELEASE=1` on the runtime
+`rel/build-runtime.sh` builds) runs in `release.yml`, which a push to any
+`ci/**` branch exercises for all four targets without publishing. A cold
+`_build` can make the build fail on `hpack_erl` before it starts — that is the
+[ADR-011](../../../doc/adr/011-mix-app-name-symlink-workaround.md) alias not
+having fired yet, not a regression. Run `mix compile` first.
 
 Finally, the end-to-end smoke path CI runs — it is the only check that catches
 **stdout contamination**, which no unit test can:
@@ -109,8 +131,7 @@ grep -rEn --include='*.gleam' --include='*.erl' --include='*.ex' \
   src/ lib/
 ```
 
-Any hit fails CI. Also check `npm/pharos-mcp/scripts/postinstall.js` for a bare
-`process.env.APPDATA` (must be `LOCALAPPDATA`). If the diff fixed a bug whose
+Any hit fails CI. If the diff fixed a bug whose
 root cause was a hardcoded assumption, the guard should have gained its
 signature in the same commit — a fix without a guard entry is a finding.
 
@@ -125,7 +146,11 @@ first, not special.
 **Erlang FFI justification:** a new `src/pharos_*_ffi.erl` needs a module comment
 saying what Gleam couldn't express. "Easier in Erlang" is not a reason.
 
-**No new NIFs** without an ADR — see ADR-030's v1.0 constraint.
+**No new NIFs** without an ADR — see ADR-030's v1.0 constraint. Native code
+belongs in a separate executable, the way the Rust shim does it (ADR-034).
+
+**Shell scripts stay POSIX sh:** `install.sh` and `rel/smoke.sh` run under
+`curl … | sh` on any Linux or macOS, and CI runs `shellcheck -s sh` on both.
 
 ## 4. Deps gate
 
@@ -140,10 +165,11 @@ for p in $(grep -oP 'name = "\K[^"]+' manifest.toml); do
 done; echo "lockfile check done"
 ```
 
-**Toolchain pins must match CI.** `.tool-versions` versus the `gleam-version` /
-`otp-version` / `elixir-version` in *both* `.github/workflows/ci.yml` and
-`release.yml`, plus the Zig pin in `release.yml` against burrito's requirement.
-These have drifted before.
+**Toolchain pins must match CI.** `.tool-versions` versus the `otp-version` /
+`elixir-version` / `gleam-version` in `.github/workflows/ci.yml`, versus
+`OTP_VSN` / `ELIXIR_VSN` in `rel/build-runtime.sh` and the Gleam version in
+`.github/actions/setup/action.yml` (which the release builds use). Rust is pinned
+once, in `shim/rust-toolchain.toml`. These have drifted before.
 
 **ADR-011 retirement check** — cheap, and the trigger is easy to miss:
 
@@ -165,16 +191,18 @@ read the ADR's removal criteria first.
 mix hex.outdated
 ```
 
-Two known-good pins will show as outdated; both are deliberate and documented at
-the pin in `mix.exs` — read the comment before "fixing" either:
-`gleam_javascript` (1.0.1 breaks the erlang-target build) and `burrito`
-(1.6.0 requires Zig 0.16.0).
+One known-good pin will show as outdated; it is deliberate and documented at
+the pin in `mix.exs` — read the comment before "fixing" it: `gleam_javascript`
+(1.0.1 breaks the erlang-target build).
+
+The shim's only dependency is `libc` (`shim/Cargo.toml`); a new crate there is a
+finding unless an ADR says why.
 
 ## 5. Report
 
 ```
 SHIPSHAPE — pharos @ <branch> <sha>
-  tests       compile ✓/✗ · suite <n> ×2 ✓/✗ · release <ran|skipped: no build files moved> · smoke ✓/✗
+  tests       compile ✓/✗ · suite <n> ×2 ✓/✗ · shim <ran|skipped> · daemon integration <ran|skipped> · release <ran|skipped: no build files moved> · smoke ✓/✗
   docs        <architecture drift | ADR index gaps | missing ADR | "clean">
   conventions <fossil hits | logging shape | FFI justification | "clean">
   deps        <lockfile drift | pin drift | ADR-011 status | "clean">
