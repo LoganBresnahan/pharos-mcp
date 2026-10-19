@@ -147,31 +147,28 @@ defmodule Pharos.MixProject do
   defp releases do
     [
       pharos: [
-        steps: release_steps(),
-        burrito: [
-          targets: [
-            linux_x64: [os: :linux, cpu: :x86_64],
-            linux_arm64: [os: :linux, cpu: :aarch64],
-            darwin_x64: [os: :darwin, cpu: :x86_64],
-            darwin_arm64: [os: :darwin, cpu: :aarch64],
-            win_x64: [os: :windows, cpu: :x86_64]
-          ]
-        ]
+        steps: release_steps()
       ]
     ]
   end
 
-  # `PHAROS_ASSEMBLE_ONLY=1` stops after the boot-script check, leaving
-  # the plain release in `_build/prod/rel/pharos` without wrapping five
-  # Burrito targets. The ADR-034 shim runs against that release in
-  # local development and in the daemon integration tests.
+  # ADR-035: after Mix assembles the release, trim the runtime, install
+  # the native shim (ADR-034) as bin/pharos, check what every native file
+  # links, and pack `_build/package/pharos-<version>-<target>.tar.gz` plus
+  # the target's npm platform package. Each target builds on its own
+  # runner (no cross-compilation), so the steps act on the VM running Mix.
+  # See lib/mix/pharos/release_steps.ex.
   defp release_steps do
-    assembled = [&prepend_mirror_paths/1, :assemble, &check_boot_script/1]
-
-    case System.get_env("PHAROS_ASSEMBLE_ONLY") do
-      "1" -> assembled
-      _ -> assembled ++ [&Burrito.wrap/1, &refresh_npm_platform_packages/1]
-    end
+    [
+      &prepend_mirror_paths/1,
+      &Mix.Pharos.ReleaseSteps.clean/1,
+      :assemble,
+      &check_boot_script/1,
+      &Mix.Pharos.ReleaseSteps.trim_release/1,
+      &Mix.Pharos.ReleaseSteps.build_shim/1,
+      &Mix.Pharos.ReleaseSteps.check_native/1,
+      &Mix.Pharos.ReleaseSteps.package/1
+    ]
   end
 
   # Re-run the ADR-011 path fix immediately before :assemble. The
@@ -195,8 +192,7 @@ defmodule Pharos.MixProject do
   # `$RELEASE_LIB/hpack_erl/ebin/hpack-0.3.0/ebin`, a dir that does not
   # exist in the assembled release (see ensure_mirror_paths/3 and
   # doc/adr/011-mix-app-name-symlink-workaround.md). Runs before
-  # Burrito.wrap so the failure lands in seconds, not after five
-  # cross-compiled wraps.
+  # the shim build and packaging, so the failure lands in seconds.
   defp check_boot_script(release) do
     script =
       Path.join([release.path, "releases", release.version, "start.script"])
@@ -242,51 +238,6 @@ defmodule Pharos.MixProject do
             Enum.join(problems, "\n  ")
         )
     end
-  end
-
-  # Copy each built `burrito_out/pharos_<target>` into the matching
-  # npm platform sub-package's bin/. The release workflow then runs
-  # `npm publish` per sub-package + once for the main `pharos-mcp`
-  # package (which lists the five as `optionalDependencies`). Local
-  # `mix release` also runs this so devs can `npm pack` each
-  # sub-package and smoke-test the layout before tagging.
-  defp refresh_npm_platform_packages(release) do
-    project_root = File.cwd!()
-    burrito_out = Path.join(project_root, "burrito_out")
-
-    # Burrito target name → {npm sub-package dir under "@pharos-mcp/",
-    # binary filename}. Sub-packages publish as `@pharos-mcp/<platform>`
-    # (scoped names under the pharos-mcp npm org); on disk we mirror
-    # that with `npm/@pharos-mcp/<platform>/`.
-    mapping = %{
-      "pharos_linux_x64" => {"linux-x64", "pharos"},
-      "pharos_linux_arm64" => {"linux-arm64", "pharos"},
-      "pharos_darwin_x64" => {"darwin-x64", "pharos"},
-      "pharos_darwin_arm64" => {"darwin-arm64", "pharos"},
-      "pharos_win_x64.exe" => {"win-x64", "pharos.exe"}
-    }
-
-    if File.dir?(burrito_out) do
-      Enum.each(mapping, fn {burrito_name, {sub_pkg, dest_name}} ->
-        src = Path.join(burrito_out, burrito_name)
-
-        if File.regular?(src) do
-          dest_dir =
-            Path.join([project_root, "npm", "@pharos-mcp", sub_pkg, "bin"])
-
-          File.mkdir_p!(dest_dir)
-          dest = Path.join(dest_dir, dest_name)
-          File.cp!(src, dest)
-          File.chmod!(dest, 0o755)
-        end
-      end)
-
-      Mix.shell().info(
-        "[pharos] refreshed npm/@pharos-mcp/<platform>/bin/ from burrito_out"
-      )
-    end
-
-    release
   end
 
   defp aliases do

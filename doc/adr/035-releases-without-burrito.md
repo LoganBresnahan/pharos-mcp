@@ -84,7 +84,7 @@ OTP:
     subtracted (geex's `otool_id` trap), and every Mach-O must pass
     `codesign --verify --strict`.
   - A release build (`PHAROS_RELEASE=1`) stops on any problem. A local build only notes them.
-- **`package`** writes `BUILD_ID` (ADR-034; `bin/build-id`). It packs
+- **`package`** writes `BUILD_ID` (ADR-034; `build_id/1`). It packs
   `_build/package/pharos-<v>-<os>-<arch>.tar.gz`, with a top directory of the same name, plus
   `SHA256SUMS`, and fills `npm/@pharos-mcp/<platform>/release/`.
 

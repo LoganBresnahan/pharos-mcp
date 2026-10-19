@@ -164,7 +164,6 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     env:
       MIX_ENV: prod
-      PHAROS_ASSEMBLE_ONLY: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -190,17 +189,13 @@ jobs:
       - name: Install mix_gleam archive (LoganBresnahan/mix_gleam fork)
         run: mix archive.install --force github LoganBresnahan/mix_gleam
 
-      - name: Assemble the release (no Burrito wrap)
+      # The full release steps (ADR-035): trim, the shim as bin/pharos,
+      # the native check (a note here: setup-beam's OTP isn't the release
+      # runtime), BUILD_ID and the package.
+      - name: Build the release
         run: |
           mix deps.get
           mix release --overwrite
 
-      - name: Build the shim
-        working-directory: shim
-        run: cargo build --release
-
-      - name: Write BUILD_ID
-        run: bin/build-id _build/prod/rel/pharos shim/target/release/pharos
-
       - name: Run the integration suite
-        run: python3 -I test/daemon/integration.py --release _build/prod/rel/pharos --shim shim/target/release/pharos
+        run: python3 -I test/daemon/integration.py --release _build/prod/rel/pharos --shim _build/prod/rel/pharos/bin/pharos

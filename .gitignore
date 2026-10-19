@@ -34,10 +34,11 @@ Thumbs.db
 __pycache__/
 *.pyc
 
-# npm: per-platform binaries land under each platform sub-package's
-# bin/ at release time (release.yml copies from /burrito_out/). The
-# package.json + README.md scaffolding for each sub-package IS
-# committed; only the binary + LICENSE copy are ignored.
+# npm: `mix release` (ADR-035) copies the unpacked release into its
+# platform sub-package's release/. The package.json + README.md
+# scaffolding for each sub-package IS committed; only the release and
+# the LICENSE copy are ignored.
+/npm/@pharos-mcp/*/release/
 /npm/**/bin/pharos
 /npm/**/bin/pharos.exe
 /npm/**/node_modules/
