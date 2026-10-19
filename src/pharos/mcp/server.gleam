@@ -191,7 +191,32 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
         "notifications/cancelled with malformed/missing requestId",
       )
     cid -> {
-      // (1) LSP-side cancel.
+      // (1) MCP-worker-side cancel — kill the dispatcher first, so no
+      // reply for the cancelled request can go out (MCP: the server
+      // SHOULD NOT respond to it).
+      let worker_key = session_ctx.scoped(cid)
+      case request_workers.lookup(worker_key) {
+        Error(_) -> Nil
+        Ok(worker_pid) -> {
+          log.fields_at(
+            "pharos/mcp/server",
+            log_entry.Info,
+            "notifications/cancelled → killing dispatcher worker",
+            [#("id", cid)],
+          )
+          // `kill`, not `send_exit`: an exit with reason `normal`
+          // does not stop a process that isn't trapping exits, so the
+          // dispatcher used to run on regardless.
+          process.kill(worker_pid)
+          // Worker died mid-execution — its `request_workers.delete`
+          // cleanup never ran. Do it here so the table doesn't leak.
+          request_workers.delete(worker_key)
+        }
+      }
+
+      // (2) LSP-side cancel, after the kill: cancelling first can make
+      // the proc fail the waiting call at once, and the dispatcher
+      // would then reply (and deregister) before (1) found it.
       case inflight.lookup(session_ctx.scoped(cid)) {
         Error(_) ->
           log.fields_at(
@@ -208,25 +233,6 @@ fn log_cancel_notification(params: Option(Dynamic)) -> Nil {
             [#("id", cid), #("lsp_id", int.to_string(lsp_id))],
           )
           proc.cancel_by_dynamic_subject(proc_subject_dynamic, lsp_id)
-        }
-      }
-
-      // (2) MCP-worker-side cancel — kill the stdio dispatcher
-      // process so the blocking receive returns immediately.
-      let worker_key = session_ctx.scoped(cid)
-      case request_workers.lookup(worker_key) {
-        Error(_) -> Nil
-        Ok(worker_pid) -> {
-          log.fields_at(
-            "pharos/mcp/server",
-            log_entry.Info,
-            "notifications/cancelled → killing dispatcher worker",
-            [#("id", cid)],
-          )
-          process.send_exit(worker_pid)
-          // Worker died mid-execution — its `request_workers.delete`
-          // cleanup never ran. Do it here so the table doesn't leak.
-          request_workers.delete(worker_key)
         }
       }
     }

@@ -21,16 +21,14 @@
 //// interleaving line-atomicity hazards.
 
 import gleam/dynamic.{type Dynamic}
-import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
-import gleam/json
 import gleam/otp/actor
 
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/pool.{type Pool}
+import pharos/mcp/dispatch
 import pharos/mcp/request_workers.{type WriterMsg, WorkerDone, WriteResponse}
-import pharos/mcp/server
 import pharos/mcp/stdio
 import pharos/session_ctx.{type SessionCtx}
 
@@ -47,9 +45,12 @@ pub opaque type Msg {
   /// Dispatcher → stdio_worker: write `json` as one stdout line.
   Write(json: String)
   /// Dispatcher → stdio_worker: completed with no response (e.g.
-  /// notifications/initialized, notifications/cancelled, or
-  /// killed-by-cancel). Logged but not written.
+  /// notifications/initialized, notifications/cancelled). Nothing to
+  /// write; the dispatcher's DOWN does the bookkeeping.
   WorkerComplete(mcp_id: String)
+  /// A dispatcher exited, normally or killed by a cancel. The one
+  /// place `inflight` goes down: a killed dispatcher sends nothing.
+  WorkerExited
   /// Raw mailbox message captured by the selector — typically a
   /// stdin-port `{Port, {data, {eol, Line}}}` / `{Port, eof}` tuple.
   /// `decode_port_event` projects it into the `PortEvent` shape.
@@ -67,9 +68,9 @@ type State {
     /// stdio_worker actor owns this Subject's mailbox; selector
     /// translates each WriterMsg into the matching Msg variant.
     writer: Subject(WriterMsg),
-    /// Number of dispatcher processes spawned but not yet drained.
-    /// Goes up on every line dispatched, down on every Write or
-    /// WorkerComplete. Used by the drain path on stdin EOF to wait
+    /// Number of dispatcher processes spawned but not yet exited.
+    /// Goes up on every line dispatched, down on each dispatcher's
+    /// DOWN. Used by the drain path on stdin EOF to wait
     /// for outstanding work before shutting down.
     inflight: Int,
     /// True once stdin reached EOF. Stops the read loop; once
@@ -157,6 +158,7 @@ fn build_selector(
       WorkerDone -> WorkerComplete(mcp_id: "")
     }
   })
+  |> process.select_monitors(fn(_down) { WorkerExited })
   // Catch raw Port mailbox tuples (stdin port emits `{Port, {data,
   // {eol, Line}}}` etc.) and project them into the typed Msg.
   |> process.select_other(PortMailbox)
@@ -167,9 +169,10 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     PortMailbox(payload) -> handle_port_event(state, payload)
     Write(json) -> {
       stdio.write(json)
-      step_inflight(state)
+      actor.continue(state)
     }
-    WorkerComplete(_) -> step_inflight(state)
+    WorkerComplete(_) -> actor.continue(state)
+    WorkerExited -> step_inflight(state)
     Stop -> actor.stop()
   }
 }
@@ -203,8 +206,7 @@ type PortEvent {
 @external(erlang, "pharos_stdin_ffi", "decode_port_event")
 fn decode_port_event(payload: Dynamic) -> PortEvent
 
-/// One unit of dispatcher cleanup arrived (either a Write reply or a
-/// WorkerComplete). Decrement the in-flight counter and, if we are
+/// A dispatcher exited. Decrement the in-flight counter and, if we are
 /// draining and the counter reaches zero, exit the actor so the
 /// supervisor's transient strategy treats this as a clean shutdown.
 fn step_inflight(state: State) -> actor.Next(State, Msg) {
@@ -226,9 +228,9 @@ fn step_inflight(state: State) -> actor.Next(State, Msg) {
 
 /// stdin closed (or unrecoverable read error). If no in-flight
 /// dispatchers remain, exit immediately. Otherwise transition to a
-/// draining state — the read loop stops, but `Write` and
-/// `WorkerComplete` messages continue draining the counter until it
-/// reaches zero, at which point `step_inflight/1` exits.
+/// draining state — the read loop stops, but dispatcher exits keep
+/// draining the counter until it reaches zero, at which point
+/// `step_inflight/1` exits.
 fn handle_eof(state: State) -> actor.Next(State, Msg) {
   case state.inflight {
     0 -> {
@@ -253,63 +255,12 @@ fn handle_eof(state: State) -> actor.Next(State, Msg) {
 @external(erlang, "pharos_runtime_ffi", "init_stop")
 fn init_stop() -> Nil
 
-/// Spawn a dispatcher process for one inbound JSON-RPC line and
-/// return immediately. The dispatcher registers its pid in the
-/// `pharos_request_workers` ETS table keyed by the request's MCP id
-/// (or the anonymous sentinel for parse errors / notifications),
-/// runs `server.handle_line/2`, sends the reply back via the writer
-/// Subject, and deregisters itself.
+/// Spawn the dispatcher for one inbound line (`pharos/mcp/dispatch`)
+/// and monitor it, so its exit is counted however it ends.
 fn dispatch_line(state: State, body: String) -> Nil {
-  let mcp_id = peek_mcp_id(body)
-  let pool_handle = state.pool
-  let session = state.session
-  let writer = state.writer
-  let _pid =
-    process.spawn_unlinked(fn() {
-      session_ctx.bind(session)
-      let worker_key = session_ctx.scoped(mcp_id)
-      let self_pid = process.self()
-      request_workers.insert(worker_key, self_pid)
-      let result = server.handle_line(pool_handle, body)
-      case result {
-        server.Reply(json) ->
-          request_workers.send_reply(writer, WriteResponse(json))
-        server.ProtocolError(json) ->
-          request_workers.send_reply(writer, WriteResponse(json))
-        server.NoReply -> request_workers.send_reply(writer, WorkerDone)
-      }
-      request_workers.delete(worker_key)
-    })
+  let pid = dispatch.spawn(state.pool, state.session, state.writer, body)
+  let _monitor = process.monitor(pid)
   Nil
-}
-
-/// Decode just the `id` field out of an inbound JSON-RPC line. Used
-/// to key the request-workers table so a follow-up
-/// `notifications/cancelled` can find the dispatcher. Returns the
-/// anonymous sentinel for parse errors and for notifications (no
-/// `id` field).
-fn peek_mcp_id(body: String) -> String {
-  let decoder = {
-    use id <- decode.optional_field("id", PeekNone, peek_id_decoder())
-    decode.success(id)
-  }
-  case json.parse(body, decoder) {
-    Ok(PeekInt(n)) -> int_to_text(n)
-    Ok(PeekString(s)) -> s
-    _ -> request_workers.anonymous_id
-  }
-}
-
-type PeekedId {
-  PeekInt(Int)
-  PeekString(String)
-  PeekNone
-}
-
-fn peek_id_decoder() -> decode.Decoder(PeekedId) {
-  let int_dec = decode.int |> decode.map(PeekInt)
-  let str_dec = decode.string |> decode.map(PeekString)
-  decode.one_of(int_dec, [str_dec])
 }
 
 @external(erlang, "erlang", "integer_to_binary")
