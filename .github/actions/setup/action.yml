@@ -1,0 +1,77 @@
+# The toolchain a pharos release job builds with (ADR-035 §1, §7), after geex's
+# .github/actions/setup: the OTP and Elixir that rel/build-runtime.sh builds,
+# restored from the cache or built (about 15 minutes cold), Gleam (pinned by
+# sha256), Hex, rebar, the mix_gleam fork, and Rust for the shim (its version
+# comes from shim/rust-toolchain.toml).
+name: pharos setup
+description: Put pharos's own OTP and Elixir, Gleam and Rust on the PATH
+inputs:
+  key:
+    description: What the runtime is built for (a target name plus the runner image), for the cache key
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Restore the runtime
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/pharos-runtime
+        key: runtime-${{ inputs.key }}-${{ hashFiles('rel/build-runtime.sh') }}
+
+    - name: Build the runtime (OTP, OpenSSL, ncurses, Elixir)
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: rel/build-runtime.sh "$HOME/pharos-runtime"
+
+    - name: Put it on the PATH
+      shell: bash
+      run: |
+        echo "$HOME/pharos-runtime/bin" >> "$GITHUB_PATH"
+        echo "$HOME/pharos-runtime/elixir/bin" >> "$GITHUB_PATH"
+
+    - name: Gleam 1.17.0
+      shell: bash
+      run: |
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64) t=x86_64-unknown-linux-musl; sha=c0d1eaadac40c88ac93ea45fc150f6363f4ceb8c925b5ac90f371b1665613cc4 ;;
+          Linux-aarch64) t=aarch64-unknown-linux-musl; sha=2ddc2017f8c2112bf6a58bc662dc8c59a75814165ae593230368509e890ee8ca ;;
+          Darwin-x86_64) t=x86_64-apple-darwin; sha=37def38d81056c81b029d7fc0d28c91dda34f55c5ca5ce82562b01b518bdb66d ;;
+          Darwin-arm64) t=aarch64-apple-darwin; sha=20e5839b9b88475e3ab0bea64f353b4d5aa6be8c91215b8f91cf46cb51f36d5e ;;
+          *) echo "no pinned gleam for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+        esac
+        mkdir -p "$HOME/gleam-bin"
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/gleam.tgz" "https://github.com/gleam-lang/gleam/releases/download/v1.17.0/gleam-v1.17.0-$t.tar.gz"
+        got=$(if command -v sha256sum >/dev/null; then sha256sum "$RUNNER_TEMP/gleam.tgz"; else shasum -a 256 "$RUNNER_TEMP/gleam.tgz"; fi | cut -d' ' -f1)
+        [ "$got" = "$sha" ] || { echo "gleam tarball sha256 $got, expected $sha" >&2; exit 1; }
+        tar -xzf "$RUNNER_TEMP/gleam.tgz" -C "$HOME/gleam-bin"
+        echo "$HOME/gleam-bin" >> "$GITHUB_PATH"
+
+    - name: Hex, rebar and the mix_gleam fork
+      shell: bash
+      run: |
+        mix local.hex --force
+        mix local.rebar --force
+        mix archive.install --force github LoganBresnahan/mix_gleam
+        erl -noshell -eval 'io:format("OTP ~s, erts ~s~n", [erlang:system_info(otp_release), erlang:system_info(version)]), halt().'
+        elixir --version | tail -1
+        gleam --version
+
+    - name: Rust
+      shell: bash
+      run: |
+        if ! command -v rustup >/dev/null 2>&1; then
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH=$HOME/.cargo/bin:$PATH
+        fi
+        (cd shim && rustc --version)
+
+    - name: Restore the shim's cargo build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          shim/target
+        key: cargo-${{ inputs.key }}-${{ hashFiles('shim/Cargo.lock', 'shim/rust-toolchain.toml') }}

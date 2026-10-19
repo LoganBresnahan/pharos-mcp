@@ -1,325 +1,278 @@
 name: release
 
-# Tag-triggered v1.0+ release pipeline:
-#   1. build     — one Ubuntu runner cross-builds all 5 platform
-#                  binaries via Burrito + populates the per-platform
-#                  npm sub-package bin/ dirs.
-#   2. smoke     — matrix-tests each binary on its native runner
-#                  (init handshake + tools/list + echo round-trip).
-#   3. publish   — stamps version into all 6 package.jsons, copies
-#                  LICENSE into each sub-package, publishes the 5
-#                  platform packages then the main package, and
-#                  creates a GitHub Release with the 5 raw binaries
-#                  attached as direct-download assets.
+# A pharos release (ADR-035 §7), after geex's release.yml:
+#   1. build          — one job per target on its own runner, with the runtime
+#                       rel/build-runtime.sh builds (cached): a release build
+#                       (PHAROS_RELEASE=1: native check enforced), the ADR-034
+#                       integration suite against it, and an install.sh smoke
+#                       of the tarball from file://.
+#   2. build-windows  — win-x64 with OTP's official Windows build, direct mode
+#                       only (ADR-034); a zip for the npm package.
+#   3. publish        — only for a `v*` tag: a GitHub release (marked latest)
+#                       with the tarballs, the zip, SHA256SUMS and install.sh,
+#                       then the five npm platform packages and pharos-mcp.
+#   4. smoke          — only for a `v*` tag: smoke.yml installs the published
+#                       release from its public URLs on fresh runners.
 #
-# Auth: npm Trusted Publishing (OIDC) — no NPM_TOKEN secret needed.
-# Configure the Trusted Publisher entry on npmjs.com for each of the
-# six packages: org/user = LoganBresnahan, repo = pharos-mcp,
-# workflow filename = release.yml.
+# A branch push (ci/**) or a manual run builds and checks everything and
+# publishes nothing.
 #
-# Provenance: auto-attached on public-repo npm publish via OIDC.
+# Auth: npm Trusted Publishing (OIDC), no NPM_TOKEN. The Trusted Publisher
+# entry on npmjs.com for each of the six packages names this file,
+# release.yml: keep the name.
 
 on:
   push:
-    tags: [ 'v*' ]
+    tags: ["v*"]
+    branches: ["ci/**"]
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Build + smoke-test only; skip npm publish + GH Release"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
-  contents: write      # create GH Release + upload assets
-  id-token: write      # npm OIDC trusted publishing
+  contents: read
 
+# A newer branch push cancels the older dry run; a tag's run is never cancelled.
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false      # never cancel a release mid-publish
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  # ---------- 1. BUILD ALL 5 BINARIES ----------
   build:
-    name: Build all 5 platform binaries
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-22.04
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+          - target: darwin-arm64
+            runner: macos-14
+          - target: darwin-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - id: version
-        name: Extract version from tag
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            v="${GITHUB_REF#refs/tags/v}"
-          else
-            # workflow_dispatch — use last tag for dry-run consistency
-            v="$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0-dryrun")"
-            v="${v#v}"
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "Release version: $v"
+      - uses: ./.github/actions/setup
+        with:
+          key: ${{ matrix.target }}-${{ matrix.runner }}
 
-      - name: Set up Erlang, Elixir, Gleam, and rebar3
-        uses: erlef/setup-beam@v1
+      - name: The version
+        id: version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^  @version_base "\(.*\)"$/\1/p' mix.exs)
+          [ -n "$version" ] || { echo "no @version_base in mix.exs" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "the tag $GITHUB_REF_NAME doesn't name mix.exs's version $version" >&2
+            exit 1
+          fi
+
+      # PHAROS_RELEASE=1: the plain version and the native check enforced
+      # (ADR-035 §3).
+      - name: Build
+        env:
+          MIX_ENV: prod
+          PHAROS_RELEASE: "1"
+        run: |
+          mix deps.get
+          mix release --overwrite
+          ls -l _build/package
+          test -f "_build/package/pharos-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz"
+
+      - name: Check the shell scripts
+        if: runner.os == 'Linux'
+        run: shellcheck -s sh install.sh rel/smoke.sh
+
+      - name: Integration suite (ADR-034) against the release
+        run: python3 -I test/daemon/integration.py --release _build/prod/rel/pharos --shim _build/prod/rel/pharos/bin/pharos
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pyright (the smoke's language server)
+        run: npm install -g pyright
+
+      - name: Smoke-test the tarball through install.sh
+        run: PHAROS_DOWNLOAD_URL="file://$PWD/_build/package" sh rel/smoke.sh --version "${{ steps.version.outputs.version }}" --lsp pyright
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pharos-${{ matrix.target }}
+          path: _build/package/*
+          if-no-files-found: error
+
+  build-windows:
+    name: build win32-x64
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
         with:
           otp-version: "28.1.1"
           elixir-version: "1.19.5"
           gleam-version: "1.17.0"
           rebar3-version: "3.27.0"
 
-      - name: Cache Mix + Gleam build
-        uses: actions/cache@v4
-        with:
-          path: |
-            deps
-            _build
-            build
-          key: ${{ runner.os }}-otp28-elixir1.19-gleam1.17-release-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-otp28-elixir1.19-gleam1.17-release-
-
-      - name: Install zig + xz (required by Burrito for cross-compile)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xz-utils
-          xz --version
-        # Burrito invokes zig as a C cross-compiler. Use setup-zig action below.
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2  # pinned to match deps/burrito/lib/burrito.ex @zig_version_expected
-
-      - name: Verify zig + xz on PATH
-        run: |
-          zig version
-          xz --version | head -1
-
-      - name: Install mix_gleam archive
+      - name: The mix_gleam fork
+        shell: bash
         run: mix archive.install --force github LoganBresnahan/mix_gleam
 
-      - name: Fetch dependencies
-        run: mix deps.get
-
-      - name: Build all 5 burrito targets
+      - name: Build
+        shell: bash
         env:
           MIX_ENV: prod
-          PHAROS_RELEASE: "1"  # mix.exs: drops the `+<sha>` dev suffix from the
-                               # compiled version, giving release builds a clean
-                               # Burrito cache key distinct from any local dev build.
-        run: mix release --overwrite
-
-      - name: Verify all 5 binaries landed in npm/ sub-packages
+          PHAROS_RELEASE: "1"
         run: |
-          set -e
-          for entry in \
-            "@pharos-mcp/linux-x64/bin/pharos" \
-            "@pharos-mcp/linux-arm64/bin/pharos" \
-            "@pharos-mcp/darwin-x64/bin/pharos" \
-            "@pharos-mcp/darwin-arm64/bin/pharos" \
-            "@pharos-mcp/win-x64/bin/pharos.exe"
-          do
-            path="npm/$entry"
-            if [[ ! -f "$path" ]]; then
-              echo "ERROR: $path is missing"
-              exit 1
-            fi
-            size=$(stat -c %s "$path")
-            echo "OK: $path ($((size/1024/1024)) MB)"
-          done
+          mix deps.get
+          mix release --overwrite
+          ls -l _build/package
 
-      - name: Upload npm/ tree (skeletons + binaries)
-        uses: actions/upload-artifact@v4
+      # No daemon on Windows (ADR-034): direct mode, stdio to a child BEAM.
+      - name: Smoke the release in place
+        shell: bash
+        run: |
+          bin=_build/prod/rel/pharos/bin/pharos.exe
+          "$bin" --version
+          python - "$bin" <<'PY'
+          import json, subprocess, sys
+          lines = [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}},
+              {"jsonrpc": "2.0", "method": "notifications/initialized"},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+          ]
+          out = subprocess.run([sys.argv[1]], input="".join(json.dumps(l) + "\n" for l in lines),
+                               capture_output=True, text=True, timeout=120).stdout
+          replies = [json.loads(l) for l in out.splitlines() if l.strip()]
+          ids = sorted(r.get("id") for r in replies)
+          assert ids == [1, 2], "expected replies 1 and 2, got %r\n%s" % (ids, out[:2000])
+          print("smoke: ok: initialize and tools/list in direct mode (%d tools)" % len(replies[1]["result"]["tools"]))
+          PY
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: npm-packages
-          path: npm/
-          retention-days: 7
+          name: pharos-win32-x64
+          path: _build/package/*
+          if-no-files-found: error
 
-      - name: Upload raw burrito binaries (for GH Release direct download)
-        uses: actions/upload-artifact@v4
-        with:
-          name: burrito-binaries
-          path: burrito_out/pharos_*
-          retention-days: 7
-
-  # ---------- 2. SMOKE-TEST EACH PLATFORM NATIVELY ----------
-  smoke:
-    name: Smoke test ${{ matrix.target }}
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest,     target: linux-x64,     pkg: "@pharos-mcp/linux-x64",     bin: pharos }
-          - { os: ubuntu-24.04-arm,  target: linux-arm64,   pkg: "@pharos-mcp/linux-arm64",   bin: pharos }
-          - { os: macos-15-intel,    target: darwin-x64,    pkg: "@pharos-mcp/darwin-x64",    bin: pharos }
-          - { os: macos-latest,      target: darwin-arm64,  pkg: "@pharos-mcp/darwin-arm64",  bin: pharos }
-          - { os: windows-latest,    target: win-x64,       pkg: "@pharos-mcp/win-x64",       bin: pharos.exe }
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Download npm/ tree
-        uses: actions/download-artifact@v4
-        with:
-          name: npm-packages
-          path: npm/
-
-      - name: Run --version + --doctor (Unix)
-        if: runner.os != 'Windows'
-        env:
-          EXPECTED: ${{ needs.build.outputs.version }}
-        run: |
-          chmod +x "npm/${{ matrix.pkg }}/bin/${{ matrix.bin }}"
-          v=$("./npm/${{ matrix.pkg }}/bin/${{ matrix.bin }}" --version)
-          echo "$v"
-          # Drift guard: 0.1.3 shipped mislabelled as 0.1.2 because the
-          # runtime version was hardcoded and not bumped. Only a tagged
-          # release has a definitive expected version; dry-runs build
-          # from main and may legitimately differ, so they just print.
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "$v" | grep -qx "pharos $EXPECTED" \
-              || { echo "::error::--version is '$v', expected 'pharos $EXPECTED'"; exit 1; }
-          fi
-          "./npm/${{ matrix.pkg }}/bin/${{ matrix.bin }}" --doctor
-
-      - name: Run --version + --doctor (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          EXPECTED: ${{ needs.build.outputs.version }}
-        run: |
-          $v = (& "npm\${{ matrix.pkg }}\bin\${{ matrix.bin }}" --version | Out-String).Trim()
-          Write-Host $v
-          if ("${{ github.event_name }}" -eq "push") {
-            if ($v -notmatch "(?m)^pharos $([regex]::Escape($env:EXPECTED))$") {
-              Write-Error "--version is '$v', expected 'pharos $env:EXPECTED'"; exit 1
-            }
-          }
-          & "npm\${{ matrix.pkg }}\bin\${{ matrix.bin }}" --doctor
-
-      - name: MCP init+tools/list+echo handshake (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          out=$(printf '%s\n' \
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
-            '{"jsonrpc":"2.0","method":"initialized"}' \
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"message":"smoke"}}}' \
-            | "./npm/${{ matrix.pkg }}/bin/${{ matrix.bin }}")
-          echo "$out"
-          echo "$out" | grep -q '"protocolVersion":"2024-11-05"' || { echo "missing init response"; exit 1; }
-          echo "$out" | grep -q '"name":"echo"' || { echo "missing tools/list echo"; exit 1; }
-          echo "$out" | grep -q '"text":"smoke"' || { echo "missing echo result"; exit 1; }
-
-  # ---------- 3. PUBLISH TO npm + GH RELEASE ----------
   publish:
-    name: Publish ${{ needs.build.outputs.version }}
-    needs: [build, smoke]
-    if: ${{ github.event_name == 'push' || !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    needs: [build, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write   # the GitHub release
+      id-token: write   # npm trusted publishing
+    outputs:
+      version: ${{ steps.files.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download npm/ tree
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: npm-packages
-          path: npm/
+          path: built
 
-      - name: Download raw burrito binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: burrito-binaries
-          path: burrito_out/
+      - name: Gather the release files
+        id: files
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          mkdir dist
+          cp built/*/pharos-*.tar.gz built/*/pharos-*.zip dist/
+          cat built/*/SHA256SUMS | sort -k2 > dist/SHA256SUMS
+          cp install.sh dist/
+          (cd dist && sha256sum -c SHA256SUMS)
+          ls -l dist
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Node 22 + npm 11 (Trusted Publishing requires npm ≥11.5.1)
-        uses: actions/setup-node@v4
+      # A normal release, marked latest: releases/latest/download/install.sh is this one.
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          prerelease=--latest
+          if [[ "$version" == *-* ]]; then prerelease=--prerelease; fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "pharos $version" \
+            $prerelease \
+            --notes "Install or upgrade (Linux, macOS):
+
+          \`\`\`sh
+          curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh | sh
+          \`\`\`
+
+          or \`npm install -g pharos-mcp\` (Linux, macOS, Windows). MCP client configs keep working: the command is still \`pharos\`.
+
+          - Linux x64 and arm64 need glibc 2.35+. pharos 0.2 needs glibc 2.35+ (Alpine/musl and older distros aren't supported yet); pharos-mcp@0.1.4 still runs there.
+          - macOS on Apple silicon and Intel; Windows x64 through npm.
+          - \`PHAROS_INSTALL_DIR\` now names install.sh's install root (default \`~/.local/share/pharos\`), not Burrito's extraction directory. After upgrading from 0.1.x, \`pharos --purge-cache\` removes 0.1.x's unused unpacks.
+
+          What changed: [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md)."
+
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Verify npm version supports OIDC
+      - name: npm 11 (trusted publishing needs npm >= 11.5.1)
         run: |
           npm install -g npm@latest
           npm --version
-          node --version
 
-      - name: Stamp version into all 6 package.jsons
-        env:
-          VERSION: ${{ needs.build.outputs.version }}
+      - name: Fill the npm platform packages from the release files
         run: |
           set -e
-          for pkg in pharos-mcp "@pharos-mcp/linux-x64" "@pharos-mcp/linux-arm64" "@pharos-mcp/darwin-x64" "@pharos-mcp/darwin-arm64" "@pharos-mcp/win-x64"; do
-            file="npm/$pkg/package.json"
-            node -e "
-              const fs = require('fs');
-              const path = '$file';
-              const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-              pkg.version = '$VERSION';
-              if (pkg.optionalDependencies) {
-                for (const k of Object.keys(pkg.optionalDependencies)) {
-                  pkg.optionalDependencies[k] = '$VERSION';
-                }
-              }
-              fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
-            "
-            echo "Stamped $file → $VERSION"
+          version=${GITHUB_REF_NAME#v}
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            dest="npm/@pharos-mcp/$target"
+            rm -rf "$dest/release" "$RUNNER_TEMP/unpack"
+            mkdir -p "$RUNNER_TEMP/unpack"
+            tar -xzf "dist/pharos-$version-$target.tar.gz" -C "$RUNNER_TEMP/unpack"
+            mv "$RUNNER_TEMP/unpack/pharos-$version-$target" "$dest/release"
+            test -x "$dest/release/bin/pharos"
           done
+          rm -rf "$RUNNER_TEMP/unpack" npm/@pharos-mcp/win-x64/release
+          mkdir -p "$RUNNER_TEMP/unpack"
+          (cd "$RUNNER_TEMP/unpack" && unzip -q "$GITHUB_WORKSPACE/dist/pharos-$version-win32-x64.zip")
+          mv "$RUNNER_TEMP/unpack/pharos-$version-win32-x64" npm/@pharos-mcp/win-x64/release
+          test -f npm/@pharos-mcp/win-x64/release/bin/pharos.exe
 
-      - name: Copy LICENSE into each sub-package
+      - name: Stamp the version into all six package.jsons, and LICENSE into each
         run: |
           set -e
-          for pkg in pharos-mcp "@pharos-mcp/linux-x64" "@pharos-mcp/linux-arm64" "@pharos-mcp/darwin-x64" "@pharos-mcp/darwin-arm64" "@pharos-mcp/win-x64"; do
+          version=${GITHUB_REF_NAME#v}
+          for pkg in pharos-mcp @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64 @pharos-mcp/win-x64; do
+            node -e '
+              const fs = require("fs");
+              const [file, v] = process.argv.slice(1);
+              const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+              pkg.version = v;
+              for (const k of Object.keys(pkg.optionalDependencies || {})) pkg.optionalDependencies[k] = v;
+              fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+            ' "npm/$pkg/package.json" "$version"
             cp LICENSE "npm/$pkg/LICENSE"
           done
 
-      - name: Resolve npm dist-tag (prerelease → next, otherwise latest)
-        id: npm_tag
-        env:
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          if [[ "$VERSION" == *-* ]]; then
-            echo "tag=next" >> "$GITHUB_OUTPUT"
-            echo "Prerelease version detected ($VERSION) → npm dist-tag = next"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-            echo "Stable version ($VERSION) → npm dist-tag = latest"
-          fi
-
-      - name: Publish 5 platform packages (OIDC, with provenance)
-        env:
-          NPM_TAG: ${{ steps.npm_tag.outputs.tag }}
+      - name: Publish the platform packages, then pharos-mcp
         run: |
           set -e
-          for pkg in "@pharos-mcp/linux-x64" "@pharos-mcp/linux-arm64" "@pharos-mcp/darwin-x64" "@pharos-mcp/darwin-arm64" "@pharos-mcp/win-x64"; do
-            echo "==> Publishing $pkg (tag=$NPM_TAG)"
-            (cd "npm/$pkg" && npm publish --provenance --access public --tag "$NPM_TAG")
+          version=${GITHUB_REF_NAME#v}
+          tag=latest
+          if [[ "$version" == *-* ]]; then tag=next; fi
+          for pkg in @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64 @pharos-mcp/win-x64 pharos-mcp; do
+            echo "==> $pkg $version ($tag)"
+            (cd "npm/$pkg" && npm publish --provenance --access public --tag "$tag")
           done
 
-      - name: Publish main pharos-mcp package
-        env:
-          NPM_TAG: ${{ steps.npm_tag.outputs.tag }}
-        run: |
-          cd npm/pharos-mcp
-          npm publish --provenance --access public --tag "$NPM_TAG"
-
-      - name: Create GitHub Release with raw binaries
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          set -e
-          ls -la burrito_out/
-          prerelease_flag=""
-          if [[ "$VERSION" == *-* ]]; then
-            prerelease_flag="--prerelease"
-          fi
-          gh release create "v$VERSION" \
-            --title "v$VERSION" \
-            --generate-notes \
-            $prerelease_flag \
-            burrito_out/pharos_linux_x64 \
-            burrito_out/pharos_linux_arm64 \
-            burrito_out/pharos_darwin_x64 \
-            burrito_out/pharos_darwin_arm64 \
-            burrito_out/pharos_win_x64.exe
+  smoke:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/smoke.yml
+    with:
+      version: ${{ needs.publish.outputs.version }}

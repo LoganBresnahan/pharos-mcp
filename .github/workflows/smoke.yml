@@ -1,0 +1,122 @@
+# The post-release smoke (ADR-035 §7): on fresh runners, install a published
+# pharos from its public URLs, exactly as a user would, and run it as an MCP
+# client would. release.yml calls it after publishing; run it by hand for any
+# version.
+name: smoke
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to install (as published on npm and GitHub)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # curl … install.sh | sh, then initialize, tools/list, a pyright hover, a
+  # second session on the same daemon, and the daemon's idle exit.
+  curl:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm, macos-14, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      # The smoke scripts only: pharos itself comes from the release.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: rel
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g pyright
+      - name: Smoke
+        run: sh rel/smoke.sh --version "${{ inputs.version }}" --lsp pyright
+
+  # npm install -g pharos-mcp@VERSION: the same checks, and the postinstall
+  # swap proved: no node in the MCP server's process tree.
+  npm:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm, macos-14, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: rel
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g pyright "pharos-mcp@${{ inputs.version }}"
+      - name: pharos is the native shim
+        run: |
+          link=$(npm prefix -g)/lib/node_modules/pharos-mcp/bin/pharos.js
+          [ -L "$link" ] || { echo "the postinstall didn't swap $link for the native shim" >&2; exit 1; }
+          pharos --version
+          [ "$(pharos --version)" = "pharos ${{ inputs.version }}" ]
+      - name: Smoke
+        env:
+          PHAROS_RUNTIME_DIR: ${{ runner.temp }}/pharos-rt
+        run: python3 -I rel/smoke_mcp.py --pharos "$(command -v pharos)" --expect-native --lsp pyright --idle-exit
+
+  # npm install -g --ignore-scripts: the postinstall never runs, and the JS
+  # fallback still serves MCP.
+  npm-ignore-scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: rel
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g --ignore-scripts "pharos-mcp@${{ inputs.version }}"
+      - name: bin/pharos.js is still the JS launcher
+        run: |
+          link=$(npm prefix -g)/lib/node_modules/pharos-mcp/bin/pharos.js
+          [ -f "$link" ] && [ ! -L "$link" ] || { echo "$link should be the JS fallback" >&2; exit 1; }
+      - name: Smoke through the fallback
+        env:
+          PHAROS_RUNTIME_DIR: ${{ runner.temp }}/pharos-rt
+        run: python3 -I rel/smoke_mcp.py --pharos "$(command -v pharos)" --idle-exit
+
+  # Windows: npm, direct mode (no daemon, ADR-034).
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g "pharos-mcp@${{ inputs.version }}"
+      - name: initialize and tools/list
+        shell: bash
+        run: |
+          pharos --version
+          python - <<'PY'
+          import json, shutil, subprocess
+          lines = [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}},
+              {"jsonrpc": "2.0", "method": "notifications/initialized"},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+          ]
+          pharos = shutil.which("pharos.cmd") or shutil.which("pharos")
+          out = subprocess.run([pharos], input="".join(json.dumps(l) + "\n" for l in lines),
+                               capture_output=True, text=True, timeout=120).stdout
+          replies = [json.loads(l) for l in out.splitlines() if l.strip()]
+          ids = sorted(r.get("id") for r in replies)
+          assert ids == [1, 2], "expected replies 1 and 2, got %r\n%s" % (ids, out[:2000])
+          print("smoke: ok: initialize and tools/list on Windows (%d tools)" % len(replies[1]["result"]["tools"]))
+          PY
