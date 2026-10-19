@@ -571,6 +571,15 @@ def grandchild_of_stub(sb):
     return a, pid
 
 
+def t_cli_new_language(sb):
+    """`--print-language-config` sees a language pharos.toml adds (it read
+    only the bundled defaults through 0.2.1, being a pre-boot meta flag)."""
+    out = sb.cli("--print-language-config", "stub",
+                 extra_env={"PHAROS_CONFIG_FILE": os.path.join(sb.fixture, ".pharos.toml")})
+    check(out.returncode == 0 and "[languages.stub]" in out.stdout and ".stub" in out.stdout,
+          "the stub language wasn't printed: %r %r" % (out.stdout[:300], out.stderr[:300]))
+
+
 def t_reap_on_stop(sb):
     """`pharos daemon stop` takes what an LSP left in its process group
     with it (rust-analyzer's in-flight cargo check, measured surviving)."""
@@ -621,6 +630,7 @@ SCENARIOS = [
     ("fd_hygiene", t_fd_hygiene),
     ("cancel_lands", t_cancel_lands),
     ("restart_survives", t_restart_survives),
+    ("cli_new_language", t_cli_new_language),
     ("reap_on_stop", t_reap_on_stop),
     ("reap_on_idle", t_reap_on_idle),
     ("reap_after_death", t_reap_after_death),

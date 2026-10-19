@@ -426,7 +426,7 @@ Python is the prominent case:
 
 | Server | Scope | Owns |
 |--------|-------|------|
-| `pyright` | `methods = "all"` | hover, goto, references, types, signature_help, document_symbols, workspace_symbols |
+| `pyright` | every method (no `methods` key) | hover, goto, references, types, signature_help, document_symbols, workspace_symbols |
 | `ruff` | `methods = ["textDocument/formatting", "textDocument/codeAction", "textDocument/diagnostic"]` | formatter, lint quick-fixes, import-sort, lint diagnostics |
 
 Routing rule per [ADR-019](doc/adr/019-multi-lsp-method-routing.md):
@@ -687,27 +687,28 @@ worked example:
 
 ```toml
 [languages.fennel]
-id = "fennel"                           # internal key (must match table name)
-extensions = ["fnl"]                    # file extensions → this language
-language_id = "fennel"                  # value pharos sends in initialize's clientCapabilities
+file_extensions = [".fnl"]              # files ending in these belong to this language
 root_markers = [".git", "fennel.fnl"]   # filenames whose presence marks the project root
 
 [[languages.fennel.servers]]
-id = "fennel-lsp"
-command = "fennel-lsp"                  # must resolve on PATH or be an absolute path
+id = "fennel-ls"
+command = "fennel-ls"                   # must resolve on PATH or be an absolute path
 args = []
-methods = "all"                         # this one server handles every LSP method
-# Optional: env = { FENNEL_PATH = "..." }
+# One server and no `methods` key: it handles every LSP method.
 ```
 
 **Required keys** (everything else has a sane default):
 
 | Key | Purpose |
 |-----|---------|
-| `extensions` | Filename extensions to associate with this language |
-| `language_id` | The `languageId` pharos sends in `initialize`'s `textDocument/clientCapabilities` |
+| `file_extensions` | Suffixes (leading dot included) whose files belong to this language |
 | `root_markers` | Filenames whose presence marks the project root (used to pick the LSP workspace). Replaces the default list rather than merging. Note that markers a dependency also ships — e.g. `package.json` under `node_modules/` — can root a session inside that dependency; see [Wrong answers for queries anchored inside a dependency](#wrong-answers-for-queries-anchored-inside-a-dependency) |
 | `[[languages.<id>.servers]]` (≥1) | At least one server with a `command` resolvable on PATH |
+
+`id` (optional) is the `languageId` pharos sends in `textDocument/didOpen`;
+it defaults to the table's name (`fennel` above). Per-server `methods`
+takes a list of LSP methods and only matters when a language has
+several servers (see [Multi-server languages](#multi-server-languages-adr-019)).
 
 **Optional dependency-location keys.** Both default to empty, which
 means "plain ascent, exactly as before" — set them only if this

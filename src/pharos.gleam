@@ -397,6 +397,12 @@ fn match_print_language_config(args: List(String)) -> Option(MetaFlag) {
 }
 
 fn print_language_config(language: String) -> Nil {
+  // Meta flags run before boot, so neither the config nor the registry
+  // is built yet; without this, `cached()` falls back to the bundled
+  // defaults and a language that pharos.toml adds is "not found"
+  // (--doctor does the same: cli.doctor, cli.languages_dict_to_list).
+  let _ = config.load()
+  registry.init()
   let registry = registry.cached()
   case dict.get(registry, language) {
     Error(_) ->

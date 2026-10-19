@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose leader already exited, and it identifies each server by its
   start time, so a reused pid is never signalled. Records from before
   0.2.2 are removed without signalling anything.
+- **`pharos --print-language-config <lang>`** shows languages that
+  pharos.toml adds, and overrides of bundled ones. Through 0.2.1 it
+  showed only the bundled defaults.
+- **README: adding a language.** The example used keys pharos doesn't
+  read (`extensions`, `language_id`, `methods = "all"`, `env`); it
+  now uses `file_extensions`, and says that `id` sets the
+  `languageId`. The `--cleanup` section no longer claims a
+  process-name check it never made.
 
 ## [0.2.1] — 2026-10-19
 
