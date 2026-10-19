@@ -20,8 +20,9 @@ code.
 - **`/shipshape`** — verifies the repo is in order (tests / docs / conventions /
   deps). Run before commits. It *proposes* fixes; it does not apply them unless
   asked.
-- **`/release`** — cuts a versioned Burrito + npm release. The only sanctioned
-  path through the two-file version bump and the Burrito cache foot-gun.
+- **`/release`** — cuts a versioned release: the two-file version bump, then the
+  `v*` tag that drives `.github/workflows/release.yml` (a native build per
+  target, a GitHub release with `install.sh`, npm).
 - **`/dogfood`** — drives a real pharos against real LSPs to verify behaviour the
   unit suite structurally cannot reach.
 
@@ -37,6 +38,10 @@ express:
   `(language, workspace, server)` wrapping one OS Port), readiness gating,
   method routing.
 - `src/pharos/tools/` — the curated MCP tool surface, one module per tool family.
+- `src/pharos/daemon*` — the shared daemon: Unix-socket sessions over one pool
+  ([ADR-034](doc/adr/034-shared-daemon-and-native-shim.md)).
+- `shim/` — the native `pharos` (Rust, std + libc): the MCP stdio shim that
+  starts or joins the daemon, and the launcher that execs the bundled ERTS.
 - `src/pharos/log/` — the logging facade: writer, ring buffer, filter.
 - `src/pharos_*_ffi.erl` — Erlang shims. These exist because Gleam has no way to
   express the thing (`pharos_lsp_dyn_sup.erl` is `simple_one_for_one`, which
@@ -57,7 +62,8 @@ changing anything that spawns, blocks, or times out — it is written to answer
    directly and unbuffered precisely so nothing else can interleave; a stray
    `io.println` in a request path corrupts the protocol stream for every client.
    CI's smoke test asserts an exact response-line count, which is what catches
-   this.
+   this. In daemon mode the same holds for the shim: its stdout carries only
+   whole lines relayed from the daemon socket.
 
 2. **Mix drives the build; the Gleam CLI does not.** Use `mix gleam.test`, never
    `gleam test`. `gleam.toml` is duplicated from `mix.exs` only so the Gleam
@@ -74,38 +80,45 @@ changing anything that spawns, blocks, or times out — it is written to answer
    [ADR-011](doc/adr/011-mix-app-name-symlink-workaround.md) before touching it.
    Symptom of removing it too early: `Could not find application :hpack`.
 
-4. **Multi-instance is the norm.** One pharos per MCP client session, several
-   concurrently. Never add a global single-instance lock, and partition every
-   piece of on-disk state by the owning pharos PID
-   ([ADR-030](doc/adr/030-process-lifecycle-hardening.md)).
+4. **Multi-session is the norm.** Sessions share a daemon per build and daemon
+   key ([ADR-034](doc/adr/034-shared-daemon-and-native-shim.md)), and `--direct`
+   instances stay independent. Never add a lock that limits sessions; the only
+   lock serializes daemon startup. Partition on-disk state by the owning pharos
+   PID ([ADR-030](doc/adr/030-process-lifecycle-hardening.md)).
 
-5. **Burrito keys its extracted runtime by version string.** Same version =
-   the launcher silently reuses the previously extracted BEAM files, so a fresh
-   binary runs *old* code. Either wipe the cache or bump the version; never
-   assume a rebuild took effect. `mix release.dev` wipes for you — prefer it over
-   a bare `mix release`. This has bitten the project before, which is why
-   `mix.exs` appends a per-build `+<sha>` suffix.
+5. **Each build is its own daemon.** The shim keys the daemon socket by
+   `BUILD_ID` (a content hash of the release and the shim) plus the daemon key,
+   so a rebuilt release never joins a daemon running other code. But sessions
+   already connected stay on the old build's daemon until they end: after a
+   rebuild, `pharos daemon stop --all` (or reconnect `/mcp`) before trusting a
+   dogfood result. Nothing extracts at run time any more
+   ([ADR-035](doc/adr/035-releases-without-burrito.md)).
 
 ## Build / test / run
 
 ```sh
 mix compile --warnings-as-errors   # what CI compiles with
-mix gleam.test                     # the suite (230 at last count)
+mix gleam.test                     # the suite (260 at last count)
 mix start                          # run the stdio server on this shell
 bin/pharos-dev                     # dev wrapper for MCP-client use
-mix release.dev                    # wipe Burrito cache + rebuild all 5 targets
+mix release.dev                    # clean rebuild of this machine's release + package
 mix release.prod <vsn>             # bump both version files, commit, tag, build
+python3 test/daemon/integration.py # daemon + shim scenarios (CI's daemon-integration job)
 ```
 
 Toolchain is pinned in [.tool-versions](.tool-versions) and must match the
 versions in both CI workflows — those pins have drifted apart before. The
-release path additionally needs **Zig 0.15.2** (`burrito` pins it; see the
-constraint comment in `mix.exs`) and `xz`.
+release path additionally needs **Rust** (cargo builds `shim/`; pinned in
+`shim/rust-toolchain.toml`). Release builds run on the OTP that
+`rel/build-runtime.sh` builds (geex's script, byte for byte); with another OTP
+the native check only prints notes.
 
 **Ship bar: the suite green twice in a row**, plus a release build when anything
-under `mix.exs`, `mix.lock`, `manifest.toml`, or `rel/` moved. That last clause
-is load-bearing: Burrito failures land at the *wrap* step, after compile and
-assemble both pass, so `mix gleam.test` stays green while releases break.
+under `mix.exs`, `mix.lock`, `manifest.toml`, `rel/`, `shim/`, or
+`lib/mix/pharos/` moved. That last clause is load-bearing: release failures land
+in the release steps (boot-script check, native check, shim build), after
+compile and assemble both pass, so `mix gleam.test` stays green while releases
+break.
 
 ## Conventions when you touch code
 
@@ -135,10 +148,10 @@ that is what the list is for.
 **No NIFs — a v1.0 constraint, not a permanent law.**
 [ADR-030](doc/adr/030-process-lifecycle-hardening.md) rules out NIFs for v1.0 and
 explicitly defers the one wanted case (`PR_SET_PDEATHSIG` against orphaned LSP
-children) to v1.1, on the grounds that a NIF plus a Zig shim is too much surface
-for the release. Treat adding native code as an ADR-level decision, and prefer a
-separately distributed, checksum-pinned *executable* over anything linked into
-the BEAM.
+children) to v1.1. Treat adding native code as an ADR-level decision, and prefer
+a separate *executable* over anything linked into the BEAM — the Rust shim
+(ADR-034) is that shape: it ships in the release and talks to the BEAM over a
+socket.
 
 ## Docs discipline
 
@@ -170,19 +183,32 @@ model string is per-session). Commit only when asked; branch first if on `main`.
 
 - repo dir: `pharos-mcp` — but the app, binary, and OTP application are all
   `pharos`. Old paths referencing `/home/oof/pharos` are stale.
-- npm: `pharos-mcp` (main) with five `@pharos-mcp/<platform>` sub-packages, each
-  carrying one Burrito binary; the main package lists them as
-  `optionalDependencies`.
+- npm: `pharos-mcp` (main) with four `@pharos-mcp/<platform>` sub-packages
+  (linux-x64, linux-arm64, darwin-x64, darwin-arm64), each carrying one unpacked
+  release under `release/`; the main package lists them as
+  `optionalDependencies`, and its postinstall points `pharos` at the native shim
+  (ADR-035). No Windows build: Windows users run pharos inside WSL.
+- GitHub releases: `pharos-<version>-<os>-<arch>.tar.gz`, `SHA256SUMS`, and
+  `install.sh` (installs to `~/.local/share/pharos/versions/<v>/`, symlinks
+  `~/.local/bin/pharos`, fails closed on the hash).
 - env vars: all `PHAROS_*` — transport (`PHAROS_TRANSPORT`, `PHAROS_HTTP_PORT`,
   `PHAROS_HTTP_BIND`, `PHAROS_HTTP_PORT_FILE`, `PHAROS_BRIDGE_PORT`), logging
   (`PHAROS_LOG`, `PHAROS_LOG_FILE`, `PHAROS_LOG_STDERR`, `PHAROS_LOG_RING`,
-  `PHAROS_SASL`, `PHAROS_TRACE_LSP`), build/release (`PHAROS_RELEASE`,
-  `PHAROS_BUILD_ID`, `PHAROS_INSTALL_DIR`, `PHAROS_SKIP_POSTINSTALL`), and
+  `PHAROS_SASL`, `PHAROS_TRACE_LSP`), daemon (`PHAROS_MODE` auto | daemon |
+  direct, `PHAROS_DAEMON_IDLE_SECS`, `PHAROS_LSP_IDLE_SECS`,
+  `PHAROS_DAEMON_START_TIMEOUT_MS`, `PHAROS_DAEMON_SYSTEMD`,
+  `PHAROS_RUNTIME_DIR`), build/release/install (`PHAROS_RELEASE`,
+  `PHAROS_BUILD_ID`, `PHAROS_SKIP_POSTINSTALL`, and install.sh's
+  `PHAROS_INSTALL_DIR` / `PHAROS_BIN_DIR` / `PHAROS_DOWNLOAD_URL`), and
   behaviour (`PHAROS_CONFIG_FILE`, `PHAROS_TOOLS`, `PHAROS_WARM_LANGS`,
   `PHAROS_MEMORY_ROOT`, `PHAROS_USER_MEMORY_ROOT`).
 - runtime state: `~/.local/share/pharos/instances/<pharos-pid>/` for per-instance
-  LSP child tracking; Burrito's extracted runtimes in `~/.local/share/.burrito/`
-  (XDG **data**, not cache — the wrong-XDG-var bug is in the fossil guard).
+  LSP child tracking; installs in `~/.local/share/pharos/versions/<version>/`;
+  daemon sockets in `$XDG_RUNTIME_DIR/pharos/` (macOS: `$TMPDIR/pharos/`); logs
+  and crash dumps in `~/.local/state/pharos/log/`. pharos 0.1.x's Burrito unpacks
+  under `~/.local/share/.burrito/pharos_*` are removed by `pharos --purge-cache`
+  (that path is XDG **data**, not cache — the wrong-XDG-var bug is in the fossil
+  guard).
 
 ⚠ Dogfooding runs pharos against **your own machine's LSPs and caches** (jdtls
 workspaces, `~/.m2`, cargo target dirs). A dogfood run that wipes or rebuilds
