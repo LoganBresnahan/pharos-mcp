@@ -461,6 +461,9 @@ fn trap_exits() -> Nil
 @external(erlang, "pharos_runtime_ffi", "describe_term")
 fn describe_term(term: dynamic.Dynamic) -> String
 
+@external(erlang, "pharos_runtime_ffi", "is_shutdown_exit")
+fn is_shutdown_exit(term: dynamic.Dynamic) -> Bool
+
 fn process_reason_as_dynamic(reason: process.ExitReason) -> dynamic.Dynamic {
   coerce_to_dynamic(reason)
 }
@@ -631,21 +634,29 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
     SnapshotReq(reply_to) -> handle_snapshot(state, reply_to)
 
-    UnexpectedMessage(payload) -> {
-      // trap_exit catches EXIT signals (linked-process death,
-      // brutal shutdown from supervisor) and routes them here.
-      // Anything else hitting select_other is also unexpected and
-      // worth logging. We log + continue so a benign extra message
-      // does not bounce the pool, but a real EXIT signal is no
-      // longer silent — the source pid + reason show up in stderr.
-      log.fields_at(
-        "pharos/lsp/pool",
-        log_entry.Warn,
-        "pool received unexpected mailbox message (likely EXIT signal)",
-        [#("payload", describe_term(payload))],
-      )
-      actor.continue(state)
-    }
+    UnexpectedMessage(payload) ->
+      case is_shutdown_exit(payload) {
+        // The supervisor stopping the tree. Because the pool traps
+        // exits, it must act on this itself: continuing left the
+        // supervisor waiting out its 5 s shutdown timeout before a
+        // kill, so every pharos exit took about 6 s.
+        True -> actor.stop()
+        False -> {
+          // trap_exit catches EXIT signals (linked-process death,
+          // brutal shutdown from supervisor) and routes them here.
+          // Anything else hitting select_other is also unexpected and
+          // worth logging. We log + continue so a benign extra message
+          // does not bounce the pool, but a real EXIT signal is no
+          // longer silent — the source pid + reason show up in stderr.
+          log.fields_at(
+            "pharos/lsp/pool",
+            log_entry.Warn,
+            "pool received unexpected mailbox message (likely EXIT signal)",
+            [#("payload", describe_term(payload))],
+          )
+          actor.continue(state)
+        }
+      }
   }
 }
 

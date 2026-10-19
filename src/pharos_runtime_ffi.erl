@@ -71,6 +71,7 @@
     safe_call_0/1,
     trap_exits/0,
     describe_term/1,
+    is_shutdown_exit/1,
     install_sasl_capture_handler/0,
     redirect_erl_crash_dump/0,
     init_stop/0,
@@ -130,6 +131,12 @@ lsp_capabilities_lookup(Pid) when is_pid(Pid) ->
 %% catches it and logs the source + reason rather than dying.
 %% Side-effect: pool's supervisor shutdown becomes graceful
 %% (acknowledge + actor.stop) rather than immediate kill.
+%% An EXIT signal a supervisor sends to stop its child, as an
+%% exit-trapping process receives it.
+is_shutdown_exit({'EXIT', _From, shutdown}) -> true;
+is_shutdown_exit({'EXIT', _From, {shutdown, _}}) -> true;
+is_shutdown_exit(_) -> false.
+
 trap_exits() ->
     process_flag(trap_exit, true),
     nil.
