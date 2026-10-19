@@ -59,10 +59,12 @@ jobs:
         with:
           node-version: "22"
       # The registry takes minutes to serve a version everywhere after a
-      # publish (rc.1's npm jobs, run a minute after publishing, all got
-      # ETARGET though every package was published). Wait until this
-      # version and every platform package resolve, then install with
-      # retries.
+      # publish, and `npm install` reads the abbreviated install document
+      # (Accept: application/vnd.npm.install-v1+json), which the CDN caches
+      # apart from the full one `npm view` reads. 0.2.0's npm jobs passed a
+      # `npm view` wait and still got a stale install document, so npm
+      # silently skipped the optional platform package. Poll the install
+      # document itself, then install and check the platform package landed.
       - name: Wait for the registry to serve ${{ inputs.version }}
         shell: bash
         run: |
@@ -70,9 +72,12 @@ jobs:
           for i in $(seq 1 45); do
             missing=
             for pkg in pharos-mcp @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
-              [ "$(npm view "$pkg@$v" version --prefer-online 2>/dev/null)" = "$v" ] || missing="$missing $pkg"
+              curl -fsSL -H 'Accept: application/vnd.npm.install-v1+json' \
+                "https://registry.npmjs.org/$(printf %s "$pkg" | sed 's|/|%2F|')" 2>/dev/null \
+                | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin)["versions"] else 1)' "$v" \
+                || missing="$missing $pkg"
             done
-            [ -z "$missing" ] && { echo "all packages at $v resolve"; exit 0; }
+            [ -z "$missing" ] && { echo "all packages at $v are in the install documents"; exit 0; }
             echo "not yet:$missing (try $i)"
             sleep 20
           done
@@ -81,8 +86,17 @@ jobs:
       - name: Install
         shell: bash
         run: |
-          for i in 1 2 3; do
-            npm install -g --prefer-online pyright "pharos-mcp@${{ inputs.version }}" && exit 0
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) plat=linux-x64 ;; Linux-aarch64) plat=linux-arm64 ;;
+            Darwin-x86_64) plat=darwin-x64 ;; Darwin-arm64) plat=darwin-arm64 ;;
+          esac
+          for i in $(seq 1 20); do
+            if npm install -g --prefer-online pyright "pharos-mcp@${{ inputs.version }}" \
+               && npm ls -g "@pharos-mcp/$plat" >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "the platform package @pharos-mcp/$plat didn't land (try $i); retrying"
+            npm uninstall -g pharos-mcp >/dev/null 2>&1 || true
             sleep 30
           done
           exit 1
@@ -110,10 +124,12 @@ jobs:
         with:
           node-version: "22"
       # The registry takes minutes to serve a version everywhere after a
-      # publish (rc.1's npm jobs, run a minute after publishing, all got
-      # ETARGET though every package was published). Wait until this
-      # version and every platform package resolve, then install with
-      # retries.
+      # publish, and `npm install` reads the abbreviated install document
+      # (Accept: application/vnd.npm.install-v1+json), which the CDN caches
+      # apart from the full one `npm view` reads. 0.2.0's npm jobs passed a
+      # `npm view` wait and still got a stale install document, so npm
+      # silently skipped the optional platform package. Poll the install
+      # document itself, then install and check the platform package landed.
       - name: Wait for the registry to serve ${{ inputs.version }}
         shell: bash
         run: |
@@ -121,9 +137,12 @@ jobs:
           for i in $(seq 1 45); do
             missing=
             for pkg in pharos-mcp @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
-              [ "$(npm view "$pkg@$v" version --prefer-online 2>/dev/null)" = "$v" ] || missing="$missing $pkg"
+              curl -fsSL -H 'Accept: application/vnd.npm.install-v1+json' \
+                "https://registry.npmjs.org/$(printf %s "$pkg" | sed 's|/|%2F|')" 2>/dev/null \
+                | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin)["versions"] else 1)' "$v" \
+                || missing="$missing $pkg"
             done
-            [ -z "$missing" ] && { echo "all packages at $v resolve"; exit 0; }
+            [ -z "$missing" ] && { echo "all packages at $v are in the install documents"; exit 0; }
             echo "not yet:$missing (try $i)"
             sleep 20
           done
@@ -132,8 +151,17 @@ jobs:
       - name: Install
         shell: bash
         run: |
-          for i in 1 2 3; do
-            npm install -g --prefer-online --ignore-scripts "pharos-mcp@${{ inputs.version }}" && exit 0
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) plat=linux-x64 ;; Linux-aarch64) plat=linux-arm64 ;;
+            Darwin-x86_64) plat=darwin-x64 ;; Darwin-arm64) plat=darwin-arm64 ;;
+          esac
+          for i in $(seq 1 20); do
+            if npm install -g --prefer-online --ignore-scripts "pharos-mcp@${{ inputs.version }}" \
+               && npm ls -g "@pharos-mcp/$plat" >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "the platform package @pharos-mcp/$plat didn't land (try $i); retrying"
+            npm uninstall -g pharos-mcp >/dev/null 2>&1 || true
             sleep 30
           done
           exit 1
