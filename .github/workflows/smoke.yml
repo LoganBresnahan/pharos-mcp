@@ -58,7 +58,34 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install -g pyright "pharos-mcp@${{ inputs.version }}"
+      # The registry takes minutes to serve a version everywhere after a
+      # publish (rc.1's npm jobs, run a minute after publishing, all got
+      # ETARGET though every package was published). Wait until this
+      # version and every platform package resolve, then install with
+      # retries.
+      - name: Wait for the registry to serve ${{ inputs.version }}
+        shell: bash
+        run: |
+          v="${{ inputs.version }}"
+          for i in $(seq 1 45); do
+            missing=
+            for pkg in pharos-mcp @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
+              [ "$(npm view "$pkg@$v" version 2>/dev/null)" = "$v" ] || missing="$missing $pkg"
+            done
+            [ -z "$missing" ] && { echo "all packages at $v resolve"; exit 0; }
+            echo "not yet:$missing (try $i)"
+            sleep 20
+          done
+          echo "the registry still doesn't serve$missing at $v" >&2
+          exit 1
+      - name: Install
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm install -g pyright "pharos-mcp@${{ inputs.version }}" && exit 0
+            sleep 30
+          done
+          exit 1
       - name: pharos is the native shim
         run: |
           link=$(npm prefix -g)/lib/node_modules/pharos-mcp/bin/pharos.js
@@ -82,7 +109,34 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install -g --ignore-scripts "pharos-mcp@${{ inputs.version }}"
+      # The registry takes minutes to serve a version everywhere after a
+      # publish (rc.1's npm jobs, run a minute after publishing, all got
+      # ETARGET though every package was published). Wait until this
+      # version and every platform package resolve, then install with
+      # retries.
+      - name: Wait for the registry to serve ${{ inputs.version }}
+        shell: bash
+        run: |
+          v="${{ inputs.version }}"
+          for i in $(seq 1 45); do
+            missing=
+            for pkg in pharos-mcp @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
+              [ "$(npm view "$pkg@$v" version 2>/dev/null)" = "$v" ] || missing="$missing $pkg"
+            done
+            [ -z "$missing" ] && { echo "all packages at $v resolve"; exit 0; }
+            echo "not yet:$missing (try $i)"
+            sleep 20
+          done
+          echo "the registry still doesn't serve$missing at $v" >&2
+          exit 1
+      - name: Install
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm install -g --ignore-scripts "pharos-mcp@${{ inputs.version }}" && exit 0
+            sleep 30
+          done
+          exit 1
       - name: bin/pharos.js is still the JS launcher
         run: |
           link=$(npm prefix -g)/lib/node_modules/pharos-mcp/bin/pharos.js
