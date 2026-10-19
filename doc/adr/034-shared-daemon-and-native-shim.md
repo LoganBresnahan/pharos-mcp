@@ -1,6 +1,6 @@
 # 034. One shared daemon per build, reached through a native stdio shim
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-19
 
 ## Context
@@ -82,10 +82,22 @@ added.
 3. On `ENOENT` or `ECONNREFUSED`, take an exclusive `flock` on the
    sibling `<name>.lock`, blocking with a bounded wait. Under the lock:
    - try to connect again (another shim may have just started it);
-   - otherwise unlink any stale socket file and spawn the daemon
-     detached: `fork`, `setsid`, stdin from `/dev/null`, stdout and
-     stderr appended to the daemon's boot log, then exec the bundled
-     ERTS with `daemon --socket <path>`;
+   - otherwise check the daemon's `<name>.pid` and unlink the socket
+     only if that pid is dead (`kill(pid, 0)`) or its command line is
+     not a pharos daemon. A live daemon that is slow to accept is
+     waited for, never orphaned;
+   - if no daemon is alive, spawn one detached:
+     - `fork`, then `setsid`;
+     - stdin from `/dev/null`, stdout and stderr appended to the
+       daemon's boot log;
+     - close every inherited fd ≥ 3 (`close_range`, or iterate where
+       that is missing), so a daemon that outlives the session never
+       holds one of the client's non-close-on-exec fds;
+     - exec the bundled ERTS with `daemon --socket <path>`.
+
+     Where a systemd user manager is running, the spawn goes through
+     `systemd-run --user --scope`, so tearing down the terminal's or
+     the client's scope cannot take the daemon with it;
    - poll-connect until the socket accepts or
      `PHAROS_DAEMON_START_TIMEOUT_MS` (default 15000) runs out.
 
@@ -95,7 +107,10 @@ added.
    `PHAROS_MODE`:
    - `auto` (the default) prints one stderr line naming the boot log
      and falls back to `--direct`. A broken daemon is never worse than
-     today.
+     today. A stderr line only reaches a client log nobody reads, so
+     the shim also appends the fallback (time, reason, build) to
+     `$XDG_STATE_HOME/pharos/log/fallbacks.log`, and `--doctor`
+     reports recent fallbacks.
    - `daemon` exits 1 instead. Tests and CI use it.
 5. Send the hello, read the ack, then copy bytes both ways until stdin
    closes.
@@ -103,9 +118,15 @@ added.
    copying daemon → stdout until the daemon closes or 3 s pass, then
    exit 0.
 
-Only daemon bytes received after the ack reach stdout. Every shim
-diagnostic goes to stderr, prefixed `pharos:`. Two threads with
-blocking I/O, so resident memory is about a megabyte per session.
+Only daemon bytes received after the ack reach stdout, and only whole
+lines. The daemon → stdout relay writes each read up to its last
+`\n` and holds the tail until the next read completes it. When the
+connection is lost, the tail is dropped. That is a byte scan, not JSON
+parsing, and the buffer is bounded by the largest frame. Without it, a
+daemon dying mid-frame would leave half a line on the client's stdout.
+Every shim diagnostic goes to stderr, prefixed `pharos:`. The shim runs
+two threads with blocking I/O, so it holds about a megabyte per
+session.
 
 `PHAROS_MODE=direct`, the `--direct` flag, any `PHAROS_TRANSPORT`
 other than `stdio`, and every Windows build exec the BEAM in-process
@@ -136,7 +157,9 @@ metadata, with no BEAM boot.
 ### Build id and daemon key
 
 - **Build id**: the first 16 hex digits of a SHA-256 over the release
-  tree (ERTS, `lib/`, `releases/`). It is computed when the release is
+  tree (ERTS, `lib/`, `releases/`) **and the shim binary**, so the
+  shim and the daemon can never skew within one id. It is computed
+  when the release is
   packaged and written to `<release>/BUILD_ID`. A rebuilt dev build
   with any changed byte gets a new id. A byte-identical rebuild joining
   the old daemon is harmless.
@@ -162,9 +185,13 @@ metadata, with no BEAM boot.
   If the full path would exceed 100 bytes, use `/tmp/pharos-<uid>/`.
 - Every socket dir is created `0700`. The shim refuses to use one that
   is not owned by the current uid or that allows group or other
-  access, and says why on stderr. The socket and lock files sit beside
-  each other. Directory permissions are the access control, as with
-  `ssh-agent` and `tmux`.
+  access, and says why on stderr. The socket, its `.lock` and the
+  daemon's `.pid` sit beside each other. Directory permissions are the
+  access control, as with `ssh-agent` and `tmux`.
+- macOS's periodic cleaner deletes `$TMPDIR` files left untouched for
+  about three days. If it removes a live daemon's socket, the next shim
+  starts a second daemon for the same key. That is harmless: the old
+  one keeps its sessions and idles out.
 
 The shim passes the socket path to the daemon as an argument. Path
 logic lives only in the shim.
@@ -180,7 +207,15 @@ The first line the shim sends is a JSON object (at most 1 MiB):
 ```
 
 `env` is the shim's whole environment. `client_pid` is the shim's
-parent, which is the MCP client. The daemon answers with one line,
+parent, which is the MCP client.
+
+The env carries secrets: API keys live in client environments. The
+daemon never logs it, never returns it from `status`, and never puts
+it in an MCP response, `runtime_language_config` included. Wherever
+pharos reports which session started an LSP, it gives the session id
+and cwd, never the env. The env is still process state, so a crash
+dump contains it: crash dumps are created `0600` in a `0700`
+directory. The daemon answers with one line,
 either `{"pharos_hello_ok": 1, "session": "<id>", "daemon_pid": N}` or
 `{"pharos_hello_error": "<reason>"}` followed by a close. A build
 mismatch is refused: it can only happen if a release was rebuilt in
@@ -206,6 +241,12 @@ replaces `stdio_worker`'s stdin port with the socket. Its dispatchers
 carry the session id in their process dictionary, set once at spawn.
 `config.cached/0` and `registry.cached/0` resolve through it and fall
 back to the daemon's own Config. The tools keep their signatures.
+
+Direct mode is one session context built from the process cwd and
+env, through the same code. The two modes cannot drift. Every
+connection, including direct mode's stdio, has its own writer: the
+per-worker `WriterMsg` subject `stdio_worker` already uses. Nothing
+server → client goes through a global writer.
 
 | State | Scope | Why |
 |---|---|---|
@@ -246,7 +287,8 @@ the fingerprint: Claude sessions prepend different entries all the
 time, and the resolved binary already captures what `PATH` decided.
 A later session that joins an LSP gets the starter's env for the
 variables outside `env_keys`. That is the documented trade, and
-`runtime_language_config` shows which session started each LSP.
+`runtime_language_config` shows which session started each LSP, by
+session id and cwd.
 
 ### Lifecycle
 
@@ -298,7 +340,7 @@ on both Linux and macOS:
 
 - `daemon-<build>-<pid>.log`: the structured log, with the existing
   size rotation (`file_max_bytes`, `file_keep_rotated`).
-- `daemon-<build>.boot.log`: the daemon's raw stdout and stderr, for
+- `daemon-<build>-<key>.boot.log`: the daemon's raw stdout and stderr, for
   failures before the logger is up. The shim truncates it at spawn
   when it exceeds 1 MiB.
 
@@ -330,8 +372,13 @@ In direct mode the invariant applies exactly as today.
   key and only serializes daemon startup. Any number of sessions
   share the daemon, any number of daemons coexist across builds and
   keys, and `--direct` instances stay fully independent. ADR-030's
-  per-PID partitioning still holds, keyed by the daemon's pid. A
-  CLAUDE.md wording change goes in the implementing commit, for review.
+  per-PID partitioning still holds, keyed by the daemon's pid. The
+  approved rewording of CLAUDE.md's invariant 4, which Logan applies:
+  "Multi-session is the norm. Sessions share a daemon per build and
+  daemon key (ADR-034), and `--direct` instances stay independent.
+  Never add a lock that limits sessions; the only lock serializes
+  daemon startup. Partition on-disk state by the owning pharos PID
+  (ADR-030)."
 - A daemon crash now takes down every session on it, not one. That is
   why the v1 failure mode is a loud, immediate stderr line, and why
   `PHAROS_MODE=auto` falls back to `--direct` when the daemon cannot
@@ -386,16 +433,27 @@ env an LSP got. The checks are:
    removes its socket after the last shim leaves. With
    `PHAROS_LSP_IDLE_SECS=2` the stub LSP gets `shutdown` while a
    session stays connected.
-5. **Daemon death**: SIGKILL the daemon. The shim exits 1 within a
-   second with the stderr line, and its stdout holds only complete
-   frames.
+5. **Daemon death**: SIGKILL the daemon in the middle of a large
+   response. The shim exits 1 within a second with the stderr line,
+   and its stdout holds only complete frames.
 6. **stdout stays clean**: every stdout line in every scenario parses
    as a JSON-RPC frame, including runs with `PHAROS_LOG=debug` and
    `PHAROS_INSTALL_DIR` set.
 7. **Per-session isolation**: two sessions with different
    `PHAROS_TOOLS` see different `tools/list`. A cancel in one session
    doesn't touch the same id in the other. A timeout override in one
-   doesn't apply to the other.
+   doesn't apply to the other. No secret-looking env value from a
+   hello shows up in the log, in `status`, or in any tool response.
+8. **The daemon outlives the terminal that spawned it**: start it from
+   shell A (`setsid`), keep a session open from shell B, then kill A's
+   terminal. The daemon and B's session survive. CI covers Linux, and
+   the coordinator repeats it on WSL and macOS by hand.
+9. **Stale sockets**: a socket file whose `.pid` is dead is replaced. A
+   live daemon that is slow to accept (stopped with SIGSTOP) is waited
+   on and never unlinked.
+10. **Fd hygiene**: a shim started with an extra non-close-on-exec fd
+    spawns a daemon that doesn't hold it (checked via
+    `/proc/<pid>/fd` on Linux, `lsof` on macOS).
 
 The post-release smoke workflow (ADR-035) repeats 1, 4 and 6 against
 the published artifacts with a real LSP.
