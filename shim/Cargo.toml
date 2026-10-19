@@ -1,0 +1,30 @@
+[package]
+name = "pharos-shim"
+version = "0.2.0"
+edition = "2021"
+description = "pharos's front-end executable: the MCP stdio shim to the shared daemon, and the launcher for the bundled Erlang runtime (ADR-034)"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "pharos"
+path = "src/main.rs"
+
+# Deliberately tiny: the shim is resident once per MCP session.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -147,13 +147,7 @@ defmodule Pharos.MixProject do
   defp releases do
     [
       pharos: [
-        steps: [
-          &prepend_mirror_paths/1,
-          :assemble,
-          &check_boot_script/1,
-          &Burrito.wrap/1,
-          &refresh_npm_platform_packages/1
-        ],
+        steps: release_steps(),
         burrito: [
           targets: [
             linux_x64: [os: :linux, cpu: :x86_64],
@@ -165,6 +159,19 @@ defmodule Pharos.MixProject do
         ]
       ]
     ]
+  end
+
+  # `PHAROS_ASSEMBLE_ONLY=1` stops after the boot-script check, leaving
+  # the plain release in `_build/prod/rel/pharos` without wrapping five
+  # Burrito targets. The ADR-034 shim runs against that release in
+  # local development and in the daemon integration tests.
+  defp release_steps do
+    assembled = [&prepend_mirror_paths/1, :assemble, &check_boot_script/1]
+
+    case System.get_env("PHAROS_ASSEMBLE_ONLY") do
+      "1" -> assembled
+      _ -> assembled ++ [&Burrito.wrap/1, &refresh_npm_platform_packages/1]
+    end
   end
 
   # Re-run the ADR-011 path fix immediately before :assemble. The

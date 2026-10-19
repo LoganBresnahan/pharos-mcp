@@ -10,6 +10,7 @@
 ////   1 — at least one diagnostic flagged a problem (doctor only)
 ////   2 — operation failed outright (purge-cache I/O error, etc.)
 
+import gleam/bit_array
 import gleam/dict
 import gleam/int
 import gleam/io
@@ -19,6 +20,7 @@ import gleam/result
 import gleam/string
 import pharos/config
 import pharos/env
+import pharos/log/rotate as log_rotate
 import pharos/lsp/instance_track
 import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/registry as lsp_registry
@@ -86,6 +88,35 @@ pub fn purge_cache() -> Int {
 /// Doubles as a Burrito warmup — running it once after install
 /// extracts the payload so the first MCP host spawn does not see
 /// the cold-extract latency.
+/// The last `n` lines of `<log dir>/fallbacks.log`, written by the
+/// shim each time `auto` mode fell back to direct mode.
+pub fn recent_fallbacks(n: Int) -> List(String) {
+  case log_rotate.log_cache_dir() {
+    "" -> []
+    dir ->
+      case read_text(dir <> "/fallbacks.log") {
+        Error(_) -> []
+        Ok(text) -> {
+          let lines =
+            text
+            |> string.split("\n")
+            |> list.filter(fn(line) { line != "" })
+          list.drop(lines, int.max(0, list.length(lines) - n))
+        }
+      }
+  }
+}
+
+fn read_text(path: String) -> Result(String, Nil) {
+  case read_file(path) {
+    Ok(bits) -> bit_array.to_string(bits)
+    Error(_) -> Error(Nil)
+  }
+}
+
+@external(erlang, "pharos_fs_ffi", "read_file")
+fn read_file(path: String) -> Result(BitArray, String)
+
 pub fn doctor() -> Int {
   io.println("pharos doctor")
   io.println("=============")
@@ -109,6 +140,18 @@ pub fn doctor() -> Int {
     <> int.to_string(list.length(extracts))
     <> " pharos extract(s)",
   )
+  io.println("")
+
+  // Section: daemon fallbacks (ADR-034). In `auto` mode a shim that
+  // cannot reach the daemon runs its session in direct mode and says
+  // so only on stderr, which lands in a client log nobody reads; the
+  // shim also records it, and this is where it surfaces.
+  io.println("Daemon fallbacks (most recent last)")
+  io.println("-----------------------------------")
+  case recent_fallbacks(5) {
+    [] -> io.println("none recorded")
+    lines -> list.each(lines, io.println)
+  }
   io.println("")
 
   // Section: resolved Config

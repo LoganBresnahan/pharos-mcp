@@ -117,7 +117,7 @@ fn hooks(args: Args) -> conn.Hooks {
     status: fn() { status_json(args) },
     stop: fn() {
       log.info_at("pharos/daemon", "stop requested; daemon exiting")
-      init_stop()
+      stop_daemon()
     },
   )
 }
@@ -189,7 +189,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
                 "no sessions for the idle timeout; daemon exiting",
                 [#("idle_secs", int.to_string(state.idle_ms / 1000))],
               )
-              init_stop()
+              stop_daemon()
               actor.continue(state)
             }
             False -> {
@@ -326,6 +326,18 @@ fn os_pid() -> Int
 
 @external(erlang, "pharos_daemon_ffi", "now_ms")
 fn now_ms() -> Int
+
+/// Unlink the socket and pid file first, then stop the application.
+/// The orderly stop takes seconds (in-flight drain, LSP teardown); a
+/// shim arriving meanwhile must find no socket and start a fresh
+/// daemon, not join this one as it goes.
+fn stop_daemon() -> Nil {
+  cleanup()
+  init_stop()
+}
+
+@external(erlang, "pharos_daemon_ffi", "cleanup")
+fn cleanup() -> Nil
 
 @external(erlang, "pharos_runtime_ffi", "init_stop")
 fn init_stop() -> Nil

@@ -4,10 +4,13 @@
 //// integration tests.
 
 import gleam/bit_array
+import gleam/erlang/charlist
 import gleam/list
 import gleam/option.{None, Some}
 import gleeunit/should
+import pharos/cli
 import pharos/daemon
+import pharos/env
 
 @external(erlang, "pharos_daemon_ffi", "split_lines")
 fn split_lines_ffi(
@@ -86,4 +89,35 @@ pub fn split_lines_counts_pending_bytes_test() {
     split_lines_ffi(#([<<"abc":utf8>>], 3), <<"defg":utf8>>)
   bytes
   |> should.equal(7)
+}
+
+@external(erlang, "pharos_fs_ffi", "setenv")
+fn setenv(key: String, value: String) -> Nil
+
+@external(erlang, "os", "unsetenv")
+fn os_unsetenv(key: charlist.Charlist) -> Bool
+
+fn unsetenv(key: String) -> Nil {
+  let _ = os_unsetenv(charlist.from_string(key))
+  Nil
+}
+
+@external(erlang, "pharos_fs_ffi", "shell")
+fn shell(cmd: String) -> String
+
+pub fn doctor_reports_the_last_fallbacks_test() {
+  let dir = "/tmp/pharos-fallbacks-test-" <> shell("printf %s $$")
+  let _ = shell("rm -rf " <> dir <> " && mkdir -p " <> dir <> "/pharos/log")
+  let _ =
+    shell("printf 'a\\nb\\nc\\n' > " <> dir <> "/pharos/log/fallbacks.log")
+  let previous = env.get("XDG_STATE_HOME")
+  setenv("XDG_STATE_HOME", dir)
+  let lines = cli.recent_fallbacks(2)
+  case previous {
+    Some(value) -> setenv("XDG_STATE_HOME", value)
+    None -> unsetenv("XDG_STATE_HOME")
+  }
+  let _ = shell("rm -rf " <> dir)
+  lines
+  |> should.equal(["b", "c"])
 }

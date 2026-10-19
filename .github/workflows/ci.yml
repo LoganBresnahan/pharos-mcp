@@ -11,6 +11,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ADR-034: the native front end (shim + launcher). The toolchain is
+  # pinned in shim/rust-toolchain.toml; rustup installs it on first use.
+  shim:
+    name: shim (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: shim
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            shim/target
+          key: ${{ runner.os }}-shim-${{ hashFiles('shim/Cargo.lock', 'shim/rust-toolchain.toml') }}
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+      - name: Re-sign ad hoc (macOS kills a stripped binary with a stale signature)
+        if: runner.os == 'macOS'
+        run: codesign -s - -f target/release/pharos && codesign -v target/release/pharos
+      - name: The binary runs and answers --version without booting a runtime
+        run: |
+          root="$RUNNER_TEMP/fake-release"
+          mkdir -p "$root/releases"
+          printf '16.1 0.0.0-ci\n' > "$root/releases/start_erl.data"
+          printf '0123456789abcdef\n' > "$root/BUILD_ID"
+          out=$(PHAROS_RELEASE_ROOT="$root" ./target/release/pharos --version)
+          echo "$out"
+          [ "$out" = "pharos 0.0.0-ci" ]
+
   test:
     runs-on: ubuntu-latest
     name: build & test

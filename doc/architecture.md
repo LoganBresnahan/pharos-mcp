@@ -209,6 +209,17 @@ last session gone → after PHAROS_DAEMON_IDLE_SECS (1800) with none:
    init:stop → app stop removes the socket + pid file
 ```
 
+The shim side (`shim/`, Rust): `pharos` with no arguments connects to
+`<runtime dir>/<build>-<key>.sock`. On a miss it takes `<…>.lock`
+(flock), re-checks, waits on a live daemon named in `<…>.pid`, or
+replaces a stale socket and spawns `erlexec … -extra daemon …` detached
+(setsid, inherited fds close-on-exec, stdout/stderr to the boot log,
+inside `systemd-run --user --scope` when a user manager runs). It
+sends the hello and relays only complete lines to stdout. On stop or
+idle exit the daemon unlinks its socket and pid file *before* the
+orderly stop, so a shim arriving meanwhile starts a fresh daemon
+instead of joining one on its way out.
+
 A crashed connection is unlinked from the acceptor, so it takes only
 its own session down. A crashed acceptor or daemon actor takes the
 listener down; the supervisor rebuilds it, and `listen/1` replaces the
@@ -444,6 +455,7 @@ Tracing the cascade observed in M14 Pass 1 ([doc/m14-test-plan.md](m14-test-plan
 | Per-line dispatch (stdio + daemon) | [src/pharos/mcp/dispatch.gleam](../src/pharos/mcp/dispatch.gleam) |
 | Daemon listener, registry, idle timer | [src/pharos/daemon.gleam](../src/pharos/daemon.gleam) |
 | Daemon connection (hello, session, drain) | [src/pharos/daemon/conn.gleam](../src/pharos/daemon/conn.gleam) |
+| Shim + launcher (Rust; spawn lock, hello, line relay) | [shim/src/client.rs](../shim/src/client.rs), [shim/src/launch.rs](../shim/src/launch.rs) |
 | Log subtree | [src/pharos/log/](../src/pharos/log/) |
 | Inflight table | [src/pharos/lsp/inflight.gleam](../src/pharos/lsp/inflight.gleam) |
 | Cancel routing | [src/pharos/mcp/server.gleam](../src/pharos/mcp/server.gleam) `log_cancel_notification` |
