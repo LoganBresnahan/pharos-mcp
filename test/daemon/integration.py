@@ -348,6 +348,10 @@ def t_daemon_death(sb):
             pass  # the shim exited once the daemon died: expected
     threading.Thread(target=send_all, daemon=True).start()
     time.sleep(0.3)
+    # The client hasn't left: stdin stays open, so the shim must report a
+    # lost daemon (exit 1), not a clean end of session (exit 0), however
+    # its stdin copy and its socket read happen to order around the kill.
+    check(not a.proc.stdin.closed and a.proc.poll() is None, "the shim should still be serving")
     os.kill(pid, signal.SIGKILL)
     t0 = time.time()
     end = a.drain(10)  # raises on any partial / non-JSON line

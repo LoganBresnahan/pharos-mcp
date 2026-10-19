@@ -387,7 +387,14 @@ fn relay(stream: UnixStream, leftover: Vec<u8>) -> i32 {
         let stdin_closed = Arc::clone(&stdin_closed);
         thread::spawn(move || {
             let mut to_daemon = to_daemon;
-            let _ = io::copy(&mut io::stdin().lock(), &mut to_daemon);
+            // Only a real end of stdin is the client leaving. A failed
+            // write means the daemon went away, and the reader below
+            // reports that: marking stdin closed here would turn a lost
+            // daemon into a clean exit 0 (seen on macos-15-intel, where
+            // the write failed before the read saw EOF).
+            if io::copy(&mut io::stdin().lock(), &mut to_daemon).is_err() {
+                return;
+            }
             stdin_closed.store(true, Ordering::SeqCst);
             let _ = to_daemon.shutdown(std::net::Shutdown::Write);
             thread::sleep(STDIN_EOF_GRACE);

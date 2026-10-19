@@ -144,10 +144,17 @@ defmodule Mix.Pharos.ReleaseSteps do
         file = "#{name}.zip"
         files = staged |> Path.join("**") |> Path.wildcard(match_dot: true) |> Enum.filter(&File.regular?/1)
 
+        # The archive's own path absolute: `cwd:` applies to the files
+        # added, not to where the zip is written.
         {:ok, _} =
-          :zip.create(String.to_charlist(file), Enum.map(files, &String.to_charlist(Path.relative_to(&1, out))),
+          :zip.create(
+            String.to_charlist(Path.join(out, file)),
+            Enum.map(files, &String.to_charlist(Path.relative_to(&1, out))),
             cwd: String.to_charlist(out)
           )
+
+        unless File.regular?(Path.join(out, file)),
+          do: Mix.raise("[pharos] :zip.create reported success but wrote no #{Path.join(out, file)}")
 
         file
       else
