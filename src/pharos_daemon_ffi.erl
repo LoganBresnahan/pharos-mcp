@@ -11,9 +11,26 @@
 -export([listen/1, accept/1, hand_over/2, activate/1, send_line/2,
          close/1, split_lines/2, decode_socket_event/1,
          write_pid_file/1, register_cleanup/2, cleanup/0, os_pid/0,
-         now_ms/0]).
+         now_ms/0, sessions_init/0, session_register/2,
+         session_unregister/1, sessions_live/0, sessions_touch/0,
+         sessions_last_active/0, sessions_started/0,
+         transient_accept_error/1, test_ops_enabled/0,
+         register_daemon_actor/0, kill_daemon_actor/0]).
 
 -define(CLEANUP_KEY, pharos_daemon_cleanup).
+
+%% Session registry (ADR-034). A named public ETS table created at
+%% boot, so it is owned by the application's start process and
+%% outlives the daemon actor: a supervisor restart of the daemon must
+%% not forget the sessions whose connections are still serving.
+%% Connections write their own rows; the daemon only reads, prunes
+%% rows whose connection process died, and idle-exits on an empty
+%% table.
+%%
+%%   {Id, Cwd, ClientPid, SinceMs, ConnPid}   one per session
+%%   {'$next_id', N}                          session id counter
+%%   {'$last_active', Ms}                     last time a session was live
+-define(SESSIONS, pharos_daemon_sessions).
 
 %% Listen on `Path`. A socket file already there is either a live
 %% daemon (connect succeeds: refuse, so two daemons never share a
@@ -21,8 +38,10 @@
 listen(Path) when is_binary(Path) ->
     P = binary_to_list(Path),
     _ = filelib:ensure_dir(P),
-    case filelib:is_file(P) of
-        true ->
+    %% Not filelib:is_file/1: it is false for a socket, which is neither
+    %% a regular file nor a directory.
+    case file:read_link_info(P) of
+        {ok, _} ->
             case gen_tcp:connect({local, P}, 0, [binary, {active, false}],
                                  1000) of
                 {ok, S} ->
@@ -32,7 +51,7 @@ listen(Path) when is_binary(Path) ->
                     _ = file:delete(P),
                     bind(P)
             end;
-        false ->
+        {error, _} ->
             bind(P)
     end.
 
@@ -76,13 +95,25 @@ close(S) ->
     _ = gen_tcp:close(S),
     nil.
 
-%% Append `Data` to `Buffer` and cut off every complete line. Returns
-%% `{Lines, Rest}`, `Rest` being the unterminated tail. A trailing `\r`
-%% is dropped so CRLF clients work.
-split_lines(Buffer, Data) ->
-    Parts = binary:split(<<Buffer/binary, Data/binary>>, <<"\n">>, [global]),
-    {Complete, [Rest]} = lists:split(length(Parts) - 1, Parts),
-    {[strip_cr(L) || L <- Complete], Rest}.
+%% Cut every complete line out of `Data`, given the chunks of an
+%% unterminated line still pending from earlier reads (`Pending`, newest
+%% first, `{Chunks, Bytes}`). Returns `{Lines, Pending'}`. Only the new
+%% chunk is scanned, and pending chunks are joined once, when their line
+%% ends, so a large line arriving in small reads costs O(n), not O(n²).
+%% A trailing `\r` is dropped so CRLF clients work.
+split_lines({Chunks, Bytes}, Data) ->
+    case binary:split(Data, <<"\n">>, [global]) of
+        [_NoNewline] ->
+            {[], {[Data | Chunks], Bytes + byte_size(Data)}};
+        [First | Rest] ->
+            Head = iolist_to_binary(lists:reverse([First | Chunks])),
+            {Complete, [Tail]} = lists:split(length(Rest) - 1, Rest),
+            Lines = [strip_cr(L) || L <- [Head | Complete]],
+            case Tail of
+                <<>> -> {Lines, {[], 0}};
+                _ -> {Lines, {[Tail], byte_size(Tail)}}
+            end
+    end.
 
 strip_cr(L) ->
     case byte_size(L) of
@@ -134,6 +165,87 @@ cleanup() ->
 
 os_pid() ->
     list_to_integer(os:getpid()).
+
+%% Accept errors worth retrying rather than tearing the listener down:
+%% fd exhaustion (LSPs hold many) and a client that gave up mid-accept.
+transient_accept_error(Reason) ->
+    lists:member(Reason, [<<"emfile">>, <<"enfile">>, <<"econnaborted">>,
+                          <<"eagain">>, <<"eintr">>, <<"enobufs">>,
+                          <<"enomem">>]).
+
+sessions_init() ->
+    case ets:info(?SESSIONS) of
+        undefined ->
+            ets:new(?SESSIONS, [named_table, public, set,
+                                {write_concurrency, true}]),
+            ets:insert(?SESSIONS, [{'$next_id', 0},
+                                   {'$last_active', now_ms()},
+                                   {'$started', now_ms()}]);
+        _ -> ok
+    end,
+    nil.
+
+%% Register the calling connection process as a session; returns its
+%% id (`s1`, `s2`, ...).
+session_register(Cwd, ClientPid) ->
+    N = ets:update_counter(?SESSIONS, '$next_id', 1),
+    Id = <<"s", (integer_to_binary(N))/binary>>,
+    ets:insert(?SESSIONS, {Id, Cwd, ClientPid, now_ms(), self()}),
+    sessions_touch(),
+    Id.
+
+session_unregister(Id) ->
+    ets:delete(?SESSIONS, Id),
+    sessions_touch(),
+    nil.
+
+%% Live sessions as `{Id, Cwd, ClientPid, SinceMs}`, sorted by id.
+%% Rows whose connection process is gone (it crashed before it could
+%% unregister) are deleted on the way.
+sessions_live() ->
+    Rows = ets:select(?SESSIONS, [{{'$1', '$2', '$3', '$4', '$5'}, [], ['$_']}]),
+    Live = lists:filter(
+        fun({Id, _, _, _, Conn}) ->
+            case is_process_alive(Conn) of
+                true -> true;
+                false -> ets:delete(?SESSIONS, Id), false
+            end
+        end, Rows),
+    lists:sort([{Id, Cwd, Client, Since} || {Id, Cwd, Client, Since, _} <- Live]).
+
+sessions_touch() ->
+    ets:insert(?SESSIONS, {'$last_active', now_ms()}),
+    nil.
+
+sessions_started() ->
+    case ets:lookup(?SESSIONS, '$started') of
+        [{_, Ms}] -> Ms;
+        [] -> now_ms()
+    end.
+
+%% Test-only hello ops (`test_crash_daemon`) are honoured only when the
+%% daemon was started with PHAROS_DAEMON_TEST_OPS=1.
+test_ops_enabled() ->
+    os:getenv("PHAROS_DAEMON_TEST_OPS") =:= "1".
+
+%% The daemon actor registers a local name so the test op can find it.
+%% A restarted actor re-registers.
+register_daemon_actor() ->
+    catch unregister(pharos_daemon),
+    true = register(pharos_daemon, self()),
+    nil.
+
+kill_daemon_actor() ->
+    case whereis(pharos_daemon) of
+        undefined -> nil;
+        Pid -> exit(Pid, kill), nil
+    end.
+
+sessions_last_active() ->
+    case ets:lookup(?SESSIONS, '$last_active') of
+        [{_, Ms}] -> Ms;
+        [] -> now_ms()
+    end.
 
 now_ms() ->
     erlang:system_time(millisecond).

@@ -150,6 +150,9 @@ fn do_boot() -> Result(Pid, String) {
   registry.init()
   inflight.init()
   request_workers.init()
+  // ADR-034: the daemon's session registry must outlive the daemon
+  // actor, so this process owns it.
+  daemon.init_registry()
   dyn_sup.init_subjects_bridge()
   capabilities.init()
   // ADR-030 S3: create `~/.local/share/pharos/instances/<our-pid>/`

@@ -1,17 +1,23 @@
 //// The shared daemon (ADR-034): `pharos daemon --socket <path>
 //// --build <id> --key <key>`.
 ////
-//// One actor owns the listening Unix socket, the registry of
-//// connected sessions and the idle timer. An acceptor process hands
-//// each accepted socket to its own `daemon/conn` actor. Every session
-//// shares the one LSP pool.
+//// One actor owns the listening Unix socket and the idle clock. An
+//// acceptor process hands each accepted socket to its own `daemon/conn`
+//// actor. Every session shares the one LSP pool.
 ////
-//// The daemon exits on its own once no session has been connected for
+//// Which sessions are live is not this actor's state: it is the
+//// `pharos_daemon_sessions` ETS table, created at boot by
+//// `init_registry/0`, so it outlives the actor. Connections register
+//// and unregister there themselves. If the actor is restarted (a
+//// listener crash), the connections it accepted keep serving, they
+//// stay counted, and the restarted daemon will not idle-exit under
+//// them.
+////
+//// The daemon exits on its own once no session has been live for
 //// `PHAROS_DAEMON_IDLE_SECS` (default 1800), through the same orderly
 //// application stop as SIGTERM, which also removes its socket and pid
 //// file (`pharos_daemon_ffi:cleanup/0`, called from the app's stop).
 
-import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
@@ -23,38 +29,24 @@ import pharos/daemon/conn.{type Socket}
 import pharos/env
 import pharos/log
 import pharos/log/entry as log_entry
-import pharos/lsp/pool.{type Pool}
+import pharos/lsp/pool
 
 pub type Args {
   Args(socket: String, build: String, key: String)
 }
 
 pub opaque type Msg {
-  Register(cwd: String, client_pid: Int, shim_pid: Int, reply: Subject(String))
-  Unregister(id: String)
-  IdleCheck(generation: Int)
-  StatusReq(reply: Subject(String))
-  StopReq
-}
-
-type Session {
-  Session(id: String, cwd: String, client_pid: Int, since_ms: Int)
+  IdleCheck
 }
 
 type State {
-  State(
-    self: Subject(Msg),
-    args: Args,
-    pool: Pool,
-    sessions: Dict(String, Session),
-    next_id: Int,
-    /// Bumped on every connect and disconnect; an `IdleCheck` from an
-    /// older generation is stale and ignored.
-    generation: Int,
-    idle_ms: Int,
-    started_ms: Int,
-  )
+  State(self: Subject(Msg), idle_ms: Int)
 }
+
+/// Create the session registry. Call at boot, from the process that
+/// owns the other pharos tables, before the supervisor starts.
+@external(erlang, "pharos_daemon_ffi", "sessions_init")
+pub fn init_registry() -> Nil
 
 /// Parse `daemon --socket <path> --build <id> --key <key>` out of argv.
 /// `None` when argv is not a daemon invocation.
@@ -84,186 +76,173 @@ pub fn start_supervised(
   args: Args,
 ) -> Result(actor.Started(Subject(Msg)), actor.StartError) {
   actor.new_with_initialiser(10_000, fn(self) {
-    case pool.global() {
-      Error(_) -> Error("pool.global() returned no subject")
-      Ok(pool_handle) ->
-        case listen(args.socket) {
-          Error(reason) -> Error("cannot listen on the socket: " <> reason)
-          Ok(listener) -> {
-            let pid_path = pid_path(args.socket)
-            write_pid_file(pid_path)
-            register_cleanup(args.socket, pid_path)
-            let hooks = hooks(self, args.build)
-            let _acceptor =
-              process.spawn(fn() { accept_loop(listener, pool_handle, hooks) })
-            let state =
-              State(
-                self: self,
-                args: args,
-                pool: pool_handle,
-                sessions: dict.new(),
-                next_id: 1,
-                generation: 0,
-                idle_ms: idle_secs() * 1000,
-                started_ms: now_ms(),
-              )
-            log.fields_at("pharos/daemon", log_entry.Info, "daemon listening", [
-              #("socket", args.socket),
-              #("build", args.build),
-              #("key", args.key),
-              #("idle_secs", int.to_string(idle_secs())),
-            ])
-            // Nothing is connected yet: start the idle clock now, so a
-            // daemon whose shim died before connecting still exits.
-            schedule_idle_check(state)
-            Ok(
-              actor.initialised(state)
-              |> actor.returning(self),
-            )
-          }
-        }
+    case listen(args.socket) {
+      Error(reason) -> Error("cannot listen on the socket: " <> reason)
+      Ok(listener) -> {
+        register_daemon_actor()
+        let pid_path = pid_path(args.socket)
+        write_pid_file(pid_path)
+        register_cleanup(args.socket, pid_path)
+        let hooks = hooks(args)
+        let _acceptor = process.spawn(fn() { accept_loop(listener, hooks, 0) })
+        let state = State(self: self, idle_ms: idle_secs() * 1000)
+        log.fields_at("pharos/daemon", log_entry.Info, "daemon listening", [
+          #("socket", args.socket),
+          #("build", args.build),
+          #("key", args.key),
+          #("idle_secs", int.to_string(idle_secs())),
+          #("live_sessions", int.to_string(list.length(sessions_live()))),
+        ])
+        schedule_idle_check(state)
+        Ok(
+          actor.initialised(state)
+          |> actor.returning(self),
+        )
+      }
     }
   })
   |> actor.on_message(handle_message)
   |> actor.start
 }
 
-fn hooks(daemon: Subject(Msg), build: String) -> conn.Hooks {
+/// What a connection calls back into. None of it goes through this
+/// actor, so it keeps working across a restart of the actor.
+fn hooks(args: Args) -> conn.Hooks {
   conn.Hooks(
-    build: build,
-    register: fn(cwd, client_pid, shim_pid) {
-      actor.call(daemon, 5000, fn(reply) {
-        Register(cwd, client_pid, shim_pid, reply)
-      })
+    build: args.build,
+    register: fn(cwd, client_pid, _shim_pid) {
+      session_register(cwd, client_pid)
     },
-    unregister: fn(id) { process.send(daemon, Unregister(id)) },
-    status: fn() { actor.call(daemon, 5000, StatusReq) },
-    stop: fn() { process.send(daemon, StopReq) },
+    unregister: session_unregister,
+    status: fn() { status_json(args) },
+    stop: fn() {
+      log.info_at("pharos/daemon", "stop requested; daemon exiting")
+      init_stop()
+    },
   )
 }
 
-/// Accept connections forever, one `conn` actor each. Linked to the
-/// daemon actor, so a dead listener takes the daemon down and the
-/// supervisor rebuilds both. Connections are unlinked: one crashing
-/// must not take the acceptor (and every other session) with it.
-fn accept_loop(
-  listener: Listener,
-  pool_handle: Pool,
-  hooks: conn.Hooks,
-) -> Nil {
+/// Accept connections forever, one `conn` actor each. Transient errors
+/// (fd exhaustion, an aborted connect) back off and retry; anything
+/// else means the listener is gone, and the acceptor dies with it,
+/// taking the linked daemon actor down for the supervisor to rebuild.
+/// Connections are unlinked: one crashing must not take the acceptor
+/// (and every other session) with it.
+fn accept_loop(listener: Listener, hooks: conn.Hooks, failures: Int) -> Nil {
   case accept(listener) {
-    Error(reason) -> panic as { "daemon accept failed: " <> reason }
-    Ok(socket) -> {
-      case conn.start(socket, pool_handle, hooks) {
-        Ok(started) -> {
-          process.unlink(started.pid)
-          hand_over(socket, started.pid)
-          conn.begin(started.data)
+    Error(reason) ->
+      case transient_accept_error(reason) {
+        True -> {
+          let backoff = int.min(1000, 50 * { failures + 1 })
+          log.fields_at(
+            "pharos/daemon",
+            log_entry.Warn,
+            "accept failed; retrying",
+            [#("reason", reason), #("backoff_ms", int.to_string(backoff))],
+          )
+          process.sleep(backoff)
+          accept_loop(listener, hooks, failures + 1)
         }
+        False -> panic as { "daemon accept failed: " <> reason }
+      }
+    Ok(socket) -> {
+      case pool.global() {
         Error(_) -> {
-          log.warn_at("pharos/daemon", "connection actor failed to start")
+          log.warn_at("pharos/daemon", "no pool; dropping connection")
           close(socket)
         }
+        Ok(pool_handle) ->
+          case conn.start(socket, pool_handle, hooks) {
+            Ok(started) -> {
+              process.unlink(started.pid)
+              hand_over(socket, started.pid)
+              conn.begin(started.data)
+            }
+            Error(_) -> {
+              log.warn_at("pharos/daemon", "connection actor failed to start")
+              close(socket)
+            }
+          }
       }
-      accept_loop(listener, pool_handle, hooks)
+      accept_loop(listener, hooks, 0)
     }
   }
 }
 
 fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
-    Register(cwd, client_pid, _shim_pid, reply) -> {
-      let id = "s" <> int.to_string(state.next_id)
-      let session =
-        Session(id: id, cwd: cwd, client_pid: client_pid, since_ms: now_ms())
-      process.send(reply, id)
-      actor.continue(
-        State(
-          ..state,
-          sessions: dict.insert(state.sessions, id, session),
-          next_id: state.next_id + 1,
-          generation: state.generation + 1,
-        ),
-      )
-    }
-    Unregister(id) -> {
-      let state =
-        State(
-          ..state,
-          sessions: dict.delete(state.sessions, id),
-          generation: state.generation + 1,
-        )
-      case dict.size(state.sessions) {
-        0 -> schedule_idle_check(state)
-        _ -> Nil
-      }
-      actor.continue(state)
-    }
-    IdleCheck(generation) ->
-      case generation == state.generation && dict.size(state.sessions) == 0 {
-        False -> actor.continue(state)
-        True -> {
-          log.fields_at(
-            "pharos/daemon",
-            log_entry.Info,
-            "no sessions for the idle timeout; daemon exiting",
-            [#("idle_secs", int.to_string(state.idle_ms / 1000))],
-          )
-          init_stop()
+    IdleCheck ->
+      // sessions_live/0 also prunes sessions whose connection died
+      // without unregistering.
+      case sessions_live() {
+        [_, ..] -> {
+          sessions_touch()
+          schedule_idle_check(state)
           actor.continue(state)
         }
+        [] ->
+          case now_ms() - sessions_last_active() >= state.idle_ms {
+            True -> {
+              log.fields_at(
+                "pharos/daemon",
+                log_entry.Info,
+                "no sessions for the idle timeout; daemon exiting",
+                [#("idle_secs", int.to_string(state.idle_ms / 1000))],
+              )
+              init_stop()
+              actor.continue(state)
+            }
+            False -> {
+              schedule_idle_check(state)
+              actor.continue(state)
+            }
+          }
       }
-    StatusReq(reply) -> {
-      process.send(reply, status_json(state))
-      actor.continue(state)
-    }
-    StopReq -> {
-      log.info_at("pharos/daemon", "stop requested; daemon exiting")
-      init_stop()
-      actor.continue(state)
-    }
   }
 }
 
+/// Poll a few times per idle period, at least every 30 s.
 fn schedule_idle_check(state: State) -> Nil {
-  let _ =
-    process.send_after(state.self, state.idle_ms, IdleCheck(state.generation))
+  let every = int.clamp(state.idle_ms / 4, min: 250, max: 30_000)
+  let _ = process.send_after(state.self, every, IdleCheck)
   Nil
 }
 
 /// The `status` op's reply. Sessions by id, cwd and client pid; never
 /// their env.
-fn status_json(state: State) -> String {
+fn status_json(args: Args) -> String {
   let now = now_ms()
   let sessions =
-    state.sessions
-    |> dict.values
-    |> list.sort(fn(a, b) { string.compare(a.id, b.id) })
+    sessions_live()
     |> list.map(fn(s) {
+      let #(id, cwd, client_pid, since) = s
       json.object([
-        #("id", json.string(s.id)),
-        #("cwd", json.string(s.cwd)),
-        #("client_pid", json.int(s.client_pid)),
-        #("connected_secs", json.int({ now - s.since_ms } / 1000)),
+        #("id", json.string(id)),
+        #("cwd", json.string(cwd)),
+        #("client_pid", json.int(client_pid)),
+        #("connected_secs", json.int({ now - since } / 1000)),
       ])
     })
-  let lsps =
-    pool.snapshot(state.pool).entries
-    |> list.map(fn(e) {
-      json.object([
-        #("language", json.string(e.language)),
-        #("workspace", json.string(e.workspace)),
-        #("server", json.string(e.server_id)),
-        #("state", json.string(state_label(e.state))),
-      ])
-    })
+  let lsps = case pool.global() {
+    Error(_) -> []
+    Ok(pool_handle) ->
+      pool.snapshot(pool_handle).entries
+      |> list.map(fn(e) {
+        json.object([
+          #("language", json.string(e.language)),
+          #("workspace", json.string(e.workspace)),
+          #("server", json.string(e.server_id)),
+          #("state", json.string(state_label(e.state))),
+        ])
+      })
+  }
   json.object([
     #("pharos_status", json.int(1)),
-    #("build", json.string(state.args.build)),
-    #("key", json.string(state.args.key)),
+    #("build", json.string(args.build)),
+    #("key", json.string(args.key)),
     #("daemon_pid", json.int(os_pid())),
-    #("uptime_secs", json.int({ now - state.started_ms } / 1000)),
-    #("idle_secs", json.int(state.idle_ms / 1000)),
+    #("uptime_secs", json.int({ now - sessions_started() } / 1000)),
+    #("idle_secs", json.int(idle_secs())),
     #("sessions", json.preprocessed_array(sessions)),
     #("lsps", json.preprocessed_array(lsps)),
   ])
@@ -306,6 +285,9 @@ fn listen(path: String) -> Result(Listener, String)
 @external(erlang, "pharos_daemon_ffi", "accept")
 fn accept(listener: Listener) -> Result(Socket, String)
 
+@external(erlang, "pharos_daemon_ffi", "transient_accept_error")
+fn transient_accept_error(reason: String) -> Bool
+
 @external(erlang, "pharos_daemon_ffi", "hand_over")
 fn hand_over(socket: Socket, pid: process.Pid) -> Nil
 
@@ -317,6 +299,27 @@ fn write_pid_file(path: String) -> Nil
 
 @external(erlang, "pharos_daemon_ffi", "register_cleanup")
 fn register_cleanup(socket: String, pid_path: String) -> Nil
+
+@external(erlang, "pharos_daemon_ffi", "session_register")
+fn session_register(cwd: String, client_pid: Int) -> String
+
+@external(erlang, "pharos_daemon_ffi", "session_unregister")
+fn session_unregister(id: String) -> Nil
+
+@external(erlang, "pharos_daemon_ffi", "sessions_live")
+fn sessions_live() -> List(#(String, String, Int, Int))
+
+@external(erlang, "pharos_daemon_ffi", "sessions_touch")
+fn sessions_touch() -> Nil
+
+@external(erlang, "pharos_daemon_ffi", "sessions_last_active")
+fn sessions_last_active() -> Int
+
+@external(erlang, "pharos_daemon_ffi", "sessions_started")
+fn sessions_started() -> Int
+
+@external(erlang, "pharos_daemon_ffi", "register_daemon_actor")
+fn register_daemon_actor() -> Nil
 
 @external(erlang, "pharos_daemon_ffi", "os_pid")
 fn os_pid() -> Int

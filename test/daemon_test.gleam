@@ -3,12 +3,30 @@
 //// and session lifecycle are driven end to end by the daemon
 //// integration tests.
 
+import gleam/bit_array
+import gleam/list
 import gleam/option.{None, Some}
 import gleeunit/should
 import pharos/daemon
 
 @external(erlang, "pharos_daemon_ffi", "split_lines")
-fn split_lines(buffer: BitArray, data: BitArray) -> #(List(String), BitArray)
+fn split_lines_ffi(
+  pending: #(List(BitArray), Int),
+  data: BitArray,
+) -> #(List(String), #(List(BitArray), Int))
+
+/// Feed `chunks` one read at a time; return every line and the
+/// still-pending bytes.
+fn split_lines(chunks: List(BitArray)) -> #(List(String), BitArray) {
+  let #(lines, pending) =
+    list.fold(chunks, #([], #([], 0)), fn(acc, chunk) {
+      let #(lines, pending) = acc
+      let #(new, pending) = split_lines_ffi(pending, chunk)
+      #(list.append(lines, new), pending)
+    })
+  let #(parts, _) = pending
+  #(lines, bit_array.concat(list.reverse(parts)))
+}
 
 pub fn parse_args_reads_socket_build_and_key_test() {
   daemon.parse_args([
@@ -44,16 +62,28 @@ pub fn pid_file_sits_beside_the_socket_test() {
 }
 
 pub fn split_lines_keeps_the_unterminated_tail_test() {
-  split_lines(<<"{\"a\":1}\n{\"b\"":utf8>>, <<":2}\n{\"c\"":utf8>>)
+  split_lines([<<"{\"a\":1}\n{\"b\"":utf8>>, <<":2}\n{\"c\"":utf8>>])
   |> should.equal(#(["{\"a\":1}", "{\"b\":2}"], <<"{\"c\"":utf8>>))
 }
 
 pub fn split_lines_strips_crlf_test() {
-  split_lines(<<>>, <<"one\r\ntwo\n":utf8>>)
+  split_lines([<<"one\r\ntwo\n":utf8>>])
   |> should.equal(#(["one", "two"], <<>>))
 }
 
 pub fn split_lines_with_no_newline_buffers_everything_test() {
-  split_lines(<<"par":utf8>>, <<"tial":utf8>>)
+  split_lines([<<"par":utf8>>, <<"tial":utf8>>])
   |> should.equal(#([], <<"partial":utf8>>))
+}
+
+pub fn split_lines_joins_a_line_spread_over_many_reads_test() {
+  split_lines([<<"a":utf8>>, <<"b":utf8>>, <<"c\nd":utf8>>, <<"e\n":utf8>>])
+  |> should.equal(#(["abc", "de"], <<>>))
+}
+
+pub fn split_lines_counts_pending_bytes_test() {
+  let #(_, #(_, bytes)) =
+    split_lines_ffi(#([<<"abc":utf8>>], 3), <<"defg":utf8>>)
+  bytes
+  |> should.equal(7)
 }

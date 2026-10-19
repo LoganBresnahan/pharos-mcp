@@ -75,7 +75,9 @@ type State {
     pool: Pool,
     hooks: Hooks,
     writer: Subject(WriterMsg),
-    buffer: BitArray,
+    /// Chunks of the unterminated line read so far (newest first) and
+    /// their total size; see `pharos_daemon_ffi:split_lines/2`.
+    pending: #(List(BitArray), Int),
     phase: Phase,
     /// Dispatchers spawned and not yet exited.
     inflight: Int,
@@ -116,7 +118,7 @@ pub fn start(
         pool: pool,
         hooks: hooks,
         writer: writer,
-        buffer: <<>>,
+        pending: #([], 0),
         phase: AwaitHello,
         inflight: 0,
         closed: False,
@@ -166,12 +168,12 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
 }
 
 fn handle_data(state: State, data: BitArray) -> actor.Next(State, Msg) {
-  let #(lines, rest) = split_lines(state.buffer, data)
+  let #(lines, pending) = split_lines(state.pending, data)
   let limit = case state.phase {
     AwaitHello -> max_hello_bytes
     Serving(_) -> max_line_bytes
   }
-  case bit_array_size(rest) > limit {
+  case pending.1 > limit {
     True -> {
       log.fields_at(
         "pharos/daemon",
@@ -182,7 +184,7 @@ fn handle_data(state: State, data: BitArray) -> actor.Next(State, Msg) {
       finish(state)
     }
     False -> {
-      let state = State(..state, buffer: rest)
+      let state = State(..state, pending: pending)
       case handle_lines(state, lines) {
         Ok(state) -> {
           activate(state.socket)
@@ -271,6 +273,21 @@ fn handle_hello(state: State, line: String) -> Result(State, State) {
           Error(state)
         }
         "mcp" -> start_session(state, hello)
+        // Test-only (PHAROS_DAEMON_TEST_OPS=1): kill the daemon actor,
+        // to prove live sessions survive its restart.
+        "test_crash_daemon" ->
+          case test_ops_enabled() {
+            True -> {
+              kill_daemon_actor()
+              let _ =
+                send_line(
+                  state.socket,
+                  json.to_string(json.object([#("pharos_test", json.int(1))])),
+                )
+              Error(state)
+            }
+            False -> refuse(state, "unknown op: test_crash_daemon")
+          }
         other -> refuse(state, "unknown op: " <> other)
       }
   }
@@ -402,10 +419,16 @@ fn send_line(socket: Socket, body: String) -> Result(Nil, Nil)
 fn close(socket: Socket) -> Nil
 
 @external(erlang, "pharos_daemon_ffi", "split_lines")
-fn split_lines(buffer: BitArray, data: BitArray) -> #(List(String), BitArray)
+fn split_lines(
+  pending: #(List(BitArray), Int),
+  data: BitArray,
+) -> #(List(String), #(List(BitArray), Int))
+
+@external(erlang, "pharos_daemon_ffi", "test_ops_enabled")
+fn test_ops_enabled() -> Bool
+
+@external(erlang, "pharos_daemon_ffi", "kill_daemon_actor")
+fn kill_daemon_actor() -> Nil
 
 @external(erlang, "pharos_daemon_ffi", "os_pid")
 fn os_pid() -> Int
-
-@external(erlang, "erlang", "byte_size")
-fn bit_array_size(bits: BitArray) -> Int
