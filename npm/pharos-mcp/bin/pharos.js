@@ -2,14 +2,14 @@
 // pharos-mcp's command, in the one case it is still JavaScript
 // (ADR-035 §5).
 //
-// On Linux and macOS the postinstall replaces this file with a symlink
-// to the platform package's native `pharos` (the ADR-034 shim), so an
-// MCP client's `pharos` runs with no node in its process tree. This
-// file stays, and runs, only when the postinstall didn't: an install
-// with --ignore-scripts, a failed swap, or Windows (npm's .cmd shims
-// need a script target). Then it runs the native `pharos` as a child
-// with this process's stdio, passes signals through, and exits with
-// its status. That costs a node per session, but only in that case.
+// The postinstall replaces this file with a symlink to the platform
+// package's native `pharos` (the ADR-034 shim), so an MCP client's
+// `pharos` runs with no node in its process tree. This file stays, and
+// runs, only when the postinstall didn't: an install with
+// --ignore-scripts or a failed swap. Then it runs the native `pharos`
+// as a child with this process's stdio, passes signals through, and
+// exits with its status. That costs a node per session, but only in
+// that case. On Windows it says to use WSL (ADR-035).
 
 "use strict";
 

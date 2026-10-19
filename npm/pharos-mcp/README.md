@@ -57,12 +57,15 @@ and, on Linux, `libc`, and installs exactly one. It holds the release
 unpacked: the native `pharos` front end and the Erlang runtime it
 starts. Nothing extracts at run time.
 
-On Linux and macOS the postinstall points the `pharos` command straight
-at the native binary, so an MCP session runs no node process. Several
-sessions share one pharos daemon per version, and with it the language
-servers they have in common. If the postinstall can't run
-(`--ignore-scripts`, `PHAROS_SKIP_POSTINSTALL=1`), and always on
-Windows, `pharos` is a small node launcher in front of the same binary.
+The postinstall points the `pharos` command straight at the native
+binary, so an MCP session runs no node process. Several sessions share
+one pharos daemon per version, and with it the language servers they
+have in common. If the postinstall can't run (`--ignore-scripts`,
+`PHAROS_SKIP_POSTINSTALL=1`), `pharos` is a small node launcher in front
+of the same binary.
+
+pharos 0.2 runs on Linux and macOS; on Windows, install it inside WSL
+(`pharos-mcp@0.1.4` was the last native Windows build).
 
 Linux needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12, RHEL 9 or
 newer. pharos 0.2 doesn't run on Alpine/musl or older distros yet;

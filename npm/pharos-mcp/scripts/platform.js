@@ -16,8 +16,11 @@ const PLATFORMS = {
   "linux-arm64": "@pharos-mcp/linux-arm64",
   "darwin-x64": "@pharos-mcp/darwin-x64",
   "darwin-arm64": "@pharos-mcp/darwin-arm64",
-  "win32-x64": "@pharos-mcp/win-x64",
 };
+
+const UNSUPPORTED_WINDOWS =
+  "pharos 0.2 runs on Linux and macOS; on Windows, install it inside WSL " +
+  "(pharos-mcp@0.1.4 was the last native Windows build)";
 
 const UNSUPPORTED_LINUX =
   "pharos 0.2 needs glibc 2.35+ (Alpine/musl and older distros aren't " +
@@ -39,6 +42,7 @@ function glibc_version() {
 
 // Why this host can't run pharos 0.2, or null when it can.
 function unsupported_reason() {
+  if (process.platform === "win32") return UNSUPPORTED_WINDOWS;
   const key = process.platform + "-" + process.arch;
   if (!PLATFORMS[key]) {
     return (
@@ -56,7 +60,7 @@ function unsupported_reason() {
   return null;
 }
 
-// The installed native `pharos` (release/bin/pharos[.exe]) and its
+// The installed native `pharos` (release/bin/pharos) and its
 // release root, or an error message.
 function resolve() {
   const reason = unsupported_reason();
@@ -76,11 +80,11 @@ function resolve() {
     };
   }
   const root = path.join(path.dirname(pkg_json), "release");
-  const bin = path.join(root, "bin", process.platform === "win32" ? "pharos.exe" : "pharos");
+  const bin = path.join(root, "bin", "pharos");
   if (!fs.existsSync(bin)) {
     return { error: "pharos: " + pkg + " has no release/bin (a broken install; reinstall pharos-mcp)" };
   }
   return { bin: bin, root: root };
 }
 
-module.exports = { resolve, unsupported_reason, UNSUPPORTED_LINUX };
+module.exports = { resolve, unsupported_reason, UNSUPPORTED_LINUX, UNSUPPORTED_WINDOWS };

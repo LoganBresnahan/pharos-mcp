@@ -27,9 +27,13 @@ defmodule Mix.Pharos.ReleaseSteps do
 
   @doc """
   Empty the release directory before `:assemble`. `--overwrite` leaves an earlier build's
-  `erts-*` and `releases/<version>/` in place, and they would ship in the package.
+  `erts-*` and `releases/<version>/` in place, and they would ship in the package. Stops on
+  Windows, which pharos doesn't support: Windows users run it inside WSL.
   """
   def clean(%Mix.Release{path: path} = release) do
+    if match?({:win32, _}, :os.type()),
+      do: Mix.raise("[pharos] pharos 0.2 runs on Linux and macOS; build it inside WSL")
+
     File.rm_rf!(path)
     release
   end
@@ -39,13 +43,11 @@ defmodule Mix.Pharos.ReleaseSteps do
   Apple's alike; re-signed ad hoc on macOS, where a strip breaks the linker's signature and
   Apple silicon kills the program), drop test scaffolding, and remove Mix's own launch scripts
   and the distribution cookie: the shim replaces the scripts, pharos never starts
-  distribution, and a published cookie is everyone's. Windows keeps its runtime whole.
+  distribution, and a published cookie is everyone's.
   """
   def trim_release(%Mix.Release{path: path, version: version} = release) do
-    unless windows?() do
-      [bin] = Path.wildcard(Path.join(path, "erts-*/bin"))
-      trim_erts(bin, System.find_executable("strip"))
-    end
+    [bin] = Path.wildcard(Path.join(path, "erts-*/bin"))
+    trim_erts(bin, System.find_executable("strip"))
 
     for pattern <- @release_drop, file <- Path.wildcard(Path.join(path, pattern)),
         do: File.rm!(file)
@@ -82,7 +84,7 @@ defmodule Mix.Pharos.ReleaseSteps do
   end
 
   @doc """
-  Build the shim (ADR-034) with cargo and install it as `bin/pharos` (`bin/pharos.exe`).
+  Build the shim (ADR-034) with cargo and install it as `bin/pharos`.
   """
   def build_shim(%Mix.Release{path: path} = release) do
     cargo = System.find_executable("cargo") || Mix.raise("[pharos] cargo is not on the PATH")
@@ -94,10 +96,9 @@ defmodule Mix.Pharos.ReleaseSteps do
 
     if status != 0, do: Mix.raise("[pharos] cargo build failed:\n" <> out)
 
-    exe = if windows?(), do: "pharos.exe", else: "pharos"
-    dest = Path.join([path, "bin", exe])
+    dest = Path.join([path, "bin", "pharos"])
     File.mkdir_p!(Path.dirname(dest))
-    File.cp!(Path.join("shim/target/release", exe), dest)
+    File.cp!("shim/target/release/pharos", dest)
     File.chmod!(dest, 0o755)
     if darwin?(), do: sign([dest])
     release
@@ -126,8 +127,8 @@ defmodule Mix.Pharos.ReleaseSteps do
 
   @doc """
   Write `BUILD_ID`, pack the release as `_build/package/pharos-<version>-<target>.tar.gz`
-  (a `.zip` on Windows) with a top directory of the same name and a `SHA256SUMS` beside it,
-  and copy it into its npm platform package's `release/`.
+  with a top directory of the same name and a `SHA256SUMS` beside it, and copy it into its
+  npm platform package's `release/`.
   """
   def package(%Mix.Release{path: path, version: version} = release) do
     File.write!(Path.join(path, "BUILD_ID"), build_id(path) <> "\n")
@@ -139,42 +140,20 @@ defmodule Mix.Pharos.ReleaseSteps do
     staged = Path.join(out, name)
     File.cp_r!(path, staged)
 
-    archive =
-      if windows?() do
-        file = "#{name}.zip"
-        files = staged |> Path.join("**") |> Path.wildcard(match_dot: true) |> Enum.filter(&File.regular?/1)
+    archive = "#{name}.tar.gz"
 
-        # The archive's own path absolute: `cwd:` applies to the files
-        # added, not to where the zip is written.
-        {:ok, _} =
-          :zip.create(
-            String.to_charlist(Path.join(out, file)),
-            Enum.map(files, &String.to_charlist(Path.relative_to(&1, out))),
-            cwd: String.to_charlist(out)
-          )
-
-        unless File.regular?(Path.join(out, file)),
-          do: Mix.raise("[pharos] :zip.create reported success but wrote no #{Path.join(out, file)}")
-
-        file
-      else
-        file = "#{name}.tar.gz"
-
-        {_, 0} =
-          System.cmd("tar", ["-C", out, "-czf", file, name],
-            cd: out,
-            env: [{"COPYFILE_DISABLE", "1"}],
-            stderr_to_stdout: true
-          )
-
-        file
-      end
+    {_, 0} =
+      System.cmd("tar", ["-C", out, "-czf", archive, name],
+        cd: out,
+        env: [{"COPYFILE_DISABLE", "1"}],
+        stderr_to_stdout: true
+      )
 
     File.rm_rf!(staged)
     sha = :crypto.hash(:sha256, File.read!(Path.join(out, archive))) |> Base.encode16(case: :lower)
     File.write!(Path.join(out, "SHA256SUMS"), "#{sha}  #{archive}\n")
 
-    npm = Path.join(["npm", "@pharos-mcp", npm_platform(), "release"])
+    npm = Path.join(["npm", "@pharos-mcp", target(), "release"])
     File.rm_rf!(npm)
     File.cp_r!(path, npm)
 
@@ -205,7 +184,7 @@ defmodule Mix.Pharos.ReleaseSteps do
   end
 
   @doc """
-  The release's target, `<os>-<arch>`: `linux`, `darwin` or `win32`, and `x64` or `arm64`, from
+  The release's target, `<os>-<arch>`: `linux` or `darwin`, and `x64` or `arm64`, from
   the VM that built it (each target builds on its own runner, ADR-035 §2).
 
       iex> Mix.Pharos.ReleaseSteps.target({:unix, :linux}, "aarch64-unknown-linux-gnu")
@@ -213,9 +192,6 @@ defmodule Mix.Pharos.ReleaseSteps do
 
       iex> Mix.Pharos.ReleaseSteps.target({:unix, :darwin}, "x86_64-apple-darwin24.6.0")
       "darwin-x64"
-
-      iex> Mix.Pharos.ReleaseSteps.target({:win32, :nt}, "win32")
-      "win32-x64"
   """
   def target, do: target(:os.type(), to_string(:erlang.system_info(:system_architecture)))
 
@@ -224,26 +200,15 @@ defmodule Mix.Pharos.ReleaseSteps do
       case os_type do
         {:unix, :linux} -> "linux"
         {:unix, :darwin} -> "darwin"
-        {:win32, _} -> "win32"
       end
 
     arch =
       cond do
         String.starts_with?(architecture, ["aarch64", "arm64"]) -> "arm64"
-        os == "win32" -> "x64"
         String.starts_with?(architecture, ["x86_64", "amd64"]) -> "x64"
       end
 
     "#{os}-#{arch}"
-  end
-
-  # The npm platform package a target ships in: Windows is `win-x64` there (its name predates
-  # the tarball convention, and trusted publishing pins it).
-  defp npm_platform do
-    case target() do
-      "win32-" <> arch -> "win-" <> arch
-      other -> other
-    end
   end
 
   @doc """
@@ -254,7 +219,7 @@ defmodule Mix.Pharos.ReleaseSteps do
     * on macOS, a library outside the OS (`/usr/lib`, `/System/Library`), or a Mach-O whose code
       signature doesn't verify.
 
-  `[]` when there's nothing. Windows is not checked.
+  `[]` when there's nothing.
   """
   def native_problems(rel, os_type) do
     for file <- native_files(rel), problem <- file_problems(file, os_type) do
@@ -267,8 +232,6 @@ defmodule Mix.Pharos.ReleaseSteps do
       Path.wildcard(Path.join(rel, "lib/*/priv/**/*.so")) ++
       Path.wildcard(Path.join(rel, "bin/pharos"))
   end
-
-  defp file_problems(_file, {:win32, _}), do: []
 
   defp file_problems(file, {:unix, :darwin}) do
     {otool, 0} = System.cmd("otool", ["-L", file], stderr_to_stdout: true)
@@ -371,5 +334,4 @@ defmodule Mix.Pharos.ReleaseSteps do
   end
 
   defp darwin?, do: :os.type() == {:unix, :darwin}
-  defp windows?, do: match?({:win32, _}, :os.type())
 end

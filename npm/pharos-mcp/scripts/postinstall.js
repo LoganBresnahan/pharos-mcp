@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // pharos-mcp postinstall (ADR-035 §5): make `pharos` the native shim.
 //
-// npm links the `pharos` command to bin/pharos.js. On Linux and macOS
-// this replaces that file with a symlink to the installed platform
+// npm links the `pharos` command to bin/pharos.js. This replaces that
+// file with a symlink to the installed platform
 // package's release/bin/pharos (esbuild's pattern), so every MCP
 // session runs the native shim directly and no node stays resident.
 // The shim follows its own symlinks to find the release beside it.
 //
-// - Unsupported host (no build, musl, glibc < 2.35): say so and exit
-//   non-zero, so the install fails loudly instead of at first use.
-// - Windows: nothing to swap; bin/pharos.js runs the native pharos.
+// - Unsupported host (Windows: use WSL; no build; musl; glibc < 2.35):
+//   say so and exit non-zero, so the install fails loudly instead of at
+//   first use.
 // - PHAROS_SKIP_POSTINSTALL=1, or any failure to swap: bin/pharos.js
 //   stays and works as a fallback.
 
@@ -29,7 +29,6 @@ function main() {
     console.error(found.error);
     return 1;
   }
-  if (process.platform === "win32") return 0;
 
   // Belt and braces: npm keeps executable bits on publish, but a
   // tarball repacked elsewhere may not.
