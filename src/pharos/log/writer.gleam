@@ -154,7 +154,7 @@ fn seed_trace_cache_from_filter(f: Filter) -> Nil {
 /// incarnation crash detection: if a sentinel from a previous
 /// writer is present in the ring meta table when this init runs,
 /// the previous writer died abnormally; tail the ring and dump it
-/// to `~/.cache/pharos/log/crash-<timestamp>.log` before resuming
+/// to `<log dir>/crash-<timestamp>.log` before resuming
 /// normal operation.
 pub fn start_supervised(
   filter: Filter,

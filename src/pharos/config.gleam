@@ -1089,7 +1089,7 @@ fn env_log(config: Config, getenv: fn(String) -> Option(String)) -> Config {
   }
   // ADR-030 C2: when the user hasn't configured a log file via env
   // OR TOML, default to a per-PID per-timestamp path under
-  // `$HOME/.cache/pharos/log/`. Multi-instance pharos (Phase 5 was
+  // the log dir (`log_rotate.log_cache_dir`). Multi-instance pharos (Phase 5 was
   // the trigger) used to leave a single `PHAROS_LOG_FILE` path
   // shared across instances, which clobbered. The auto-default
   // produces one readable file per pharos PID per launch.

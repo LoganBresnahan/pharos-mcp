@@ -14,13 +14,14 @@ const default_session_keep: Int = 10
 const default_crash_dump_keep: Int = 5
 
 /// Returns the auto-default per-PID per-timestamp session log path
-/// under `$HOME/.cache/pharos/log/`, or `None` if $HOME is unset
-/// (best-effort fallback to nothing — file logging is optional).
+/// under the log dir, `${XDG_STATE_HOME:-$HOME/.local/state}/pharos/log/`,
+/// or `None` if neither is set (best-effort fallback to nothing —
+/// file logging is optional).
 @external(erlang, "pharos_log_rotate_ffi", "default_session_log_path")
 pub fn default_session_log_path() -> Option(String)
 
-/// Returns the absolute path of the log cache dir, or empty string
-/// when $HOME is unset. Exposed mostly for diagnostics; callers
+/// Returns the absolute path of the log dir, or empty string when
+/// neither XDG_STATE_HOME nor HOME is set. Exposed mostly for diagnostics; callers
 /// usually go through the other helpers.
 @external(erlang, "pharos_log_rotate_ffi", "log_cache_dir")
 pub fn log_cache_dir() -> String
@@ -46,11 +47,15 @@ pub fn rotate_crash_dumps() -> Int {
 @external(erlang, "pharos_log_rotate_ffi", "migrate_cwd_crash_dump")
 pub fn migrate_cwd_crash_dump() -> Nil
 
+/// Tighten crash dumps and crash logs in the log dir to `0600`.
+@external(erlang, "pharos_log_rotate_ffi", "secure_crash_files")
+pub fn secure_crash_files() -> Nil
+
 /// Apply both `migrate_cwd_crash_dump` and the two `rotate_*` sweeps
 /// in one call. Use from `pharos:boot/0` to keep the cache dir tidy.
 pub fn boot_sweep() -> Nil {
   migrate_cwd_crash_dump()
   let _ = rotate_sessions()
   let _ = rotate_crash_dumps()
-  Nil
+  secure_crash_files()
 }

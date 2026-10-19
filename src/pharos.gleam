@@ -51,7 +51,7 @@ import pharos/workspace_root
 
 pub fn main() -> Nil {
   // Set ERL_CRASH_DUMP target before anything else so a BEAM-level
-  // panic from later in boot lands in `~/.cache/pharos/log/` next to
+  // panic from later in boot lands in the log dir next to
   // pharos's own crash-dump file rather than in the invoker's cwd
   // (the historical default, which pollutes user project trees and
   // hides the trace under .gitignore). No-op if BEAM has already
@@ -132,6 +132,10 @@ fn do_boot() -> Result(Pid, String) {
   // downstream consumer (log, http transport, registry, runtime
   // tools) reads the cached value instead of touching env vars or
   // files itself.
+  // The release path enters here via `pharos_app_ffi:start/2`, not
+  // through main/0, so redirect the crash dump here too. No-op when
+  // already set.
+  redirect_erl_crash_dump()
   let cfg = config.load()
 
   // Pre-supervisor init: idempotent ETS tables that supervised
@@ -743,7 +747,7 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # filter = \"info\"
 
 # file — append-only log file path. None disables file sink.
-# file = \"~/.cache/pharos/log/pharos.log\"
+# file = \"~/.local/state/pharos/log/pharos.log\"
 
 # ring — keep an in-memory ring buffer feeding runtime_log_tail.
 # ring = true

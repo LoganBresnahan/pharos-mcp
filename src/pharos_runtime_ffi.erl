@@ -219,8 +219,8 @@ install_sasl_capture_handler() ->
     nil.
 
 %% Set ERL_CRASH_DUMP early in pharos:main/0 so a BEAM-level halt
-%% writes its dump alongside pharos's own crash files (which live
-%% under `$HOME/.cache/pharos/log/`) instead of polluting the
+%% writes its dump alongside pharos's own crash files (in the log
+%% dir, `pharos_log_rotate_ffi:log_dir/0`) instead of polluting the
 %% invoker's cwd — the historical default that surprised every
 %% benchmark + dogfood pass.
 %%
@@ -287,12 +287,7 @@ redirect_erl_crash_dump() ->
     case os:getenv("ERL_CRASH_DUMP") of
         false ->
             try
-                Home = case os:getenv("HOME") of
-                    false -> "/tmp";
-                    H     -> H
-                end,
-                Dir = filename:join([Home, ".cache", "pharos", "log"]),
-                ok = filelib:ensure_dir(filename:join(Dir, "x")),
+                {ok, Dir} = pharos_log_rotate_ffi:log_dir(),
                 Stamp = iolist_to_binary(
                     io_lib:format("~B", [erlang:system_time(millisecond)])),
                 Path = filename:join(Dir,

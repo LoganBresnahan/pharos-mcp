@@ -313,7 +313,7 @@ commands.
 |-----|--------------|---------|
 | `PHAROS_WARM_LANGS` | CSV; pharos pre-warms these languages every boot. Useful in MCP client configs where you want warm-on-every-spawn rather than the one-shot `pharos warm` CLI. | unset (off) |
 | `PHAROS_LOG` | RUST_LOG-style filter (`info`, `info,pharos/lsp/pool=debug`). | `info` |
-| `PHAROS_LOG_FILE` | Override the per-PID per-timestamp default log file location. | `~/.cache/pharos/log/session-<pid>-<timestamp>.log` |
+| `PHAROS_LOG_FILE` | Override the per-PID per-timestamp default log file location. | `~/.local/state/pharos/log/session-<pid>-<timestamp>.log` (`$XDG_STATE_HOME` honoured) |
 | `PHAROS_HEARTBEAT_INTERVAL_MS` | Cadence of the idle-heartbeat log line (memory + LSP child count). | `60000` |
 | `PHAROS_SHUTDOWN_DRAIN_MS` | How long to wait for in-flight requests before initiating LSP shutdown on SIGTERM/stdin-EOF. | `2000` |
 | `PHAROS_CLEANUP_GRACE_MS` | How long `pharos cleanup --yes` waits between SIGTERM and SIGKILL on each orphan. | `5000` |
@@ -815,11 +815,15 @@ configure pharos.
 ### Where are my logs?
 
 Per-session per-PID log file at
-`~/.cache/pharos/log/session-<pid>-<YYYY-MM-DD-HHMMSS>.log`. LRU-rotated
-to keep the 10 most recent. Override with `PHAROS_LOG_FILE`.
+`~/.local/state/pharos/log/session-<pid>-<YYYY-MM-DD-HHMMSS>.log`
+(`$XDG_STATE_HOME/pharos/log/` when that is set). LRU-rotated to keep
+the 10 most recent. Override with `PHAROS_LOG_FILE`. Versions before
+0.2.0 wrote to `~/.cache/pharos/log/`.
 
-A stable-path `~/.cache/pharos/log/last-crash.log` always points at the
-most recent crash dump (if any) — useful in incident reports.
+A stable-path `~/.local/state/pharos/log/last-crash.log` always points
+at the most recent crash dump (if any) — useful in incident reports.
+The directory is `0700` and crash files are `0600`: a dump holds
+process state, environment included.
 
 ### Pharos boot panic on closed stderr
 
@@ -828,7 +832,7 @@ some MCP clients during teardown), older versions could panic before
 `main` ran and write `erl_crash.dump` in cwd. Fixed in v1.0 via
 ADR-030 — pharos installs a try/catch-wrapped logger handler that
 silently drops events when fd 2 is gone. If you see a crash dump,
-file an issue; the dump itself goes to `~/.cache/pharos/log/`, not
+file an issue; the dump itself goes to `~/.local/state/pharos/log/`, not
 cwd.
 
 ### Updating
@@ -849,7 +853,8 @@ npm uninstall -g pharos-mcp                # if installed via npm
 rm ~/.local/bin/pharos                     # if installed via direct download
 rm -rf ~/.local/share/.burrito/pharos_*    # extract cache
 rm -rf ~/.local/share/pharos/              # instance tracking
-rm -rf ~/.cache/pharos/                    # logs + crash dumps
+rm -rf ~/.local/state/pharos/              # logs + crash dumps
+rm -rf ~/.cache/pharos/                    # logs from before 0.2.0
 rm -rf ~/.config/pharos/                   # user config (only if you want it gone)
 ```
 

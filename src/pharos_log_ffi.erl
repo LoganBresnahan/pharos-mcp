@@ -356,22 +356,20 @@ crash_dump_path() ->
     Stamp = iolist_to_binary(
         io_lib:format("~4..0B-~2..0B-~2..0B-~2..0B~2..0B~2..0B",
                       [Y, Mo, D, H, Mi, S])),
-    Home = case os:getenv("HOME") of
-        false -> <<"/tmp">>;
-        Path  -> list_to_binary(Path)
-    end,
-    <<Home/binary, "/.cache/pharos/log/crash-", Stamp/binary, ".log">>.
+    <<(log_dir())/binary, "/crash-", Stamp/binary, ".log">>.
 
 %% Stable-path companion to crash_dump_path/0. Overwritten on every
 %% crash dump so users (and README troubleshooting) can grep one
 %% known location for "last words", independent of the timestamped
 %% archive next to it.
 last_crash_dump_path() ->
-    Home = case os:getenv("HOME") of
-        false -> <<"/tmp">>;
-        Path  -> list_to_binary(Path)
-    end,
-    <<Home/binary, "/.cache/pharos/log/last-crash.log">>.
+    <<(log_dir())/binary, "/last-crash.log">>.
+
+log_dir() ->
+    case pharos_log_rotate_ffi:log_dir() of
+        {ok, Dir} -> unicode:characters_to_binary(Dir);
+        none -> <<"/tmp">>
+    end.
 
 %% Write the supplied lines (list of binaries) to a one-shot crash
 %% dump file. Best-effort: ENOSPC, perm denied, etc. fall through
