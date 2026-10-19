@@ -1,5 +1,7 @@
 # pharos — Initial Plan
 
+> Historical: the plan pharos started from. Distribution has since moved off Burrito to per-target releases with a native front end and a shared daemon (ADR-034, ADR-035, ADR-036); the README describes how pharos installs today.
+
 A Gleam-based MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) capabilities as MCP tools. Distributed as a single self-contained binary via Burrito, shipped through GitHub Releases and npm. Optionally augmented by a thin VSCode extension that provides unsaved-buffer state.
 
 ## Vision

@@ -167,7 +167,7 @@ platform() {
   case $(uname -s) in
     Linux) os=linux ;;
     Darwin) os=darwin ;;
-    *) die "this installer is for Linux and macOS, not $(uname -s) (on Windows: npm install -g pharos-mcp)" ;;
+    *) die "this installer is for Linux and macOS, not $(uname -s) (on Windows, run it inside WSL)" ;;
   esac
   case $(uname -m) in
     x86_64|amd64) arch=x64 ;;

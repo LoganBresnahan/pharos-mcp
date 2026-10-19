@@ -226,6 +226,20 @@ listener down; the supervisor rebuilds it, and `listen/1` replaces the
 stale socket file. The daemon's stderr is its boot log (the shim
 redirects it), and it logs to `<log dir>/daemon-<build>-<key>-<pid>.log`.
 
+## Self-management (ADR-036)
+
+`pharos self update|rollback|prune|uninstall` never boots the BEAM.
+The shim works out the install from its own real path
+(`<install dir>/versions/<v>` → install.sh; `…/node_modules/@pharos-mcp/<plat>/release`
+→ npm, which only gets the npm command printed), then **execs**
+`sh -s -- <flags>` with install.sh on stdin: the release's
+`<root>/install.sh`, or for `update` one curl just downloaded (opened,
+then unlinked). The shim's pid becomes `sh`. Nothing waits on a
+daemon: install.sh reads `ps` once and keeps any version a running
+process names (a daemon names its version dir in `-root`/`-bindir`),
+and `--uninstall` refuses while one runs. `self prune` first removes
+unused 0.1.x Burrito unpacks itself, by the same `ps` rule.
+
 ## pool spawn lifecycle (post-M14 refactor)
 
 ```
@@ -456,6 +470,7 @@ Tracing the cascade observed in M14 Pass 1 ([doc/m14-test-plan.md](m14-test-plan
 | Daemon listener, registry, idle timer | [src/pharos/daemon.gleam](../src/pharos/daemon.gleam) |
 | Daemon connection (hello, session, drain) | [src/pharos/daemon/conn.gleam](../src/pharos/daemon/conn.gleam) |
 | Shim + launcher (Rust; spawn lock, hello, line relay) | [shim/src/client.rs](../shim/src/client.rs), [shim/src/launch.rs](../shim/src/launch.rs) |
+| `pharos self …` and the 0.1.x cleanup (Rust) | [shim/src/self_cmd.rs](../shim/src/self_cmd.rs), [install.sh](../install.sh) |
 | Log subtree | [src/pharos/log/](../src/pharos/log/) |
 | Inflight table | [src/pharos/lsp/inflight.gleam](../src/pharos/lsp/inflight.gleam) |
 | Cancel routing | [src/pharos/mcp/server.gleam](../src/pharos/mcp/server.gleam) `log_cancel_notification` |

@@ -1,6 +1,6 @@
 # 035. Releases without Burrito: a release per target, the shim as launcher, npm and install.sh
 
-**Status:** Accepted; amended 2026-10-19: Windows unsupported, use WSL
+**Status:** Accepted; amended 2026-10-19: Windows unsupported, use WSL; §4 and §6 amended by [ADR-036](036-self-management-commands.md) (`pharos self`, `install.sh --prune`; `--purge-cache` becomes `self prune`)
 **Date:** 2026-10-19
 **Supersedes:** [ADR-033](033-burrito-fork-embedded-mode-in-use-lock.md) (the Burrito fork),
 and the Burrito half of [ADR-004](004-distribution-npm-and-releases.md)

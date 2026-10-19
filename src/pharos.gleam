@@ -700,6 +700,11 @@ Commands
   daemon stop [--all]        Stop this version's daemon (or all).
   daemon                     Run this version's daemon in the
                              foreground.
+  warm <lang>... | --all     Start these languages' servers (--all:
+                             every language with a project marker
+                             here) against the current directory,
+                             so their on-disk indexes are built,
+                             then exit.
   self update [--version V]  Install the latest pharos (or V) with
                              the release's install.sh.
   self rollback              Switch back to the previous version.
@@ -764,10 +769,16 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # transport = \"stdio\"
 
 # tools — choose which MCP tools the LLM sees.
-# Each entry is either a category alias (expands to a set) or a
-# specific tool name. Mix freely. Default exposes everything.
+# Each entry is a preset, a category, or a specific tool name. Mix
+# freely. The default is the \"default\" preset (37 tools).
 #
-#   \"read\"  — non-mutating LSP queries (17 tools):
+#   \"default\" (preset) — read + write + memory, plus the five debug
+#             tools the error-recovery hints point at: echo,
+#             runtime_set_tool_timeout, runtime_effective_tool_config,
+#             runtime_language_config, runtime_server_capabilities
+#   \"all\"     (preset) — every tool (53)
+#
+#   \"read\"  — non-mutating LSP queries (22 tools):
 #     hover, goto_definition, goto_type_definition,
 #     goto_implementation, find_references, document_symbols,
 #     workspace_symbols, signature_help,
@@ -775,32 +786,37 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 #     call_hierarchy_outgoing_calls, get_diagnostics,
 #     inlay_hints, semantic_tokens,
 #     type_hierarchy_prepare, type_hierarchy_supertypes,
-#     type_hierarchy_subtypes
+#     type_hierarchy_subtypes, find_symbol, get_symbols_overview,
+#     containing_symbol, find_referencing_symbols, fetch_uri_contents
 #
-#   \"write\" — edit-producing LSP tools (4 tools). The first three
-#             return `WorkspaceEdit` data; `apply_workspace_edit`
-#             writes a `WorkspaceEdit` to disk on demand
+#   \"write\" — edit-producing LSP tools (5 tools). All but
+#             `apply_workspace_edit` return `WorkspaceEdit` data;
+#             `apply_workspace_edit` writes one to disk on demand
 #             (`dry_run=true` by default):
 #     rename_preview, format_document, code_actions,
-#     apply_workspace_edit
+#     edit_at_symbol, apply_workspace_edit
 #
-#   \"debug\" — pharos runtime introspection (15 tools incl. echo):
-#     echo, runtime_processes, runtime_supervision_tree,
-#     runtime_ets_tables, runtime_memory, runtime_applications,
-#     runtime_scheduler_util, runtime_pid_info,
-#     runtime_log_tail, runtime_log_clear, runtime_log_level,
-#     runtime_trace_lsp, runtime_trace_calls, runtime_kill_lsp,
-#     runtime_language_config
+#   \"memory\" — project memory under .pharos/memories/ (5 tools):
+#     memory_save, memory_get, memory_list, memory_prune,
+#     memory_audit
+#
+#   \"debug\" — pharos runtime introspection (20 tools): the five
+#             above, plus runtime_processes, runtime_supervision_tree,
+#             runtime_ets_tables, runtime_memory, runtime_applications,
+#             runtime_scheduler_util, runtime_pid_info,
+#             runtime_log_tail, runtime_log_clear, runtime_log_level,
+#             runtime_trace_lsp, runtime_trace_calls, runtime_kill_lsp,
+#             runtime_lsp_state, runtime_pool_recon
 #
 #   \"raw\"   — power-user escape hatch (1 tool):
 #     lsp_request_raw
 #
 # Examples:
 #   tools = [\"read\"]                       # query-only agent
-#   tools = [\"read\", \"write\"]              # full LSP surface
+#   tools = [\"default\", \"debug\"]           # plus all of debug
 #   tools = [\"read\", \"runtime_log_tail\"]   # category + one extra
 #   tools = [\"hover\", \"goto_definition\"]   # fully explicit
-# tools = [\"read\", \"write\", \"debug\", \"raw\"]
+# tools = [\"default\"]
 
 [server.http]
 # port — 0 lets the OS pick a free port. Pharos logs the bound

@@ -3,11 +3,11 @@
 </p>
 
 <h1 align="center">pharos-mcp</h1>
-<h2 align="center">v0.1.4</h2>
+<h2 align="center">v0.2.1</h2>
 
 <p align="center">
   Headless LSP-MCP bridge for AI agents. Hands rust-analyzer, gopls,
-  tsserver, pyright, jdtls, and 19 more language servers to any
+  tsserver, pyright, jdtls, and 18 more language servers to any
   MCP-aware agent (Claude Code, Cursor, ChatGPT Desktop) — so the
   model can navigate your codebase with type-aware queries instead of
   grepping.
@@ -67,9 +67,24 @@ of the same binary.
 pharos 0.2 runs on Linux and macOS; on Windows, install it inside WSL
 (`pharos-mcp@0.1.4` was the last native Windows build).
 
-Linux needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12, RHEL 9 or
-newer. pharos 0.2 doesn't run on Alpine/musl or older distros yet;
+Linux needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Fedora 36,
+RHEL 10 or newer (RHEL 9's glibc is 2.34). pharos 0.2 doesn't run on Alpine/musl or older distros yet;
 `pharos-mcp@0.1.4` still does.
+
+## Update, roll back, uninstall
+
+npm owns the installed files, so npm does these:
+
+```bash
+npm install -g pharos-mcp@latest     # update
+npm install -g pharos-mcp@0.2.0      # a given version
+npm uninstall -g pharos-mcp          # remove (stop running sessions first: pharos daemon stop --all)
+```
+
+`pharos self update`, `self rollback` and `self uninstall` print the
+matching npm command. `pharos self prune` removes what pharos 0.1.x
+unpacked under `~/.local/share/.burrito/pharos_*` (macOS:
+`~/Library/Application Support/.burrito/`) that nothing running uses.
 
 ## Full documentation
 

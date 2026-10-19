@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`pharos self update | rollback | prune | uninstall`**: pharos
+  manages its own install, with no installer URL to keep
+  ([ADR-036](doc/adr/036-self-management-commands.md)). `self update
+  [--version V]` runs that release's install.sh; the others run the
+  install.sh each version now ships with. None of them starts the
+  Erlang runtime. Installed with npm, `self update`, `rollback` and
+  `uninstall` print the npm command to run instead. A pharos 0.2.0 has
+  no `self` yet: update it one last time with the install.sh one-liner.
+- **`install.sh --prune`**: remove every version but the current and
+  the previous one, unless a running pharos uses it, without
+  downloading anything.
+
+### Changed
+
+- **`pharos self prune` replaces `pharos --purge-cache`.** It also
+  removes what pharos 0.1.x unpacked under
+  `~/.local/share/.burrito/pharos_*` that nothing running uses.
+  `--purge-cache` still works for this release, as a deprecated alias
+  that runs `self prune`.
+- `pharos --help` lists `warm` and the `self` commands, and
+  `--print-default-config` describes the real tool presets and
+  categories (the `default` preset, 22 read tools, memory).
+- install.sh's message on an unsupported OS says to use WSL on Windows,
+  not npm.
+
+### Fixed
+
+- **Docs: RHEL 9 isn't supported.** Its glibc is 2.34, below the 2.35
+  floor; 0.2.0's notes listed it. Ubuntu 22.04, Debian 12, Fedora 36
+  and RHEL 10 or newer are.
+- **Docs: the README still described 0.1's process model** ("no
+  background daemon"), the `PHAROS_CLEANUP_GRACE_MS` variable (which
+  never existed), and `PHAROS_WARM_LANGS` as working everywhere. It is
+  direct mode only: the shared daemon doesn't warm per session.
+
 ## [0.2.0] — 2026-10-19
 
 0.2.0-rc.1, the same code, was its release candidate.

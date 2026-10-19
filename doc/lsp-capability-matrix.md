@@ -280,7 +280,7 @@ default JSON-RPC + LSP framing:
 After a `bin/dogfood-23lang.py` run:
 
 ```bash
-PHAROS_TEST_BIN=burrito_out/pharos_linux_x64 \
+PHAROS_TEST_BIN=_build/prod/rel/pharos/bin/pharos \
   python3 bin/dogfood-23lang.py --transport stdio --profile all \
     --label pass-NN-context --out doc/dogfood-pass-NN.md
 

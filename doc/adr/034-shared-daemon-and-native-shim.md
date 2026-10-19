@@ -137,9 +137,9 @@ daemon multiplexes stdio sessions only.
 ### The launcher
 
 Every other invocation (`--version`, `--help`, `--doctor`,
-`--cleanup`, `--print-*`, `warm …`, `daemon …`, `--direct`, and the
-successor of `--purge-cache`, which ADR-035 defines) execs the bundled
-ERTS directly: `erlexec` from `<release>/erts-*/bin` with `ROOTDIR`,
+`--cleanup`, `--print-*`, `warm …`, `daemon …` and `--direct`) execs the
+bundled ERTS directly (`self …` and the deprecated `--purge-cache` are
+answered by the shim itself, ADR-036): `erlexec` from `<release>/erts-*/bin` with `ROOTDIR`,
 `BINDIR`, `EMU`, `PROGNAME` and `RELEASE_ROOT` set, plus
 `-boot <release>/releases/<vsn>/start -mode embedded -boot_var
 RELEASE_LIB <release>/lib`, the release's `sys.config` and `vm.args`,

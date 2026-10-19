@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">pharos</h1>
-<h2 align="center">v0.1.4</h2>
+<h2 align="center">v0.2.1</h2>
 
 <p align="center">
   <strong>Headless LSP-MCP bridge for AI agents.</strong>
@@ -69,9 +69,9 @@ so sessions on the same project share language servers
 ([ADR-034](doc/adr/034-shared-daemon-and-native-shim.md),
 [ADR-035](doc/adr/035-releases-without-burrito.md)).
 
-Linux needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9 or
-newer); pharos 0.2 doesn't run on Alpine/musl or older distros yet, and
-`pharos-mcp@0.1.4` still does.
+Linux needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36,
+RHEL 10 or newer; RHEL 9's glibc is 2.34); pharos 0.2 doesn't run on
+Alpine/musl or older distros yet, and `pharos-mcp@0.1.4` still does.
 
 ### 1. install.sh (Linux, macOS)
 
@@ -81,11 +81,27 @@ curl -fsSL …/install.sh | sh -s -- --version 0.2.0      # a given version
 ```
 
 It installs `~/.local/share/pharos/versions/<version>/` and links
-`~/.local/bin/pharos` to it, checking the download's sha256 first. It
-keeps the current and previous version (`--rollback` switches back),
-removes older ones once no running pharos uses them, and never edits
-shell or MCP client config. `--uninstall` removes it. Overrides:
-`PHAROS_INSTALL_DIR`, `PHAROS_BIN_DIR`.
+`~/.local/bin/pharos` to it, checking the download's sha256 first and
+failing closed. It keeps the current and previous version, removes
+older ones once no running pharos uses them, and never edits shell or
+MCP client config. No sudo. Overrides: `PHAROS_INSTALL_DIR` (the install
+root, default `~/.local/share/pharos`), `PHAROS_BIN_DIR` (where the
+`pharos` link goes, default `~/.local/bin`).
+
+From then on pharos manages itself ([ADR-036](doc/adr/036-self-management-commands.md)):
+
+```bash
+pharos self update                  # the latest release (or: --version 0.2.1)
+pharos self rollback                # back to the previous version
+pharos self prune                   # remove versions no longer kept, and pharos 0.1.x leftovers
+pharos self uninstall               # remove pharos's versions and its link
+```
+
+`self update` runs that release's install.sh; the others run the
+install.sh each version ships with. None of them starts the Erlang
+runtime. `self uninstall` refuses while a pharos is running: stop the
+daemons with `pharos daemon stop --all` and quit MCP clients that run
+pharos first.
 
 ### 2. npm (Linux, macOS)
 
@@ -93,9 +109,13 @@ shell or MCP client config. `--uninstall` removes it. Overrides:
 npm install -g pharos-mcp
 ```
 
-npm installs the one platform package that fits the host, and on Linux
-and macOS the postinstall points `pharos` straight at the native
-binary, so no node process stays resident per session.
+npm installs the one platform package that fits the host, and the
+postinstall points `pharos` straight at the native binary, so no node
+process stays resident per session. npm owns these files: update with
+`npm install -g pharos-mcp@latest` and remove with `npm uninstall -g
+pharos-mcp`. `pharos self update`, `rollback` and `uninstall` print the
+npm command instead of acting; `pharos self prune` still removes what
+pharos 0.1.x left behind.
 
 Either way, add pharos to your MCP host's config:
 
@@ -108,7 +128,8 @@ Either way, add pharos to your MCP host's config:
 ```
 
 `PHAROS_MODE=direct` runs a session in its own process instead of the
-shared daemon.
+shared daemon. If a session can't reach the daemon it falls back to
+direct mode on its own, and `pharos --doctor` lists those fallbacks.
 
 pharos 0.2 runs on Linux and macOS; on Windows, install it inside WSL
 (`pharos-mcp@0.1.4` was the last native Windows build).
@@ -172,12 +193,17 @@ indexes ahead of time.
 
 ## How it works
 
-Pharos is a long-lived BEAM-VM process that the MCP client spawns as
-a child for the duration of a session.
+The MCP client spawns `pharos` for each session. That process is a small
+native front end: it connects the session's stdio to the shared pharos
+daemon for this version over a Unix socket, starting the daemon if none
+is running, and relays JSON-RPC lines both ways. The daemon is one
+BEAM VM that serves every session of that version
+([ADR-034](doc/adr/034-shared-daemon-and-native-shim.md)).
 
 **Lifecycle of one LSP request from agent to language server:**
 
-1. Agent calls an MCP tool over stdio: `find_references(uri, line, character)`.
+1. Agent calls an MCP tool over stdio: `find_references(uri, line, character)`;
+   the front end hands the line to the daemon.
 2. Pharos detects the language from the file URI (extension → registry
    lookup) and looks up the configured LSP for that language.
 3. If the LSP isn't already in pharos's pool for this `(language,
@@ -190,19 +216,26 @@ a child for the duration of a session.
 5. LSP responds; pharos shapes the response into the MCP tool's
    return schema and ships it back to the agent.
 
-**The LSP stays cached** in pharos's pool for the lifetime of the
-pharos process — every subsequent tool call against the same
-`(language, workspace)` reuses it. The pool also handles
+**The LSP stays cached** in the daemon's pool, shared by every session:
+each later tool call against the same `(language, workspace)` reuses
+it, from this session or another one. A language server with no request
+for 30 minutes (2 hours for java, scala and haskell) stops, and restarts
+on the next call; `PHAROS_LSP_IDLE_SECS` changes that. The pool also handles
 multi-language workspaces (one pyright + one rust-analyzer running
 side by side for the same project tree) and multi-server languages
 (python uses pyright AND ruff with method routing — see
 [ADR-019](doc/adr/019-multi-lsp-method-routing.md)).
 
-**No background daemon.** Pharos lives only as long as the MCP
-client that spawned it. When the client closes its end of the stdio
-pipe pharos drains in-flight requests, sends `shutdown`/`exit` to
-each cached LSP, removes its instance tracking dir (see
-[Troubleshooting](#troubleshooting)), and halts.
+**The daemon is on demand.** The first session of a version starts it
+and it exits 30 minutes after its last session ends
+(`PHAROS_DAEMON_IDLE_SECS`), sending `shutdown`/`exit` to each cached
+LSP and removing its instance tracking dir (see
+[Troubleshooting](#troubleshooting)). A new version gets its own daemon,
+so an upgrade never mixes code; sessions already running stay on the
+old one until they end. `pharos daemon status` shows what is running,
+and `pharos daemon stop` stops it. In direct mode (`PHAROS_MODE=direct`
+or `pharos --direct`) a session is instead its own VM, living exactly as
+long as the client's stdio pipe.
 
 [↑ top](#pharos)
 
@@ -294,7 +327,11 @@ commands.
 | `pharos daemon status [--all]` | This version's shared daemon (or every daemon): its sessions and language servers. |
 | `pharos daemon stop [--all]` | Stop this version's daemon (or all). Sessions on it see their server exit; MCP clients restart it on reconnect. |
 | `pharos --direct` | Run this session in its own process instead of the shared daemon (also `PHAROS_MODE=direct`). |
-| `pharos --purge-cache` | Upgrade cleanup: remove what pharos 0.1.x unpacked under `~/.local/share/.burrito/pharos_*` that no running process uses. pharos 0.2 unpacks nothing. |
+| `pharos self update [--version V]` | Install the latest release (or V) with its install.sh. An npm install prints the npm command instead. |
+| `pharos self rollback` | Switch back to the previous version. |
+| `pharos self prune` | Remove the versions install.sh no longer keeps (all but the current and previous, unless running), and what pharos 0.1.x unpacked under `~/.local/share/.burrito/pharos_*` that no running process uses. |
+| `pharos self uninstall` | Remove pharos's versions and its link (refuses while a pharos runs). Keeps config, logs and memories. |
+| `pharos --purge-cache` | Deprecated alias of `pharos self prune`; goes in the next release. |
 | `pharos --print-default-config` | Print the canonical `pharos.toml` starter with comments. Pipe to `~/.config/pharos/pharos.toml` to begin customising. |
 | `pharos --print-language-config <id>` | Print one language's resolved registry entry (after `pharos.toml` overlays). Useful for debugging "why isn't my custom binary path being used?". |
 | `pharos --version` / `-V` | Print version and exit. |
@@ -304,12 +341,13 @@ commands.
 
 | Var | What it does | Default |
 |-----|--------------|---------|
-| `PHAROS_WARM_LANGS` | CSV; pharos pre-warms these languages every boot. Useful in MCP client configs where you want warm-on-every-spawn rather than the one-shot `pharos warm` CLI. | unset (off) |
+| `PHAROS_MODE` | `auto` uses the shared daemon and falls back to direct mode if it can't be reached; `daemon` fails instead; `direct` runs the session in its own process. | `auto` |
+| `PHAROS_WARM_LANGS` | CSV; pharos pre-warms these languages when it boots. Direct mode only: the shared daemon doesn't warm per session, so use `pharos warm` there. | unset (off) |
 | `PHAROS_LOG` | RUST_LOG-style filter (`info`, `info,pharos/lsp/pool=debug`). | `info` |
-| `PHAROS_LOG_FILE` | Override the per-PID per-timestamp default log file location. | `~/.local/state/pharos/log/session-<pid>-<timestamp>.log` (`$XDG_STATE_HOME` honoured) |
+| `PHAROS_LOG_FILE` | Override the default log file location. | daemon: `~/.local/state/pharos/log/daemon-<build>-<key>-<pid>.log`; direct mode: `…/session-<pid>-<timestamp>.log` (`$XDG_STATE_HOME` honoured) |
 | `PHAROS_HEARTBEAT_INTERVAL_MS` | Cadence of the idle-heartbeat log line (memory + LSP child count). | `60000` |
 | `PHAROS_SHUTDOWN_DRAIN_MS` | How long to wait for in-flight requests before initiating LSP shutdown on SIGTERM/stdin-EOF. | `2000` |
-| `PHAROS_CLEANUP_GRACE_MS` | How long `pharos cleanup --yes` waits between SIGTERM and SIGKILL on each orphan. | `5000` |
+| `PHAROS_DAEMON_IDLE_SECS` | How long the shared daemon stays up after its last session ends. | `1800` |
 | `PHAROS_LSP_IDLE_SECS` | Stop a language server after this many seconds with no request routed to it; it restarts on the next call. Overrides every language's `idle_stop_secs`. `0` never stops. | `1800` (java, scala, haskell: `7200`) |
 
 [↑ top](#pharos)
@@ -335,7 +373,8 @@ The full schema lives in [doc/example-pharos.toml](doc/example-pharos.toml).
 
 ### Tool filter (`tools = [...]`)
 
-Pick categories or literal tool names. Default: all four categories on.
+Pick presets, categories or literal tool names. Default: the `default`
+preset (read + write + memory + the five recovery essentials).
 
 ```toml
 tools = ["read"]                       # query-only agent
@@ -798,21 +837,30 @@ can take 30-90 s while the LSP indexes the project. Two mitigations:
 cd /path/to/project
 pharos warm --all
 
-# Per-MCP-client-spawn: warm on every spawn
-PHAROS_WARM_LANGS=rust,go,typescript pharos
+# Direct mode only: warm on every spawn
+PHAROS_MODE=direct PHAROS_WARM_LANGS=rust,go,typescript pharos
 ```
 
-The CLI form is cheaper if you launch the MCP client often; the env
-form is convenient when your MCP client config is the only place you
-configure pharos.
+Under the shared daemon, a warm language server stays warm for every
+later session until it idles out (`PHAROS_LSP_IDLE_SECS`), so after the
+first session the cold start is usually already paid.
 
 ### Where are my logs?
 
-Per-session per-PID log file at
-`~/.local/state/pharos/log/session-<pid>-<YYYY-MM-DD-HHMMSS>.log`
-(`$XDG_STATE_HOME/pharos/log/` when that is set). LRU-rotated to keep
-the 10 most recent. Override with `PHAROS_LOG_FILE`. Versions before
-0.2.0 wrote to `~/.cache/pharos/log/`.
+In `~/.local/state/pharos/log/` (`$XDG_STATE_HOME/pharos/log/` when
+that is set):
+
+- `daemon-<build>-<key>-<pid>.log` — the shared daemon's log, every
+  session it serves included; `daemon-<build>-<key>.boot.log` holds what
+  the daemon printed while starting.
+- `session-<pid>-<YYYY-MM-DD-HHMMSS>.log` — one per direct-mode session.
+- `fallbacks.log` — each time a session couldn't reach the daemon and
+  ran in direct mode instead (`pharos --doctor` shows the last few).
+
+Daemon and session logs are LRU-rotated to keep the 10 most recent of
+each. Override with
+`PHAROS_LOG_FILE`. Versions before 0.2.0 wrote to
+`~/.cache/pharos/log/`.
 
 A stable-path `~/.local/state/pharos/log/last-crash.log` always points
 at the most recent crash dump (if any) — useful in incident reports.
@@ -823,8 +871,8 @@ process state, environment included.
 
 If a parent process closes pharos's `stderr` (`2>/dev/null` patterns,
 some MCP clients during teardown), older versions could panic before
-`main` ran and write `erl_crash.dump` in cwd. Fixed in v1.0 via
-ADR-030 — pharos installs a try/catch-wrapped logger handler that
+`main` ran and write `erl_crash.dump` in cwd. Fixed via
+[ADR-030](doc/adr/030-process-lifecycle-hardening.md) — pharos installs a try/catch-wrapped logger handler that
 silently drops events when fd 2 is gone. If you see a crash dump,
 file an issue; the dump itself goes to `~/.local/state/pharos/log/`, not
 cwd.
@@ -832,24 +880,26 @@ cwd.
 ### Updating
 
 ```bash
+pharos self update                         # installed by install.sh (0.2.1 and later)
+npm install -g pharos-mcp@latest           # installed by npm
+# pharos 0.2.0, which has no `self` yet: run install.sh again
 curl -fsSL https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/install.sh | sh
-# or: npm update -g pharos-mcp
 
 pharos --doctor                            # verify
-pharos --purge-cache                       # once, after upgrading from 0.1.x
+pharos self prune                          # once, after upgrading from 0.1.x
 ```
 
 Sessions already running keep their daemon (the old version) until they
-end; it exits when idle and install.sh removes its files on a later run.
-New sessions start the new version's daemon.
+end; it exits when idle, and a later `pharos self prune` (or update)
+removes its files. New sessions start the new version's daemon.
 
 ### Uninstalling
 
 ```bash
-pharos daemon stop --all
-sh install.sh --uninstall                  # if installed by install.sh
+pharos daemon stop --all                   # ends every pharos session on this machine
+pharos self prune                          # pharos 0.1.x unpacks, if any
+pharos self uninstall                      # if installed by install.sh
 npm uninstall -g pharos-mcp                # if installed via npm
-rm -rf ~/.local/share/.burrito/pharos_*    # pharos 0.1.x unpacks, if any
 rm -rf ~/.local/share/pharos/              # instance tracking
 rm -rf ~/.local/state/pharos/              # logs + crash dumps
 rm -rf ~/.cache/pharos/                    # logs from before 0.2.0
@@ -878,6 +928,9 @@ Key design choices live in
 | [024](doc/adr/024-lsp-readiness-gate.md) | LSP readiness probe |
 | [029](doc/adr/029-custom-uri-schemes.md) | jdt:// / jar:// virtual URIs |
 | [030](doc/adr/030-process-lifecycle-hardening.md) | Boot / shutdown / cleanup hardening |
+| [034](doc/adr/034-shared-daemon-and-native-shim.md) | Shared daemon + native front end |
+| [035](doc/adr/035-releases-without-burrito.md) | Per-target releases, install.sh, npm without a resident node |
+| [036](doc/adr/036-self-management-commands.md) | `pharos self` update / rollback / prune / uninstall |
 
 Top-level supervision tree at runtime (per ADR-013/017):
 
@@ -893,6 +946,10 @@ pharos_root (one_for_one)
 ├─ http_listener_subtree  (permanent)    ◄── HTTP / Both transport
 └─ stdio_worker           (transient)   ◄── Stdio / Both transport
 ```
+
+The shared daemon runs the same tree with one `daemon` actor (a Unix
+socket listener, one connection process per session) in place of the
+transport children.
 
 Full prose architecture overview at
 [doc/architecture.md](doc/architecture.md).
@@ -919,7 +976,7 @@ use the dev wrapper:
 ```jsonc
 {
   "mcpServers": {
-    "pharos": { "command": "/abs/path/to/pharos/bin/pharos-dev" }
+    "pharos": { "command": "/abs/path/to/pharos-mcp/bin/pharos-dev" }
   }
 }
 ```
