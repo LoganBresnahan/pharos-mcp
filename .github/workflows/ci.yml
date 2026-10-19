@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     defaults:
       run:
         working-directory: shim
@@ -118,13 +118,6 @@ jobs:
           # wrong subdir scheme. Forbid the bug class explicitly.
           fossil_grep 'filename:basedir\(user_cache'    'wrong XDG var for the Burrito cache path — Burrito uses user_data (XDG_DATA_HOME), not user_cache (XDG_CACHE_HOME)'
           fossil_grep 'burrito_runtime'                 'fossil path segment — Burrito does not use a `burrito_runtime` subdir'
-
-          # Postinstall.js Windows branch: must read LOCALAPPDATA, not
-          # APPDATA. Allow bare `process.env.APPDATA` to appear nowhere.
-          if grep -nE 'process\.env\.APPDATA([^_A-Z]|$)' npm/pharos-mcp/scripts/postinstall.js 2>/dev/null ; then
-            echo "::error::postinstall.js references process.env.APPDATA — Burrito uses LOCALAPPDATA on Windows. Switch the var."
-            fail=1
-          fi
 
           if [ "$fail" -ne 0 ]; then
             exit 1

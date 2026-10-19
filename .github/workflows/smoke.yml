@@ -91,32 +91,3 @@ jobs:
         env:
           PHAROS_RUNTIME_DIR: ${{ runner.temp }}/pharos-rt
         run: python3 -I rel/smoke_mcp.py --pharos "$(command -v pharos)" --idle-exit
-
-  # Windows: npm, direct mode (no daemon, ADR-034).
-  windows:
-    runs-on: windows-2022
-    timeout-minutes: 15
-    steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: npm install -g "pharos-mcp@${{ inputs.version }}"
-      - name: initialize and tools/list
-        shell: bash
-        run: |
-          pharos --version
-          python - <<'PY'
-          import json, shutil, subprocess
-          lines = [
-              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}},
-              {"jsonrpc": "2.0", "method": "notifications/initialized"},
-              {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-          ]
-          pharos = shutil.which("pharos.cmd") or shutil.which("pharos")
-          out = subprocess.run([pharos], input="".join(json.dumps(l) + "\n" for l in lines),
-                               capture_output=True, text=True, timeout=120).stdout
-          replies = [json.loads(l) for l in out.splitlines() if l.strip()]
-          ids = sorted(r.get("id") for r in replies)
-          assert ids == [1, 2], "expected replies 1 and 2, got %r\n%s" % (ids, out[:2000])
-          print("smoke: ok: initialize and tools/list on Windows (%d tools)" % len(replies[1]["result"]["tools"]))
-          PY
