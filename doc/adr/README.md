@@ -49,13 +49,14 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 027 | [Project-local memory tools for cross-MCP-client knowledge sharing](027-project-memory-tools.md) | Accepted |
 | 028 | [Universal editor bridge: sensors and displays, never LSP host](028-universal-editor-bridge.md) | Proposed |
 | 029 | [Custom URI schemes: relaxed gate, config-driven registry, read-only semantics](029-custom-uri-schemes.md) | Accepted |
-| 030 | [Process lifecycle hardening: boot, shutdown, and cleanup](030-process-lifecycle-hardening.md) | Accepted |
-| 031 | [Orphan reaping via process-group signals; no external setsid wrapper](031-process-group-signalling-no-setsid-wrapper.md) | Accepted |
+| 030 | [Process lifecycle hardening: boot, shutdown, and cleanup](030-process-lifecycle-hardening.md) | Accepted; amended by 037 |
+| 031 | [Orphan reaping via process-group signals; no external setsid wrapper](031-process-group-signalling-no-setsid-wrapper.md) | Accepted; amended by 037 |
 | 032 | [Workspace root determination: vendored deps and rootless sessions](032-workspace-root-determination.md) | Accepted |
 | 033 | [Burrito from a fork: real embedded mode and an in-use lock on unpacks](033-burrito-fork-embedded-mode-in-use-lock.md) | Superseded by 035 |
 | 034 | [One shared daemon per build, reached through a native stdio shim](034-shared-daemon-and-native-shim.md) | Accepted |
 | 035 | [Releases without Burrito: a release per target, the shim as launcher, npm and install.sh](035-releases-without-burrito.md) | Accepted; amended by 036 |
 | 036 | [`pharos self`: update, rollback, prune and uninstall from the launcher](036-self-management-commands.md) | Accepted |
+| 037 | [Reap each LSP's process group on every stop; no die-with-parent wrapper](037-lsp-process-group-reaping.md) | Accepted |
 
 ## Anticipated future ADRs
 

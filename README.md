@@ -750,9 +750,14 @@ pharos --cleanup            # dry-run: lists orphan instance dirs + their LSP ch
 pharos --cleanup --yes      # actually reap
 ```
 
-The CLI verifies each LSP PID's process name matches what pharos
-recorded before signalling, so it won't kill anything pharos didn't
-spawn.
+It signals each recorded LSP's whole process group, so what an LSP
+started (a build it was running) goes too. Each record carries the
+LSP's start time, and a pid that now belongs to a different process is
+never signalled; records from before 0.2.2 carry none, so their
+processes are left alone and only the record is removed. A daemon also
+does this by itself when it starts, for pharos processes that died
+without stopping, and reaps an LSP's group whenever it stops one
+([ADR-037](doc/adr/037-lsp-process-group-reaping.md)).
 
 ### Wrong answers for queries anchored inside a dependency
 

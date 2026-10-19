@@ -1,6 +1,6 @@
 # 030. Process lifecycle hardening: boot, shutdown, and cleanup
 
-**Status:** Accepted
+**Status:** Accepted; amended 2026-10-19 by [ADR-037](037-lsp-process-group-reaping.md): the deferred `PR_SET_PDEATHSIG` item is rejected (measured: it would reach no process that leaks)
 **Date:** 2026-05-22
 
 ## Context

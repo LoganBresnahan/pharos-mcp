@@ -80,6 +80,9 @@ class Sandbox:
             if name.startswith(("PHAROS_", "STUB_LSP_")):
                 del self.env[name]
         self.env.update({
+            # Its own HOME: the ADR-030 instance dirs live under it, and a
+            # daemon's boot-time reap (ADR-037) must only see this sandbox's.
+            "HOME": self.dir,
             "PHAROS_RELEASE_ROOT": release,
             "PHAROS_RUNTIME_DIR": self.rt,
             "XDG_STATE_HOME": self.state,
@@ -131,6 +134,14 @@ class Sandbox:
     def teardown(self):
         for s in self.shims:
             s.kill()
+        # A scenario that failed may leave the stub's grandchild (ADR-037).
+        log = os.path.join(self.fixture, "grandchild.pids")
+        if os.path.exists(log):
+            for line in open(log).read().split():
+                try:
+                    os.kill(int(line), signal.SIGKILL)
+                except (OSError, ValueError):
+                    pass
         self.cli("daemon", "stop")
         pid = self.daemon_pid()
         if pid and alive(pid):
@@ -547,6 +558,55 @@ def t_restart_survives(sb):
     check(len(sb.status()["sessions"]) == 1, "the restarted daemon lost the session")
 
 
+def grandchild_of_stub(sb):
+    """Start a session whose stub LSP leaves a long-lived grandchild in its
+    process group (ADR-037), and return (shim, grandchild pid)."""
+    log = os.path.join(sb.fixture, "grandchild.pids")
+    a = sb.start({"STUB_LSP_GRANDCHILD": log})
+    a.initialize()
+    hover(a, sb, 10)
+    wait_until(lambda: os.path.exists(log) and open(log).read().strip(), 10, "the stub's grandchild")
+    pid = int(open(log).read().split()[0])
+    check(alive(pid), "the grandchild isn't running")
+    return a, pid
+
+
+def t_reap_on_stop(sb):
+    """`pharos daemon stop` takes what an LSP left in its process group
+    with it (rust-analyzer's in-flight cargo check, measured surviving)."""
+    _a, grandchild = grandchild_of_stub(sb)
+    pid = sb.daemon_pid()
+    out = sb.cli("daemon", "stop")
+    check(out.returncode == 0, "daemon stop failed: %s" % out.stderr)
+    wait_until(lambda: not alive(pid), 15, "the daemon to exit")
+    wait_until(lambda: not alive(grandchild), 10, "the grandchild to be reaped at stop")
+
+
+def t_reap_on_idle(sb):
+    """An idle-stopped LSP's leftover grandchild is reaped while the
+    daemon and the session carry on."""
+    sb.env.update({"PHAROS_LSP_IDLE_SECS": "2"})
+    a, grandchild = grandchild_of_stub(sb)
+    wait_until(lambda: sb.status()["lsps"] == [], 15, "the idle LSP to stop")
+    wait_until(lambda: not alive(grandchild), 15, "the grandchild to be reaped after the idle stop")
+    check(a.tool(20, "echo", {"message": "still here"}) == "still here", "the session died")
+
+
+def t_reap_after_death(sb):
+    """SIGKILL the daemon: the grandchild outlives it (nothing in the dead
+    VM can act), and the next daemon's boot-time reap takes it."""
+    a, grandchild = grandchild_of_stub(sb)
+    pid = sb.daemon_pid()
+    os.kill(pid, signal.SIGKILL)
+    a.drain(10)
+    wait_until(lambda: not alive(pid), 10, "the daemon to die")
+    time.sleep(1)
+    check(alive(grandchild), "the grandchild died with the daemon: nothing to test")
+    b = sb.start()
+    b.initialize()
+    wait_until(lambda: not alive(grandchild), 20, "the next daemon to reap the grandchild")
+
+
 SCENARIOS = [
     ("share", t_share),
     ("spawn_race", t_spawn_race),
@@ -561,6 +621,9 @@ SCENARIOS = [
     ("fd_hygiene", t_fd_hygiene),
     ("cancel_lands", t_cancel_lands),
     ("restart_survives", t_restart_survives),
+    ("reap_on_stop", t_reap_on_stop),
+    ("reap_on_idle", t_reap_on_idle),
+    ("reap_after_death", t_reap_after_death),
 ]
 
 

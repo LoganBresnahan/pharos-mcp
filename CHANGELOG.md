@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Nothing an LSP started outlives it any more.** When pharos stopped
+  a language server (idle stop, eviction, session end, `pharos daemon
+  stop`), the server exited, but what it had started in its process
+  group could keep running: rust-analyzer's in-flight `cargo check` and
+  its build script were measured still alive 120 s later, on Linux and
+  macOS. Now each server's process group gets a grace period, then
+  TERM, then KILL, and `daemon stop` waits for that
+  ([ADR-037](doc/adr/037-lsp-process-group-reaping.md)).
+- **A pharos that died hard is cleaned up after.** When a daemon or
+  server starts, it reaps what pharos processes that were SIGKILLed or
+  OOM-killed left behind. `pharos --cleanup` now also reaps a group
+  whose leader already exited, and it identifies each server by its
+  start time, so a reused pid is never signalled. Records from before
+  0.2.2 are removed without signalling anything.
+
 ## [0.2.1] — 2026-10-19
 
 ### Added

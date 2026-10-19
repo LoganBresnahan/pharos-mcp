@@ -15,6 +15,12 @@ Behavior is controlled via env vars:
   STUB_LSP_LOG=path           append "<pid> <method>" for every message
                               received (proves e.g. that a cancel
                               reached the LSP as $/cancelRequest)
+  STUB_LSP_GRANDCHILD=path    at startup, start a long-lived `sleep` in
+                              the stub's process group, detached from
+                              its stdio, and append its pid to path:
+                              the shape of rust-analyzer's in-flight
+                              `cargo check`, which outlives the LSP's
+                              EOF exit (ADR-037)
 
 STUB_LSP_HOVER_RESPONSES=whoami answers hover with the stub's pid and
 the value of STUB_LSP_TAG, so a test can tell which LSP process, started
@@ -124,6 +130,13 @@ def handle_hover(req):
 def main():
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
+    grandchild_log = os.environ.get("STUB_LSP_GRANDCHILD")
+    if grandchild_log:
+        import subprocess
+        child = subprocess.Popen(["sleep", "600"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(grandchild_log, "a") as f:
+            f.write(f"{child.pid}\n")
     while True:
         try:
             msg = read_message(stdin)

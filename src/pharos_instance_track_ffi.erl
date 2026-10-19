@@ -21,8 +21,23 @@
 %%     `erlang:port_info/2`, writes the metadata file. Returns the
 %%     LSP OS PID (or `nil` if port_info fails) so callers can store
 %%     it for `deregister_lsp/1`.
-%%   - `deregister_lsp/1`: called from `client.close/1`. Removes the
-%%     `<lsp-pid>.pid` file. Idempotent (silent on missing file).
+%%   - `deregister_lsp/1`: called from `client.close/1`. Hands the
+%%     LSP to its reaper (below), which removes the `<lsp-pid>.pid`
+%%     file once the LSP's process group is empty. Idempotent.
+%%
+%% Reaping (ADR-037): an LSP that exits on stdin EOF can leave
+%% children behind in its process group (rust-analyzer's in-flight
+%% `cargo check` and its build script, measured surviving 120 s), and
+%% some LSPs take 5-30 s to exit at all (jdtls). `register_lsp/4`
+%% therefore starts one reaper process per LSP. It monitors the
+%% process that spawned the LSP (the lsp_proc actor) and, when that
+%% actor goes for any reason (close, eviction, idle stop, session
+%% end, daemon stop, crash) or `deregister_lsp/1` is called, waits a
+%% grace period for the group to empty by itself, then TERMs what is
+%% left, then KILLs. `final_reap/0` does the same synchronously for
+%% whatever is still recorded when the application stops, and
+%% `boot_reap/0` for the instance dirs of pharos processes that died
+%% without stopping (SIGKILL, OOM).
 %%   - `clear_instance_dir/0`: called from the pharos application
 %%     stop callback. Removes the instance directory entirely on
 %%     graceful exit — orphan-detection by `pharos cleanup` only
@@ -53,8 +68,26 @@
     %% of the kill path and is worth asserting directly.
     signal_target/1,
     remove_dir_recursive/1,
-    sleep_ms/1
+    sleep_ms/1,
+    %% ADR-037 reaping.
+    reap_group/4,
+    group_members/1,
+    process_start/1,
+    final_reap/0,
+    boot_reap/0,
+    reap_instance_dir/3
 ]).
+
+%% Grace for an LSP's group to empty by itself once pharos is done with
+%% it (most LSPs exit on stdin EOF within milliseconds), then how long
+%% TERM gets before KILL. The application-stop pass uses shorter ones:
+%% the VM is about to halt.
+-define(REAP_GRACE_MS, 3000).
+-define(REAP_TERM_WAIT_MS, 2000).
+-define(FINAL_GRACE_MS, 1000).
+-define(FINAL_TERM_WAIT_MS, 1000).
+-define(REAP_POLL_MS, 100).
+-define(REAPERS, pharos_lsp_reapers).
 
 %% Create the per-PID instance directory if it does not exist.
 %% Returns nil unconditionally — failures are logged via stderr
@@ -105,15 +138,18 @@ register_lsp(Port, ServerId, ResolvedBinary, Workspace)
                 Dir = instance_dir_path(),
                 ok = filelib:ensure_dir(filename:join(Dir, "x")),
                 Path = filename:join(Dir, integer_to_list(OsPid) ++ ".pid"),
+                Start = process_start(OsPid),
                 Body = iolist_to_binary([
                     <<"pharos_pid=">>, integer_to_binary(os_pid_self()), $\n,
                     <<"lsp_pid=">>, integer_to_binary(OsPid), $\n,
+                    <<"lsp_start=">>, Start, $\n,
                     <<"lsp_binary=">>, ResolvedBinary, $\n,
                     <<"server_id=">>, ServerId, $\n,
                     <<"workspace=">>, Workspace, $\n,
                     <<"started_at=">>, iso8601_now(), $\n
                 ]),
-                ok = file:write_file(Path, Body)
+                ok = file:write_file(Path, Body),
+                start_reaper(self(), OsPid, Start, Path)
             catch
                 _:_ -> ok
             end,
@@ -127,12 +163,17 @@ register_lsp(_, _, _, _) ->
 deregister_lsp(0) ->
     nil;
 deregister_lsp(LspPid) when is_integer(LspPid) ->
-    try
-        Dir = instance_dir_path(),
-        Path = filename:join(Dir, integer_to_list(LspPid) ++ ".pid"),
-        _ = file:delete(Path)
-    catch
-        _:_ -> ok
+    case reaper_for(LspPid) of
+        {ok, Reaper} ->
+            Reaper ! reap;
+        none ->
+            try
+                Dir = instance_dir_path(),
+                Path = filename:join(Dir, integer_to_list(LspPid) ++ ".pid"),
+                _ = file:delete(Path)
+            catch
+                _:_ -> ok
+            end
     end,
     nil.
 
@@ -346,6 +387,214 @@ sleep_ms(Millis) when is_integer(Millis), Millis >= 0 ->
     nil;
 sleep_ms(_) ->
     nil.
+
+%% -- reaping (ADR-037) ------------------------------------------------
+
+%% One reaper per LSP, unlinked so it outlives the actor it watches.
+start_reaper(Owner, LspPid, Start, Path) ->
+    ensure_reapers_table(),
+    Reaper = spawn(fun() ->
+        Ref = erlang:monitor(process, Owner),
+        receive
+            {'DOWN', Ref, process, _, _} -> ok;
+            reap -> erlang:demonitor(Ref, [flush])
+        end,
+        _ = reap_group(LspPid, Start, ?REAP_GRACE_MS, ?REAP_TERM_WAIT_MS),
+        _ = file:delete(Path),
+        catch ets:delete(?REAPERS, LspPid)
+    end),
+    ets:insert(?REAPERS, {LspPid, Reaper}),
+    ok.
+
+ensure_reapers_table() ->
+    case ets:info(?REAPERS) of
+        undefined ->
+            %% Owned by a process that lives as long as the VM: the
+            %% table must not vanish with the first lsp_proc actor.
+            Parent = self(),
+            spawn(fun() ->
+                try ets:new(?REAPERS, [named_table, public, set]) of
+                    _ -> Parent ! {?REAPERS, ready}, receive stop -> ok end
+                catch error:badarg -> Parent ! {?REAPERS, ready}
+                end
+            end),
+            receive {?REAPERS, ready} -> ok after 1000 -> ok end;
+        _ ->
+            ok
+    end.
+
+reaper_for(LspPid) ->
+    case catch ets:lookup(?REAPERS, LspPid) of
+        [{_, Reaper}] -> {ok, Reaper};
+        _ -> none
+    end.
+
+%% Wait up to `GraceMs` for the process group led by `Pgid` (an LSP's
+%% os pid; erl_child_setup setsid()s every port child) to empty by
+%% itself; TERM what is left; wait `TermWaitMs`; KILL what is left.
+%% Returns the signals sent, for tests and logs: [] | [term] |
+%% [term, kill].
+%%
+%% `Start` is the leader's start time as `process_start/1` read it at
+%% spawn (<<>> if the LSP was already gone by then). It guards pid
+%% reuse: the kernel never reuses a number while any process still
+%% uses it as a group id, so if a process now holds pid `Pgid` and
+%% didn't start at `Start`, the old group is necessarily empty and
+%% nothing is signalled. While the leader is ours the whole group is
+%% signalled (`kill -SIG -Pgid`, ADR-031's guards); once the leader is
+%% gone, each remaining member is signalled by pid.
+reap_group(Pgid, Start, GraceMs, TermWaitMs)
+        when is_integer(Pgid), Pgid > 1 ->
+    case Pgid =:= os_pid_self() orelse Pgid =:= own_pgid() of
+        true -> [];
+        false ->
+            case wait_group_empty(Pgid, Start, GraceMs) of
+                empty -> [];
+                {left, _} ->
+                    signal_group(Pgid, Start, "TERM"),
+                    case wait_group_empty(Pgid, Start, TermWaitMs) of
+                        empty -> [term];
+                        {left, _} ->
+                            signal_group(Pgid, Start, "KILL"),
+                            [term, kill]
+                    end
+            end
+    end;
+reap_group(_, _, _, _) ->
+    [].
+
+wait_group_empty(Pgid, Start, Ms) ->
+    Deadline = erlang:monotonic_time(millisecond) + Ms,
+    wait_group_empty_until(Pgid, Start, Deadline).
+
+wait_group_empty_until(Pgid, Start, Deadline) ->
+    case group_state(Pgid, Start) of
+        empty -> empty;
+        {left, Members} ->
+            case erlang:monotonic_time(millisecond) >= Deadline of
+                true -> {left, Members};
+                false ->
+                    timer:sleep(?REAP_POLL_MS),
+                    wait_group_empty_until(Pgid, Start, Deadline)
+            end
+    end.
+
+%% `empty` when nothing of ours is left in the group (including when
+%% the number has been reused), else `{left, Pids}`.
+group_state(Pgid, Start) ->
+    case leader(Pgid, Start) of
+        reused -> empty;
+        _ ->
+            case group_members(Pgid) of
+                [] -> empty;
+                Members -> {left, Members}
+            end
+    end.
+
+%% `ours` (pid `Pgid` alive and started when we recorded), `gone`, or
+%% `reused` (alive, and not provably ours: a different start time, or
+%% none recorded). Never guess in favour of signalling.
+leader(Pgid, Start) ->
+    case process_start(Pgid) of
+        <<>> -> gone;
+        Start when Start =/= <<>> -> ours;
+        _ -> reused
+    end.
+
+signal_group(Pgid, Start, Sig) ->
+    case leader(Pgid, Start) of
+        ours ->
+            case signal_target(Pgid) of
+                Target when Target < 0 -> kill(Sig, Target);
+                _ -> [kill(Sig, P) || P <- group_members(Pgid)]
+            end;
+        gone ->
+            [kill(Sig, P) || P <- group_members(Pgid)];
+        reused ->
+            ok
+    end,
+    ok.
+
+kill(Sig, Target) ->
+    _ = os:cmd(lists:flatten(io_lib:format("kill -~s ~B 2>/dev/null", [Sig, Target]))),
+    ok.
+
+%% The live (non-zombie) processes in group `Pgid`, from one `ps` (portable:
+%% Linux and macOS), never including this VM.
+group_members(Pgid) when is_integer(Pgid) ->
+    Self = os_pid_self(),
+    [P || {P, G, State} <- ps_pid_pgid(), G =:= Pgid, P =/= Self, State =/= $Z].
+
+ps_pid_pgid() ->
+    Out = os:cmd("ps -A -o pid=,pgid=,stat= 2>/dev/null"),
+    lists:filtermap(
+        fun(Line) ->
+            case string:lexemes(Line, " \t") of
+                [P, G, [St | _]] ->
+                    try {true, {list_to_integer(P), list_to_integer(G), St}}
+                    catch _:_ -> false
+                    end;
+                _ -> false
+            end
+        end,
+        string:split(Out, "\n", all)).
+
+%% A process's start time as `ps -o lstart=` prints it (portable), or
+%% <<>> when it is gone. Two reads of one process agree; a different
+%% process under a reused pid shows a different one.
+process_start(Pid) when is_integer(Pid), Pid > 0 ->
+    Out = os:cmd("ps -o lstart= -p " ++ integer_to_list(Pid) ++ " 2>/dev/null"),
+    list_to_binary(string:trim(Out));
+process_start(_) ->
+    <<>>.
+
+%% Application stop: reap whatever this instance still records, at
+%% once and with the short timings, before the VM halts. Reapers still
+%% running do the same; signalling twice is harmless.
+final_reap() ->
+    _ = reap_instance_dir(instance_dir(), ?FINAL_GRACE_MS, ?FINAL_TERM_WAIT_MS),
+    nil.
+
+%% Daemon or server start: reap the instance dirs of pharos processes
+%% that died without stopping, in the background. A dir whose owner pid
+%% is alive is skipped, even if that pid now belongs to something else:
+%% conservative, and the dir is reaped once that process is gone.
+boot_reap() ->
+    Self = os_pid_self(),
+    _ = spawn(fun() ->
+        [reap_instance_dir(Dir, ?REAP_GRACE_MS, ?REAP_TERM_WAIT_MS)
+         || {Owner, Dir} <- list_instance_dirs(),
+            Owner =/= Self,
+            not is_pid_alive(Owner)]
+    end),
+    nil.
+
+%% Reap every LSP group an instance dir records (in parallel), then
+%% remove the dir. Returns how many groups needed a signal. One `ps`
+%% first sorts the records: a group with nothing left is just deleted.
+%% So is a record without `lsp_start` (written before ADR-037): such a
+%% record can be months old, its pid and group numbers reused since,
+%% and nothing in it can tell its processes from somebody else's.
+reap_instance_dir(Dir, GraceMs, TermWaitMs) when is_binary(Dir) ->
+    Records = [{Pid, Path, read_pid_file(Path)} || {Pid, Path} <- list_pid_files(Dir)],
+    Live = sets:from_list([G || {_, G, St} <- ps_pid_pgid(), St =/= $Z]),
+    Self = self(),
+    Jobs = [begin
+                Start = proplists:get_value(<<"lsp_start">>, Meta, <<>>),
+                Ref = make_ref(),
+                spawn(fun() ->
+                    Self ! {Ref, reap_group(Pid, Start, GraceMs, TermWaitMs)}
+                end),
+                Ref
+            end || {Pid, _Path, Meta} <- Records,
+                   sets:is_element(Pid, Live),
+                   proplists:get_value(<<"lsp_start">>, Meta, <<>>) =/= <<>>],
+    Signalled = length([1 || Ref <- Jobs,
+                             receive {Ref, Sent} -> Sent =/= []
+                             after GraceMs + TermWaitMs + 5000 -> false
+                             end]),
+    _ = del_dir_recursive(binary_to_list(Dir)),
+    Signalled.
 
 %% -- internals -------------------------------------------------------
 

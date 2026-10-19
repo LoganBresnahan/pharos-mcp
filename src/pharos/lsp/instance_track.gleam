@@ -89,6 +89,28 @@ pub fn signal_pid(pid: Int, signal: String) -> Result(Nil, Nil)
 @external(erlang, "pharos_instance_track_ffi", "remove_dir_recursive")
 pub fn remove_dir_recursive(dir: String) -> Nil
 
+// -- ADR-037 reaping -----------------------------------------------
+
+/// Reap the instance dirs of pharos processes that died without
+/// stopping (their owner pid is gone), in the background: every LSP
+/// process group they record is given a grace period, then TERM, then
+/// KILL. Called once when a daemon or server starts.
+@external(erlang, "pharos_instance_track_ffi", "boot_reap")
+pub fn boot_reap() -> Nil
+
+/// Reap every LSP process group `instance_dir` records, wait for it,
+/// and remove the dir. Returns how many groups needed a signal.
+@external(erlang, "pharos_instance_track_ffi", "reap_instance_dir")
+pub fn reap_instance_dir(
+  instance_dir: String,
+  grace_ms: Int,
+  term_wait_ms: Int,
+) -> Int
+
+/// The live processes in process group `pgid` (an LSP's os pid).
+@external(erlang, "pharos_instance_track_ffi", "group_members")
+pub fn group_members(pgid: Int) -> List(Int)
+
 /// Block the caller for `millis` milliseconds. Used by the cleanup
 /// CLI between SIGTERM and SIGKILL escalation.
 @external(erlang, "pharos_instance_track_ffi", "sleep_ms")

@@ -70,6 +70,9 @@ stop(_State) ->
     %% (init:stop / SIGTERM → OTP default → app stop). Best-effort:
     %% the FFI swallows all failures so a slow filesystem cannot
     %% block BEAM teardown.
+    %% ADR-037: first reap the process groups of LSPs still recorded,
+    %% so nothing they started outlives this instance.
+    _ = pharos_instance_track_ffi:final_reap(),
     _ = pharos_instance_track_ffi:clear_instance_dir(),
     %% ADR-034: a daemon removes its socket and pid file (no-op for
     %% every other mode).

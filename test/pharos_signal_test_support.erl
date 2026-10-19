@@ -9,7 +9,8 @@
 -export([
     own_os_pid/0,
     signal_target/1,
-    spawn_child_with_grandchild/0
+    spawn_child_with_grandchild/0,
+    spawn_script/1
 ]).
 
 %% This BEAM's own OS pid, as an integer.
@@ -33,9 +34,15 @@ signal_target(Pid) when is_integer(Pid) ->
 %% The caller is responsible for reaping: every test that calls this
 %% kills the group before returning.
 spawn_child_with_grandchild() ->
+    spawn_script(<<"sleep 30 & echo $$ $!; sleep 30">>).
+
+%% Run `Script` with /bin/sh as a port child (so erl_child_setup makes
+%% it a session and group leader, like an LSP). The script must print
+%% `$$ $!` (its own pid and one child's) first. Same `{0, 0}` skip.
+spawn_script(Script) when is_binary(Script) ->
     Port = erlang:open_port(
         {spawn_executable, "/bin/sh"},
-        [{args, ["-c", "sleep 30 & echo $$ $!; sleep 30"]},
+        [{args, ["-c", binary_to_list(Script)]},
          binary, use_stdio, exit_status, stream, hide]),
     receive
         {Port, {data, Data}} ->

@@ -326,6 +326,8 @@ condition surfaces when it does.
 | 15 | **Daemon idle exit** | `daemon.gleam` | 1800s | `PHAROS_DAEMON_IDLE_SECS` | No session connected for this long: the daemon stops itself (ADR-034). |
 | 17 | **LSP idle stop** | `pool.gleam` (`IdleSweep`) | 1800s; java, scala, haskell 7200s | `PHAROS_LSP_IDLE_SECS` (all languages), `[languages.<id>] idle_stop_secs` | No `pool.get` for the key, from any session: the LSP is evicted (stdin closed) and respawns on the next call (ADR-034). |
 | 16 | **Session drain on disconnect** | `daemon/conn.gleam` | 2000ms | `PHAROS_SHUTDOWN_DRAIN_MS` | A closed connection's in-flight requests get this long before they are cancelled. |
+| 18 | **LSP group reap** | `pharos_instance_track_ffi.erl` (`REAP_*`) | 3000ms grace, then TERM, 2000ms, then KILL | not exposed | After an LSP's actor goes, whatever is left in its process group gets the grace, then TERM, then KILL (ADR-037). Runs in the LSP's own reaper; blocks nothing. |
+| 19 | **Final reap at application stop** | `pharos_app_ffi:stop/1` → `final_reap/0` | 1000ms grace, 1000ms after TERM | not exposed | Synchronous: delays the VM's halt by at most ~2s, and only while some LSP group doesn't empty by itself. |
 | 14 | **Harness wall-clock** | `bin/dogfood-23lang.py` | `timeout_ms / 1000 + 45s` | `PER_LANG_TIMEOUT_MS` const + per-target override | Harness gives up + sends `notifications/cancelled`. M14 dogfood-only. |
 
 Resolution stack at request time (ADR-021): #5 wins → #4 → #3 → #2
@@ -406,15 +408,30 @@ lsp_proc actor                    LSP child (OS process)
     │  ◄── reply / error / notification ─
     │   ... interleaved with $/progress, $/log, diagnostics, server requests
     │                                  │
-    │   on Close: write shutdown        ─►
-    │             write exit            ─►
-    │                                  ── process exits
+    │   on Close (or the actor dies):   │
+    │   the port closes                ─►  stdin EOF ── process exits
+    │   actor.stop                      │  (no LSP shutdown/exit is sent)
     │                                  │
-    │   actor.stop                      │
+reaper (one per LSP, unlinked)         │  …and whatever it started in its
+    │   DOWN of the actor, or a        │  process group (rust-analyzer's
+    │   reap from client.close         │  in-flight cargo check)
+    │   wait ≤ 3 s for the group to empty
+    │   TERM the group, wait ≤ 2 s, KILL
+    │   remove <lsp-pid>.pid           │
 ```
 
 Lifecycle source: [src/pharos/lsp/lifecycle.gleam](../src/pharos/lsp/lifecycle.gleam),
-[src/pharos/lsp/proc.gleam](../src/pharos/lsp/proc.gleam).
+[src/pharos/lsp/proc.gleam](../src/pharos/lsp/proc.gleam). The reaper
+(ADR-037) is in [src/pharos_instance_track_ffi.erl](../src/pharos_instance_track_ffi.erl):
+`register_lsp/4` records the LSP's start time and starts it. Every
+erl_child_setup port child leads its own process group, so the group is
+the LSP plus everything it started. The application stop callback runs
+the same reap synchronously (1 s + 1 s) over what is still recorded, so
+`daemon stop` and a direct-mode exit leave nothing behind. A starting
+daemon or server reaps, in the background, the instance dirs of pharos
+processes that died without stopping. A pid that now belongs to a
+different process (other start time, or none recorded) is never
+signalled.
 
 ## Where things get stuck (M14 dogfood findings)
 

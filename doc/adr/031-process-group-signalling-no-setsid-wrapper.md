@@ -1,6 +1,6 @@
 # 031. Orphan reaping via process-group signals; no external setsid wrapper
 
-**Status:** Accepted
+**Status:** Accepted; amended 2026-10-19 by [ADR-037](037-lsp-process-group-reaping.md): group reaping now runs on every LSP stop and at daemon start, not only in `pharos --cleanup`
 **Date:** 2026-08-12
 
 ## Context

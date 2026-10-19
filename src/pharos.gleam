@@ -492,7 +492,11 @@ pub fn post_boot_dispatch() -> Nil {
     }
     // A daemon's own env is just its first shim's; warming belongs to
     // sessions, not the daemon (ADR-034).
-    None ->
+    None -> {
+      // ADR-037: reap what pharos processes that died hard left
+      // behind. Here, not in boot/0, so meta commands and test boots
+      // never signal anything.
+      instance_track.boot_reap()
       case daemon.parse_args(argv()) {
         Some(_) -> Nil
         None -> {
@@ -500,6 +504,7 @@ pub fn post_boot_dispatch() -> Nil {
           Nil
         }
       }
+    }
   }
 }
 

@@ -318,9 +318,13 @@ pub fn cleanup(apply: Bool, grace_ms: Int) -> Int {
                   let meta = instance_track.read_pid_file(file_path)
                   let binary = lookup_meta(meta, "lsp_binary")
                   let server_id = lookup_meta(meta, "server_id")
-                  let alive_marker = case instance_track.is_pid_alive(lsp_pid) {
-                    True -> "alive"
-                    False -> "gone"
+                  let alive_marker = case
+                    instance_track.group_members(lsp_pid)
+                  {
+                    [] -> "gone"
+                    members ->
+                      int.to_string(list.length(members))
+                      <> " process(es) left in its group"
                   }
                   io.println(
                     "      LSP "
@@ -378,61 +382,27 @@ fn lookup_meta(meta: List(#(String, String)), key: String) -> String {
   |> result.unwrap("?")
 }
 
-/// Reap one orphan: SIGTERM each listed LSP, wait `grace_ms`,
-/// SIGKILL anyone still alive, then remove the instance directory.
-/// Returns the number of unexpected signal failures (always >= 0).
+/// Reap one orphan instance (ADR-037): every LSP process group it
+/// records gets `grace_ms` to empty by itself, then TERM, then KILL,
+/// including what an LSP left in its group after exiting (an LSP's
+/// in-flight build). Identity is checked by start time, so a reused
+/// pid is never signalled. Then the instance directory goes. Returns
+/// 0: nothing it does can fail in a way the caller acts on.
 fn reap_orphan(
   orphan: #(Int, String, List(#(Int, String))),
   grace_ms: Int,
 ) -> Int {
-  let #(owner_pid, dir_path, pid_files) = orphan
-
-  // Phase 1: SIGTERM every LSP whose PID is still alive.
-  let alive_lsps =
-    list.filter(pid_files, fn(pf) { instance_track.is_pid_alive(pf.0) })
-  list.each(alive_lsps, fn(pf) {
-    let #(lsp_pid, _path) = pf
-    io.println(
-      "  SIGTERM pharos="
-      <> int.to_string(owner_pid)
-      <> " lsp="
-      <> int.to_string(lsp_pid),
-    )
-    case instance_track.signal_pid(lsp_pid, "TERM") {
-      Ok(_) -> Nil
-      Error(_) -> io.println("    (signal failed)")
-    }
-  })
-
-  // Phase 2: wait the grace period, then SIGKILL any survivors.
-  case alive_lsps {
-    [] -> Nil
-    _ -> instance_track.sleep_ms(grace_ms)
-  }
-  let kill_failures =
-    list.fold(alive_lsps, 0, fn(acc, pf) {
-      let #(lsp_pid, _path) = pf
-      case instance_track.is_pid_alive(lsp_pid) {
-        False -> acc
-        True -> {
-          io.println(
-            "  SIGKILL lsp=" <> int.to_string(lsp_pid) <> " (survived TERM)",
-          )
-          case instance_track.signal_pid(lsp_pid, "KILL") {
-            Ok(_) -> acc
-            Error(_) -> {
-              io.println("    (signal failed)")
-              acc + 1
-            }
-          }
-        }
-      }
-    })
-
-  // Phase 3: remove the instance directory.
-  instance_track.remove_dir_recursive(dir_path)
-  io.println("  removed " <> dir_path)
-  kill_failures
+  let #(owner_pid, dir_path, _pid_files) = orphan
+  let signalled = instance_track.reap_instance_dir(dir_path, grace_ms, 2000)
+  io.println(
+    "  pharos="
+    <> int.to_string(owner_pid)
+    <> ": "
+    <> int.to_string(signalled)
+    <> " process group(s) signalled; removed "
+    <> dir_path,
+  )
+  0
 }
 
 // -- BEAM / FFI ----------------------------------------------------------
