@@ -425,7 +425,14 @@ defmodule Pharos.MixProject do
       otp_dir = Path.join(build_lib, otp_name)
 
       unless File.exists?(otp_dir) do
-        if File.ln_s(dep_name, otp_dir) != :ok do
+        # A copy on Windows, always: there `File.ln_s` can succeed and
+        # still leave an unusable link. OTP resolves the relative target
+        # against the cwd, finds no directory, and makes a *file*
+        # symlink, which Mix can't traverse ("Could not find application
+        # :hpack" on the first native Windows build).
+        windows? = match?({:win32, _}, :os.type())
+
+        if windows? or File.ln_s(dep_name, otp_dir) != :ok do
           File.cp_r!(Path.join(build_lib, dep_name), otp_dir)
         end
       end

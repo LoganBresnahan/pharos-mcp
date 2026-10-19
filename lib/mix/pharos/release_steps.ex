@@ -50,6 +50,12 @@ defmodule Mix.Pharos.ReleaseSteps do
     for pattern <- @release_drop, file <- Path.wildcard(Path.join(path, pattern)),
         do: File.rm!(file)
 
+    # Every NIF ad hoc too: the arm64 linker signs what it links, but on
+    # Intel crypto.so comes out unsigned ("code object is not signed at
+    # all" on macos-15-intel), and check_native/1 requires a valid
+    # signature on every Mach-O.
+    if darwin?(), do: sign(Path.wildcard(Path.join(path, "lib/*/priv/**/*.so")))
+
     rel = Path.join(path, "releases/#{version}")
 
     scripts =
@@ -350,6 +356,8 @@ defmodule Mix.Pharos.ReleaseSteps do
         String.starts_with?(line, "\t"),
         do: line |> String.trim() |> String.replace(~r/ \(compatibility version.*\)$/, "")
   end
+
+  defp sign([]), do: :ok
 
   defp sign(files) do
     {_, 0} = System.cmd("codesign", ["-s", "-", "-f" | files], stderr_to_stdout: true)
