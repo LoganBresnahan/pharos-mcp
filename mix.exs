@@ -279,8 +279,60 @@ defmodule Pharos.MixProject do
     build_lib = Path.join([Mix.Project.build_path(), "lib"])
 
     case File.ls(build_lib) do
-      {:ok, deps} -> Enum.each(deps, &fix_dep_app_name(build_lib, &1))
-      {:error, _} -> :ok
+      {:ok, deps} ->
+        Enum.each(deps, &fix_dep_app_name(build_lib, &1))
+        retarget_wrapper_consumers(build_lib, deps)
+
+      {:error, _} ->
+        :ok
+    end
+  end
+
+  # Point every dep `.app` that lists a wrapper (`hpack_erl`) at the
+  # real OTP app (`hpack`) instead. `mix release` builds its app list
+  # from these files, and a consumer naming the wrapper puts the empty
+  # wrapper app in the release. systools then finds `hpack_erl.app`
+  # first through the `hpack` mirror (a symlink to `hpack_erl`, so it
+  # holds both `.app` files), cannot strip a dir named for another app,
+  # and emits `$RELEASE_LIB/hpack/ebin/hpack_erl-0.3.0/ebin`: an
+  # unbootable boot script. Whether mix_gleam writes `hpack_erl` or
+  # `hpack` into mist.app varied between builds (a fresh CI checkout
+  # got the former, an old local _build the latter), so this makes it
+  # deterministic: no consumer names a wrapper, and no wrapper ships.
+  defp retarget_wrapper_consumers(build_lib, deps) do
+    real_deps = Enum.reject(deps, &(File.read_link(Path.join(build_lib, &1)) |> elem(0) == :ok))
+
+    wrappers =
+      for dep <- real_deps,
+          app = Path.join([build_lib, dep, "ebin", "#{dep}.app"]),
+          wrapper_app?(app),
+          {:ok, [{:application, _, props}]} = :file.consult(String.to_charlist(app)),
+          {:applications, apps} = List.keyfind(props, :applications, 0),
+          into: %{},
+          do: {String.to_atom(dep), List.last(apps)}
+
+    if wrappers != %{} do
+      for dep <- real_deps,
+          app <- Path.wildcard(Path.join([build_lib, dep, "ebin", "*.app"])),
+          not wrapper_app?(app),
+          do: retarget_app_file(app, wrappers)
+    end
+  end
+
+  defp retarget_app_file(path, wrappers) do
+    {:ok, [{:application, name, props}]} = :file.consult(String.to_charlist(path))
+
+    case List.keyfind(props, :applications, 0) do
+      {:applications, apps} ->
+        retargeted = Enum.map(apps, &Map.get(wrappers, &1, &1))
+
+        if retargeted != apps do
+          props = List.keystore(props, :applications, 0, {:applications, retargeted})
+          File.write!(path, :io_lib.format("~p.~n", [{:application, name, props}]))
+        end
+
+      nil ->
+        :ok
     end
   end
 
