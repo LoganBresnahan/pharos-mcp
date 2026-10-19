@@ -54,6 +54,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 032 | [Workspace root determination: vendored deps and rootless sessions](032-workspace-root-determination.md) | Accepted |
 | 033 | [Burrito from a fork: real embedded mode and an in-use lock on unpacks](033-burrito-fork-embedded-mode-in-use-lock.md) | Accepted |
 | 034 | [One shared daemon per build, reached through a native stdio shim](034-shared-daemon-and-native-shim.md) | Accepted |
+| 035 | [Releases without Burrito: a release per target, the shim as launcher, npm and install.sh](035-releases-without-burrito.md) | Proposed |
 
 ## Anticipated future ADRs
 
