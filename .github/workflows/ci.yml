@@ -62,7 +62,7 @@ jobs:
       - name: Set up Erlang, Elixir, Gleam, and rebar3
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "28.1"
+          otp-version: "28.1.1"
           elixir-version: "1.19.5"
           gleam-version: "1.17.0"
           rebar3-version: "3.27.0"
@@ -171,7 +171,7 @@ jobs:
       - name: Set up Erlang, Elixir, Gleam, and rebar3
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "28.1"
+          otp-version: "28.1.1"
           elixir-version: "1.19.5"
           gleam-version: "1.17.0"
           rebar3-version: "3.27.0"
