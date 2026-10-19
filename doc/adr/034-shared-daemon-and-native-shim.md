@@ -215,7 +215,9 @@ it in an MCP response, `runtime_language_config` included. Wherever
 pharos reports which session started an LSP, it gives the session id
 and cwd, never the env. The env is still process state, so a crash
 dump contains it: crash dumps are created `0600` in a `0700`
-directory. The daemon answers with one line,
+directory. The daemon itself also runs with its first shim's whole
+env, secrets included, for as long as it lives. That is the same uid
+only: `/proc/<pid>/environ` is readable by the owner alone. The daemon answers with one line,
 either `{"pharos_hello_ok": 1, "session": "<id>", "daemon_pid": N}` or
 `{"pharos_hello_error": "<reason>"}` followed by a close. A build
 mismatch is refused: it can only happen if a release was rebuilt in

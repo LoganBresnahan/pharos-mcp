@@ -256,7 +256,9 @@ fn spawn_daemon(release: &Release, paths: &DaemonPaths, key: &str) -> Result<i32
 /// Mark every fd from 3 up close-on-exec, so exec drops whatever the
 /// MCP client handed down without `O_CLOEXEC`. Marking rather than
 /// closing keeps std's own exec-error pipe working. Runs between fork
-/// and exec: async-signal-safe calls only.
+/// and exec: async-signal-safe calls only. The scan stops at the soft
+/// `RLIMIT_NOFILE`, capped at 65536 to bound the syscalls: an fd above
+/// 65536 (only possible under a raised limit) would still be inherited.
 unsafe fn mark_inherited_fds_cloexec() {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
