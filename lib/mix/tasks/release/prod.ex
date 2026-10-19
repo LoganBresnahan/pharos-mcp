@@ -18,14 +18,12 @@ defmodule Mix.Tasks.Release.Prod do
        shipping them out of sync is the bug 9b92aec fixed.
     3. `git commit -am "chore: release v<vsn>"`.
     4. `git tag v<vsn>`.
-    5. `MIX_ENV=prod mix do compile, release --overwrite` — full
-       multi-target Burrito build.
+    5. `MIX_ENV=prod mix do compile, release --overwrite`, which
+       builds this machine's target (ADR-035). Pushing the tag runs
+       .github/workflows/release.yml, which builds every target on
+       its own runner and publishes.
 
-  Burrito's runtime extraction cache is keyed by version, so the
-  new vsn means no cache wipe is needed: launching the binary will
-  extract into a fresh `pharos_erts-<otp>_<new_vsn>` directory.
-
-  Push the tag manually after verifying the binaries:
+  Push the tag manually after verifying the local build:
 
       git push && git push --tags
   """
@@ -67,7 +65,7 @@ defmodule Mix.Tasks.Release.Prod do
     end
 
     Mix.shell().info("")
-    Mix.shell().info("[release.prod] v#{new_vsn} built. Verify burrito_out/ then run:")
+    Mix.shell().info("[release.prod] v#{new_vsn} built. Verify _build/package/ then run:")
     Mix.shell().info("[release.prod]   git push && git push --tags")
   end
 
