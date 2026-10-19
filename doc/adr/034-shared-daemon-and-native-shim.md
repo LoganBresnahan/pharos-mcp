@@ -307,9 +307,9 @@ its description says so.
   its socket. In-flight work counts only through its connection, and
   an open connection is never idle.
 - **LSP idle stop**: an LSP with no request routed to it, from any
-  session, for `PHAROS_LSP_IDLE_SECS` (default 1800) gets
-  `shutdown`/`exit`. It can be overridden per language with
-  `idle_stop_secs`, and `0` means never. Bundled defaults are 7200 for
+  session, for 1800 s is stopped the way any eviction stops one: its
+  stdin closes. A language can set its own `idle_stop_secs` (TOML), and
+  `PHAROS_LSP_IDLE_SECS` overrides every language. `0` means never. Bundled defaults are 7200 for
   java, scala and haskell, whose cold starts take minutes. Today an
   LSP lives as long as its session, so this is new, deliberate memory
   reclamation.

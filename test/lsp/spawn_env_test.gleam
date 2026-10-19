@@ -4,6 +4,7 @@
 
 import gleam/bit_array
 import gleam/dict
+import gleam/erlang/process
 import gleam/int
 import gleam/json
 import gleam/string
@@ -11,6 +12,7 @@ import gleeunit/should
 import pharos/lsp/languages
 import pharos/lsp/pool
 import pharos/lsp/port
+import pharos/session_ctx
 import pharos/tools/session
 
 @external(erlang, "pharos_fs_ffi", "shell")
@@ -167,4 +169,40 @@ pub fn server_key_appends_the_variant_test() {
   |> should.equal(server.id <> "@" <> spec.variant)
   pool.server_key(pool.SpawnSpec(..spec, variant: ""))
   |> should.equal(server.id)
+}
+
+fn spec_for(language: String) -> pool.SpawnSpec {
+  let assert Ok(config) = dict.get(languages.default_registry(), language)
+  let assert Ok(server) = languages.primary_server(config)
+  session.build_spawn_spec("/proj", config, server)
+}
+
+pub fn idle_stop_defaults_to_thirty_minutes_test() {
+  spec_for("rust").idle_stop_ms
+  |> should.equal(1_800_000)
+}
+
+pub fn slow_cold_start_servers_idle_for_two_hours_test() {
+  spec_for("java").idle_stop_ms
+  |> should.equal(7_200_000)
+}
+
+pub fn pharos_lsp_idle_secs_overrides_every_language_test() {
+  let ctx =
+    session_ctx.new(
+      "idle-env",
+      "/",
+      dict.from_list([#("PHAROS_LSP_IDLE_SECS", "2")]),
+    )
+  let reply = process.new_subject()
+  process.spawn(fn() {
+    session_ctx.bind(ctx)
+    process.send(reply, #(
+      spec_for("java").idle_stop_ms,
+      spec_for("rust").idle_stop_ms,
+    ))
+  })
+  let assert Ok(limits) = process.receive(reply, 5000)
+  limits
+  |> should.equal(#(2000, 2000))
 }

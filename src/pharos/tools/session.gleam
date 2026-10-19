@@ -1007,8 +1007,28 @@ pub fn build_spawn_spec(
     warm_probe: server.warm_probe,
     variant: spawn_fingerprint(config, server, init_params, env),
     env: env,
+    idle_stop_ms: idle_stop_secs(config) * 1000,
   )
 }
+
+/// ADR-034 idle limit for this language's LSP, in seconds:
+/// `PHAROS_LSP_IDLE_SECS` when set (it overrides every language),
+/// else the language's `idle_stop_secs`, else 1800. `0` never stops.
+fn idle_stop_secs(config: LanguageConfig) -> Int {
+  let from_env = case session_ctx.getenv("PHAROS_LSP_IDLE_SECS") {
+    option.Some(raw) ->
+      case int.parse(string.trim(raw)) {
+        Ok(n) if n >= 0 -> option.Some(n)
+        _ -> option.None
+      }
+    option.None -> option.None
+  }
+  from_env
+  |> option.or(config.idle_stop_secs)
+  |> option.unwrap(default_idle_stop_secs)
+}
+
+const default_idle_stop_secs = 1800
 
 /// ADR-034 spawn fingerprint, 8 hex digits: the binary the command
 /// resolves to on the session's `PATH`, its args, the initialize

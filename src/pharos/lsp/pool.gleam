@@ -107,6 +107,9 @@ pub type SpawnSpec {
     /// The LSP's environment: that of the session that starts it.
     /// `[]` inherits the BEAM's.
     env: List(#(String, String)),
+    /// ADR-034: stop the LSP after this long with no `get` for its
+    /// key, from any session. `0` never stops it.
+    idle_stop_ms: Int,
   )
 }
 
@@ -232,6 +235,10 @@ pub opaque type Msg {
   )
   /// Sent to the pool actor when one of its monitored procs exits.
   ProcDown(monitor_ref: process.Monitor, reason: dynamic.Dynamic)
+  /// ADR-034: periodic check for LSPs idle past their limit. Only
+  /// the sweep carrying the current token runs, so pulling a sweep
+  /// earlier never leaves two chains ticking.
+  IdleSweep(token: Int)
   /// Operator-requested kill via `kill_lsp/4`. server_id="" means
   /// "kill every server cached for this (language, workspace)".
   KillLsp(
@@ -314,6 +321,13 @@ type State {
     /// workers (running off-actor) can post `SpawnCompleted`
     /// back into the pool's mailbox.
     self_subject: Subject(Msg),
+    /// ADR-034 idle stop: when each key was last asked for, and how
+    /// long it may sit unused (from the latest spec; `0` = never).
+    last_used_ms: Dict(ProcKey, Int),
+    idle_stop_ms: Dict(ProcKey, Int),
+    /// The pending sweep's token and when it fires.
+    sweep_token: Int,
+    sweep_due_ms: Int,
   )
 }
 
@@ -401,15 +415,27 @@ fn start_internal() -> Result(actor.Started(Subject(Msg)), actor.StartError) {
         lsp_state: dict.new(),
         spawner_monitors: dict.new(),
         self_subject: self,
+        last_used_ms: dict.new(),
+        idle_stop_ms: dict.new(),
+        sweep_token: 0,
+        sweep_due_ms: now_ms() + idle_sweep_max_ms,
       ))
       |> actor.selecting(selector)
       |> actor.returning(self),
     )
   }
 
-  actor.new_with_initialiser(default_call_timeout_ms, initialise)
-  |> actor.on_message(handle_message)
-  |> actor.start()
+  case
+    actor.new_with_initialiser(default_call_timeout_ms, initialise)
+    |> actor.on_message(handle_message)
+    |> actor.start()
+  {
+    Ok(started) -> {
+      process.send_after(started.data, idle_sweep_max_ms, IdleSweep(0))
+      Ok(started)
+    }
+    Error(e) -> Error(e)
+  }
 }
 
 /// Read the supervised pool's Subject from persistent_term.
@@ -581,6 +607,11 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         reply,
       )
 
+    IdleSweep(token) ->
+      case token == state.sweep_token {
+        True -> handle_idle_sweep(state)
+        False -> actor.continue(state)
+      }
     ProcDown(monitor_ref:, reason:) ->
       handle_proc_down(state, monitor_ref, reason)
 
@@ -772,6 +803,13 @@ fn handle_get(
   reply: Subject(Result(Proc, GetError)),
 ) -> actor.Next(State, Msg) {
   let key = #(language, workspace, server_key(spec))
+  let state =
+    State(
+      ..state,
+      last_used_ms: dict.insert(state.last_used_ms, key, now_ms()),
+      idle_stop_ms: dict.insert(state.idle_stop_ms, key, spec.idle_stop_ms),
+    )
+    |> sweep_within(sweep_interval(spec.idle_stop_ms))
 
   case dict.get(state.cache, key) {
     // Cache hit — reply immediately, no actor blocking.
@@ -1299,13 +1337,94 @@ fn system_time_ms() -> Int {
   system_time(Millisecond)
 }
 
+/// Longest gap between idle sweeps. Shorter idle limits sweep faster
+/// (a quarter of the shortest limit, at least every 250 ms) so a test
+/// with a 2 s limit sees its LSP stop within about 2.5 s.
+const idle_sweep_max_ms = 30_000
+
+fn handle_idle_sweep(state: State) -> actor.Next(State, Msg) {
+  let now = now_ms()
+  let expired =
+    state.cache
+    |> dict.keys
+    |> list.filter(fn(key) {
+      case
+        dict.get(state.idle_stop_ms, key),
+        dict.get(state.last_used_ms, key)
+      {
+        Ok(limit), Ok(last) -> limit > 0 && now - last >= limit
+        _, _ -> False
+      }
+    })
+  let state =
+    list.fold(expired, state, fn(state, key) {
+      let #(language, workspace, server) = key
+      log.fields_at("pharos/lsp/pool", log_entry.Info, "stopping idle LSP", [
+        #("language", language),
+        #("workspace", workspace),
+        #("server", server),
+        #(
+          "idle_ms",
+          int.to_string(
+            now - result.unwrap(dict.get(state.last_used_ms, key), now),
+          ),
+        ),
+      ])
+      let state = evict_key(state, key)
+      State(
+        ..state,
+        last_used_ms: dict.delete(state.last_used_ms, key),
+        idle_stop_ms: dict.delete(state.idle_stop_ms, key),
+      )
+    })
+  let next =
+    state.cache
+    |> dict.keys
+    |> list.filter_map(fn(key) { dict.get(state.idle_stop_ms, key) })
+    |> list.map(sweep_interval)
+    |> list.fold(idle_sweep_max_ms, int.min)
+  actor.continue(schedule_sweep(state, next))
+}
+
+/// How often to sweep for a key with this idle limit.
+fn sweep_interval(limit_ms: Int) -> Int {
+  case limit_ms {
+    0 -> idle_sweep_max_ms
+    _ -> int.clamp(limit_ms / 4, min: 250, max: idle_sweep_max_ms)
+  }
+}
+
+/// Make sure a sweep runs within `ms`, pulling the pending one earlier
+/// if it is due later.
+fn sweep_within(state: State, ms: Int) -> State {
+  case now_ms() + ms < state.sweep_due_ms {
+    True -> schedule_sweep(state, ms)
+    False -> state
+  }
+}
+
+fn schedule_sweep(state: State, ms: Int) -> State {
+  let token = state.sweep_token + 1
+  process.send_after(state.self_subject, ms, IdleSweep(token))
+  State(..state, sweep_token: token, sweep_due_ms: now_ms() + ms)
+}
+
+@external(erlang, "pharos_daemon_ffi", "now_ms")
+fn now_ms() -> Int
+
 fn handle_evict(
   state: State,
   language: String,
   workspace: String,
   server_id: String,
 ) -> actor.Next(State, Msg) {
-  let key = #(language, workspace, server_id)
+  actor.continue(evict_key(state, #(language, workspace, server_id)))
+}
+
+/// Close the cached LSP under `key` and forget everything keyed by
+/// it. A no-op when nothing is cached there.
+fn evict_key(state: State, key: ProcKey) -> State {
+  let #(language, workspace, server_id) = key
   case dict.get(state.cache, key) {
     Ok(spawned) -> {
       proc.close(spawned)
@@ -1317,11 +1436,9 @@ fn handle_evict(
           let #(l, w, s, _) = quad
           !{ l == language && w == workspace && s == server_id }
         })
-      actor.continue(
-        State(..state, cache: cache, opened: opened, lsp_state: lsp_state),
-      )
+      State(..state, cache: cache, opened: opened, lsp_state: lsp_state)
     }
-    Error(_) -> actor.continue(state)
+    Error(_) -> state
   }
 }
 

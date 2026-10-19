@@ -299,6 +299,7 @@ condition surfaces when it does.
 | 12 | **`sessions.{issue,validate,attach,detach}` `actor.call`** | `sessions.gleam` | 60s (`default_call_timeout_ms`) | not exposed | HTTP session bookkeeping — should never fire in practice. |
 | 13 | **HTTP request timeout** | mist | mist defaults | not exposed | Per-HTTP-request wall-clock. |
 | 15 | **Daemon idle exit** | `daemon.gleam` | 1800s | `PHAROS_DAEMON_IDLE_SECS` | No session connected for this long: the daemon stops itself (ADR-034). |
+| 17 | **LSP idle stop** | `pool.gleam` (`IdleSweep`) | 1800s; java, scala, haskell 7200s | `PHAROS_LSP_IDLE_SECS` (all languages), `[languages.<id>] idle_stop_secs` | No `pool.get` for the key, from any session: the LSP is evicted (stdin closed) and respawns on the next call (ADR-034). |
 | 16 | **Session drain on disconnect** | `daemon/conn.gleam` | 2000ms | `PHAROS_SHUTDOWN_DRAIN_MS` | A closed connection's in-flight requests get this long before they are cancelled. |
 | 14 | **Harness wall-clock** | `bin/dogfood-23lang.py` | `timeout_ms / 1000 + 45s` | `PER_LANG_TIMEOUT_MS` const + per-target override | Harness gives up + sends `notifications/cancelled`. M14 dogfood-only. |
 

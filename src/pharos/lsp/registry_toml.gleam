@@ -9,6 +9,7 @@
 //// schema reverse-engineering.
 
 import gleam/dict.{type Dict}
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
@@ -47,6 +48,10 @@ pub fn render_language(config: LanguageConfig) -> String {
     "dependency_cache_fragments = "
     <> render_string_list(config.dependency_cache_fragments)
   let env_keys = "env_keys = " <> render_string_list(config.env_keys)
+  let idle_stop = case config.idle_stop_secs {
+    Some(n) -> "idle_stop_secs = " <> int.to_string(n)
+    None -> "# idle_stop_secs unset: PHAROS_LSP_IDLE_SECS or 1800 (ADR-034)"
+  }
   let promotion_comment = case config.root_promotion {
     languages.NoPromotion ->
       "# root_promotion is locked to NoPromotion (not user-overridable)"
@@ -54,7 +59,16 @@ pub fn render_language(config: LanguageConfig) -> String {
       "# root_promotion is locked to CargoWorkspacePromotion (not user-overridable; ADR-015)"
   }
   let lang_block =
-    [header, extensions, markers, vendors, caches, env_keys, promotion_comment]
+    [
+      header,
+      extensions,
+      markers,
+      vendors,
+      caches,
+      env_keys,
+      idle_stop,
+      promotion_comment,
+    ]
     |> string.join("\n")
 
   let server_blocks =

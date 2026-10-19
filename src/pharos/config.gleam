@@ -165,6 +165,9 @@ pub type LanguageOverride {
     /// ADR-034. Env vars whose values split LSP sharing between
     /// sessions. Replaces the bundled list.
     env_keys: Option(List(String)),
+    /// ADR-034. Seconds of no requests before this language's LSP is
+    /// stopped; 0 never stops it.
+    idle_stop_secs: Option(Int),
     diagnostics_mode: Option(String),
     readiness_token: Option(String),
     servers: Option(List(ServerOverride)),
@@ -830,6 +833,7 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       "dependency_cache_fragments",
     ),
     env_keys: decode_optional_string_list(value, "env_keys"),
+    idle_stop_secs: decode_optional_int(value, "idle_stop_secs"),
     diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
     readiness_token: decode_optional_string(value, "readiness_token"),
     servers: decode_optional_servers_list(value),

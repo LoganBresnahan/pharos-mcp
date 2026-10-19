@@ -193,6 +193,7 @@ fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
     // schemes by default. Adding them via toml is deferred post-v1.0.
     custom_uri_schemes: dict.new(),
     env_keys: option.unwrap(override.env_keys, []),
+    idle_stop_secs: override.idle_stop_secs,
   )
 }
 
@@ -272,6 +273,7 @@ fn merge_one(
     ),
     // ADR-034. Replace-not-merge, like `root_markers`.
     env_keys: option.unwrap(override.env_keys, default.env_keys),
+    idle_stop_secs: option.or(override.idle_stop_secs, default.idle_stop_secs),
   )
 }
 

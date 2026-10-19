@@ -317,6 +317,7 @@ commands.
 | `PHAROS_HEARTBEAT_INTERVAL_MS` | Cadence of the idle-heartbeat log line (memory + LSP child count). | `60000` |
 | `PHAROS_SHUTDOWN_DRAIN_MS` | How long to wait for in-flight requests before initiating LSP shutdown on SIGTERM/stdin-EOF. | `2000` |
 | `PHAROS_CLEANUP_GRACE_MS` | How long `pharos cleanup --yes` waits between SIGTERM and SIGKILL on each orphan. | `5000` |
+| `PHAROS_LSP_IDLE_SECS` | Stop a language server after this many seconds with no request routed to it; it restarts on the next call. Overrides every language's `idle_stop_secs`. `0` never stops. | `1800` (java, scala, haskell: `7200`) |
 
 [↑ top](#pharos)
 

@@ -303,6 +303,11 @@ pub type LanguageConfig {
     /// them; `PATH` is left out because the resolved binary path
     /// already captures what it decided. Replace-not-merge from TOML.
     env_keys: List(String),
+    /// ADR-034. Stop this language's LSP after this many seconds with
+    /// no request routed to it, from any session; `Some(0)` never
+    /// stops it. `None` takes the default (1800). Bundled only for
+    /// the servers whose cold start takes minutes.
+    idle_stop_secs: Option(Int),
   )
 }
 
@@ -476,6 +481,7 @@ fn rust() -> LanguageConfig {
       ),
     ],
     env_keys: ["RUSTUP_TOOLCHAIN", "CARGO_HOME", "CARGO_TARGET_DIR"],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -509,6 +515,7 @@ fn go() -> LanguageConfig {
       ),
     ],
     env_keys: ["GOFLAGS", "GOWORK", "GOPATH", "GOROOT"],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -570,6 +577,7 @@ fn typescript() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -643,6 +651,7 @@ fn elixir() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -676,6 +685,7 @@ fn ruby() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -706,6 +716,7 @@ fn zig() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -743,6 +754,7 @@ fn cpp() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -790,6 +802,7 @@ fn scala() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: Some(7200),
     custom_uri_schemes: dict.new(),
   )
 }
@@ -823,6 +836,7 @@ fn clojure() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -857,6 +871,7 @@ fn haskell() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: Some(7200),
     custom_uri_schemes: dict.new(),
   )
 }
@@ -893,6 +908,7 @@ fn perl() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -926,6 +942,7 @@ fn html() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -956,6 +973,7 @@ fn css() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -988,6 +1006,7 @@ fn json_lang() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1018,6 +1037,7 @@ fn yaml() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1048,6 +1068,7 @@ fn markdown() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1080,6 +1101,7 @@ fn terraform() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1121,6 +1143,7 @@ fn erlang() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1184,6 +1207,7 @@ fn java() -> LanguageConfig {
     // passthrough to existing navigation tools (hover,
     // find_references, goto_definition).
     env_keys: ["JAVA_HOME"],
+    idle_stop_secs: Some(7200),
     custom_uri_schemes: dict.from_list([
       #(
         "jdt",
@@ -1232,6 +1256,7 @@ fn gleam() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1267,6 +1292,7 @@ fn lua() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1303,6 +1329,7 @@ fn bash() -> LanguageConfig {
       ),
     ],
     env_keys: [],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1364,6 +1391,7 @@ fn python() -> LanguageConfig {
       ),
     ],
     env_keys: ["VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH"],
+    idle_stop_secs: None,
     custom_uri_schemes: dict.new(),
   )
 }

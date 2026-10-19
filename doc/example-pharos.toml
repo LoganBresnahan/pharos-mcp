@@ -175,6 +175,14 @@
 # [languages.typescript]
 # env_keys = ["NODE_OPTIONS"]
 #
+# Stop a language's server after this many seconds with no request
+# routed to it (ADR-034); the next call starts it again. 0 never stops.
+# Defaults to 1800 (java, scala, haskell: 7200, for their slow cold
+# start). PHAROS_LSP_IDLE_SECS overrides every language.
+#
+# [languages.java]
+# idle_stop_secs = 0
+#
 # 3) JSON-string overrides for the deep-nested fields.
 #
 # `initialization_options_json` and `workspace_configuration_json`
