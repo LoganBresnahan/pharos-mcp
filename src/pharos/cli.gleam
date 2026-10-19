@@ -1,4 +1,4 @@
-//// CLI meta-commands: `--doctor` + `--purge-cache`.
+//// CLI meta-commands: `--doctor` and `--cleanup`.
 ////
 //// Both run before the supervised tree boots and exit when done.
 //// They share the same `Config` resolution path as a normal boot
@@ -8,7 +8,7 @@
 //// Exit codes:
 ////   0 — success / no issues found
 ////   1 — at least one diagnostic flagged a problem (doctor only)
-////   2 — operation failed outright (purge-cache I/O error, etc.)
+////   2 — operation failed outright
 
 import gleam/bit_array
 import gleam/dict
@@ -25,62 +25,6 @@ import pharos/lsp/instance_track
 import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/registry as lsp_registry
 import pharos/version
-
-/// Remove what pharos 0.1.x's Burrito wrapper unpacked
-/// (`<data>/.burrito/pharos_*`, ADR-033) that no running process still
-/// uses (ADR-035 §6). pharos 0.2 unpacks nothing; this is a one-release
-/// cleanup for upgraders. Only `pharos_*` entries are touched: the same
-/// root holds other Burrito apps' unpacks, geex 0.2.0's among them.
-///
-/// "Uses" is the rule install.sh prunes by: a running VM names its
-/// unpack on its command line (`-root`, `-bindir`). pharos 0.2 can't
-/// take the 0.1.x fork's `.burrito-in-use` lock (that needed the
-/// wrapper), but a 0.1.x process names its unpack either way. On
-/// Windows, with no `ps` to read, it lists the unpacks to remove by
-/// hand. Returns the exit code main should propagate.
-pub fn purge_cache() -> Int {
-  let root = legacy_burrito_root()
-  case list_pharos_extracts() {
-    [] -> {
-      io.println("pharos --purge-cache: no pharos 0.1.x unpacks under " <> root)
-      0
-    }
-    dirs ->
-      case command_lines() {
-        Error(_) -> {
-          io.println(
-            "pharos --purge-cache: can't list running processes here; once no "
-            <> "pharos 0.1.x runs, remove these by hand:",
-          )
-          list.each(dirs, fn(dir) { io.println("  " <> dir) })
-          0
-        }
-        Ok(lines) -> {
-          let results = purge_legacy_unpacks(dirs, lines)
-          list.each(results, fn(result) {
-            case result {
-              #(Removed, dir) -> io.println("removed " <> dir)
-              #(Kept, dir) ->
-                io.println("kept " <> dir <> ": a running pharos 0.1.x uses it")
-            }
-          })
-          let removed = list.count(results, fn(result) { result.0 == Removed })
-          io.println(
-            int.to_string(removed)
-            <> " removed, "
-            <> int.to_string(list.length(results) - removed)
-            <> " kept",
-          )
-          0
-        }
-      }
-  }
-}
-
-type PurgeOutcome {
-  Removed
-  Kept
-}
 
 /// Self-diagnostic. Loads Config the same way `pharos.boot` does,
 /// then walks every knob and language entry, printing resolved
@@ -142,7 +86,7 @@ pub fn doctor() -> Int {
         <> int.to_string(list.length(legacy))
         <> " under "
         <> legacy_burrito_root()
-        <> " (`pharos --purge-cache` removes the unused ones)",
+        <> " (`pharos self prune` removes the unused ones)",
       )
   }
   io.println("")
@@ -516,15 +460,6 @@ fn legacy_burrito_root() -> String
 /// construction. Empty when the root doesn't exist.
 @external(erlang, "pharos_runtime_ffi", "list_pharos_extracts")
 fn list_pharos_extracts() -> List(String)
-
-@external(erlang, "pharos_runtime_ffi", "command_lines")
-fn command_lines() -> Result(List(String), Nil)
-
-@external(erlang, "pharos_runtime_ffi", "purge_legacy_unpacks")
-fn purge_legacy_unpacks(
-  dirs: List(String),
-  command_lines: List(String),
-) -> List(#(PurgeOutcome, String))
 
 @external(erlang, "pharos_fs_ffi", "which_executable")
 fn which_executable(cmd: String) -> Result(String, Nil)

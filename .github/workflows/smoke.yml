@@ -106,6 +106,12 @@ jobs:
           [ -L "$link" ] || { echo "the postinstall didn't swap $link for the native shim" >&2; exit 1; }
           pharos --version
           [ "$(pharos --version)" = "pharos ${{ inputs.version }}" ]
+      - name: pharos self update names the npm command
+        shell: bash
+        run: |
+          if out=$(pharos self update 2>&1); then echo "self update should exit non-zero under npm: $out" >&2; exit 1; fi
+          echo "$out"
+          [[ "$out" == *"npm install -g pharos-mcp@latest"* ]] || { echo "self update didn't print the npm command" >&2; exit 1; }
       - name: Smoke
         env:
           PHAROS_RUNTIME_DIR: ${{ runner.temp }}/pharos-rt
@@ -169,6 +175,12 @@ jobs:
         run: |
           link=$(npm prefix -g)/lib/node_modules/pharos-mcp/bin/pharos.js
           [ -f "$link" ] && [ ! -L "$link" ] || { echo "$link should be the JS fallback" >&2; exit 1; }
+      - name: pharos self update names the npm command
+        shell: bash
+        run: |
+          if out=$(pharos self update 2>&1); then echo "self update should exit non-zero under npm: $out" >&2; exit 1; fi
+          echo "$out"
+          [[ "$out" == *"npm install -g pharos-mcp@latest"* ]] || { echo "self update didn't print the npm command" >&2; exit 1; }
       - name: Smoke through the fallback
         env:
           PHAROS_RUNTIME_DIR: ${{ runner.temp }}/pharos-rt

@@ -126,11 +126,15 @@ defmodule Mix.Pharos.ReleaseSteps do
   end
 
   @doc """
-  Write `BUILD_ID`, pack the release as `_build/package/pharos-<version>-<target>.tar.gz`
-  with a top directory of the same name and a `SHA256SUMS` beside it, and copy it into its
+  Put `install.sh` in the release (`pharos self rollback|prune|uninstall` run the one their
+  version ships, ADR-036), write `BUILD_ID`, pack the release as
+  `_build/package/pharos-<version>-<target>.tar.gz` with a top directory of the same name, and
+  put a `SHA256SUMS` and `install.sh` beside it, as the GitHub release has them (so a
+  `file://` `PHAROS_DOWNLOAD_URL` works for `self update` too). Then copy the release into its
   npm platform package's `release/`.
   """
   def package(%Mix.Release{path: path, version: version} = release) do
+    File.cp!("install.sh", Path.join(path, "install.sh"))
     File.write!(Path.join(path, "BUILD_ID"), build_id(path) <> "\n")
 
     out = Path.expand(@package)
@@ -152,6 +156,7 @@ defmodule Mix.Pharos.ReleaseSteps do
     File.rm_rf!(staged)
     sha = :crypto.hash(:sha256, File.read!(Path.join(out, archive))) |> Base.encode16(case: :lower)
     File.write!(Path.join(out, "SHA256SUMS"), "#{sha}  #{archive}\n")
+    File.cp!("install.sh", Path.join(out, "install.sh"))
 
     npm = Path.join(["npm", "@pharos-mcp", target(), "release"])
     File.rm_rf!(npm)

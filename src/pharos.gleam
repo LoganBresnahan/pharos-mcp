@@ -97,7 +97,7 @@ pub fn main() -> Nil {
 /// Hook called from `pharos_app_ffi:start/2` so meta-flag dispatch
 /// works in a release. The release boots through the OTP application
 /// controller into `pharos_app_ffi:start/2` and never calls `main/0`,
-/// so `--doctor`, `--purge-cache` and `--cleanup` would never be
+/// so `--doctor` and `--cleanup` would never be
 /// checked. This function lets the app-start callback run the same
 /// dispatch.
 ///
@@ -341,10 +341,6 @@ fn handle_meta_flags(args: List(String)) -> MetaOutcome {
       let _exit = cli.doctor()
       Handled
     }
-    Some(PurgeCache) -> {
-      let _exit = cli.purge_cache()
-      Handled
-    }
     Some(Cleanup(apply)) -> {
       let _exit = cli.cleanup(apply, 5000)
       Handled
@@ -358,7 +354,6 @@ type MetaFlag {
   PrintDefaultConfig
   PrintLanguageConfig(String)
   Doctor
-  PurgeCache
   /// ADR-030 Layer 3: scan `~/.local/share/pharos/instances/` for
   /// subdirs whose owner pharos PID is dead, list them, and on
   /// `--yes` reap the listed LSP children. `Bool` is `True` when
@@ -379,7 +374,6 @@ fn match_meta(args: List(String)) -> Option(MetaFlag) {
           "--help" | "-h" -> list.Stop(Some(HelpRequested))
           "--print-default-config" -> list.Stop(Some(PrintDefaultConfig))
           "--doctor" -> list.Stop(Some(Doctor))
-          "--purge-cache" -> list.Stop(Some(PurgeCache))
           "--cleanup" ->
             // Dry-run by default; `--cleanup --yes` applies.
             list.Stop(Some(Cleanup(list.contains(args, "--yes"))))
@@ -706,6 +700,18 @@ Commands
   daemon stop [--all]        Stop this version's daemon (or all).
   daemon                     Run this version's daemon in the
                              foreground.
+  self update [--version V]  Install the latest pharos (or V) with
+                             the release's install.sh.
+  self rollback              Switch back to the previous version.
+  self prune                 Remove the versions install.sh no
+                             longer keeps (all but the current and
+                             the previous, unless running), and what
+                             pharos 0.1.x unpacked under
+                             <data>/.burrito/pharos_* that nothing
+                             running uses.
+  self uninstall             Remove pharos's versions and its link.
+                             (An npm install says which npm command
+                             does each of these instead.)
 
 Flags
   --version, -V              Print version and exit.
@@ -731,10 +737,8 @@ Flags
                              plus recent daemon fallbacks.
   --cleanup [--yes]          List (with --yes, stop) language servers
                              orphaned by a pharos that died uncleanly.
-  --purge-cache              Remove what pharos 0.1.x unpacked under
-                             <data>/.burrito/pharos_* that no running
-                             process uses. pharos 0.2 unpacks
-                             nothing; this is upgrade cleanup.
+  --purge-cache              Deprecated: now `pharos self prune`,
+                             which it runs. Goes in the next release.
 
 Configuration sources (precedence: lower wins under higher)
   1. Compiled-in defaults

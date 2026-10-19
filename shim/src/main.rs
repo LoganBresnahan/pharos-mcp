@@ -10,6 +10,9 @@
 //!
 //! Linux and macOS only. Windows users run pharos inside WSL (ADR-035).
 //! - `daemon status|stop [--all]`: operator requests to running daemons.
+//! - `self update|rollback|prune|uninstall`: manage the installed
+//!   pharos (ADR-036), here, without booting the runtime.
+//!   `--purge-cache` is a deprecated alias of `self prune`.
 //! - `daemon` alone: run this build's daemon in the foreground.
 //! - `--version`: answered here, without booting the runtime.
 //! - Anything else: handed to the bundled runtime unchanged.
@@ -22,6 +25,7 @@ mod json;
 mod launch;
 mod paths;
 mod release;
+mod self_cmd;
 
 use std::env;
 use std::ffi::OsString;
@@ -47,6 +51,11 @@ fn main() -> ExitCode {
         }
         Some("--direct") => direct(&release, &args[1..]),
         Some("daemon") => daemon_command(&release, &args),
+        Some("self") => self_cmd::run(&release, &args[1..]),
+        Some("--purge-cache") if args.len() == 1 => {
+            eprintln!("pharos: --purge-cache is deprecated and goes in the next release; it is `pharos self prune` now, which this runs");
+            self_cmd::run(&release, &[OsString::from("prune")])
+        }
         Some(_) => direct(&release, &args),
     }
 }

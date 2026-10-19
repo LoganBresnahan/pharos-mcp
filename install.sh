@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install pharos (ADR-035 §4). This is geex's install.sh (geex ADR-0041 §4, at geex d3e77c5)
+# Install pharos (ADR-035 §4). This is geex's install.sh (geex ADR-0041 §4, at geex 286d128)
 # with pharos's names; keep the two in step.
 #
 #   curl -fsSL https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/install.sh | sh
@@ -7,6 +7,7 @@
 #
 #   sh install.sh [--version VERSION] [--force]   install (default: the latest release)
 #   sh install.sh --rollback                      switch back to the previous version
+#   sh install.sh --prune                         remove the versions an install would remove
 #   sh install.sh --uninstall                     remove pharos's program files and its link
 #
 # Each version unpacks whole into $PHAROS_INSTALL_DIR/versions/VERSION (default
@@ -28,11 +29,13 @@ die() { printf '%s\n' "$APP install: $*" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-usage: install.sh [--version VERSION] [--force] | --rollback | --uninstall
+usage: install.sh [--version VERSION] [--force] | --rollback | --prune | --uninstall
 
   --version VERSION    install VERSION instead of the latest release
   --force              install again though VERSION is the current one
   --rollback           switch back to the previous version
+  --prune              remove every version but the current and the previous one, unless a
+                       running pharos uses it (an install does this too); downloads nothing
   --uninstall          remove pharos's versions and ~/.local/bin/pharos (keeps settings,
                        logs and memories)
 
@@ -51,6 +54,7 @@ while [ $# -gt 0 ]; do
     --version=*) version=${1#--version=}; version=${version#v}; shift ;;
     --force) force=1; shift ;;
     --rollback) action=rollback; shift ;;
+    --prune) action=prune; shift ;;
     --uninstall) action=uninstall; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
@@ -127,8 +131,8 @@ prune() {
   for dir in "$versions"/* "$versions"/.old-* "$versions"/.tmp-*; do
     [ -d "$dir" ] || continue
     name=${dir##*/}
-    [ "$name" = "$keep_current" ] && continue
-    [ "$name" = "$keep_previous" ] && continue
+    if [ "$name" = "$keep_current" ]; then say "kept $name (current)"; continue; fi
+    if [ "$name" = "$keep_previous" ]; then say "kept $name (previous)"; continue; fi
     case $name in
       .tmp-*) kill -0 "${name#.tmp-}" 2>/dev/null && continue ;;
     esac
@@ -269,6 +273,17 @@ do_rollback() {
   say "rolled back to pharos $prev (pharos $current is now the previous version)"
 }
 
+# No current version (no link, or one to another layout) is nothing to prune: the current one is
+# what decides what stays.
+do_prune() {
+  read_current
+  if [ -z "$current" ]; then
+    say "no pharos installed at $link; nothing to prune"
+    return 0
+  fi
+  prune "$current"
+}
+
 do_uninstall() {
   read_current
   read_running
@@ -286,5 +301,6 @@ do_uninstall() {
 case $action in
   install) do_install ;;
   rollback) do_rollback ;;
+  prune) do_prune ;;
   uninstall) do_uninstall ;;
 esac

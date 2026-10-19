@@ -33,7 +33,7 @@ start(_Type, Args) ->
             %% application controller — `pharos:main/0` is NOT
             %% called. Meta-flag dispatch (handle_meta_flags) lives
             %% inside main/0, so without this hook flags like
-            %% `--doctor`, `--purge-cache`, and `--cleanup` would
+            %% `--doctor` and `--cleanup` would
             %% silently fall through into normal boot mode. Run
             %% the dispatcher here; on a Handled outcome we halt
             %% with the exit code the CLI returned. On Continue we

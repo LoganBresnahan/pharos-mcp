@@ -341,24 +341,18 @@ fn wildcard_atom() -> Dynamic
 
 // -- pharos 0.1.x Burrito unpacks (ADR-035 §6) --------------------------
 //
-// pharos 0.2 unpacks nothing, but `--purge-cache` and `--doctor` deal
-// with what 0.1.x's Burrito wrapper left under `<data>/.burrito`. Pin
-// the path shape (the pre-v0.1.2 FFI used filename:basedir(user_cache,
-// ...) joined with "burrito_runtime/_/pharos", a path Burrito never
-// creates) and the purge rule: only pharos_* entries, and only those
-// no running command line names.
+// pharos 0.2 unpacks nothing, but `--doctor` reports what 0.1.x's
+// Burrito wrapper left under `<data>/.burrito` (`pharos self prune`,
+// in the shim, removes it). Pin the path shape (the pre-v0.1.2 FFI
+// used filename:basedir(user_cache, ...) joined with
+// "burrito_runtime/_/pharos", a path Burrito never creates) and the
+// filter: only pharos_* entries.
 
 @external(erlang, "pharos_runtime_ffi", "legacy_burrito_root")
 fn legacy_burrito_root() -> String
 
 @external(erlang, "pharos_runtime_ffi", "list_pharos_extracts")
 fn list_pharos_extracts() -> List(String)
-
-@external(erlang, "pharos_runtime_ffi", "purge_legacy_unpacks")
-fn purge_legacy_unpacks(
-  dirs: List(String),
-  command_lines: List(String),
-) -> List(#(Dynamic, String))
 
 @external(erlang, "pharos_fs_ffi", "setenv")
 fn setenv(key: String, value: String) -> Nil
@@ -371,9 +365,6 @@ fn rm_rf(path: String) -> Result(Nil, String)
 
 @external(erlang, "pharos_fs_ffi", "atomic_write_text")
 fn atomic_write_text(path: String, text: String) -> Result(Nil, String)
-
-@external(erlang, "pharos_fs_ffi", "is_directory")
-fn is_directory(path: String) -> Bool
 
 /// Run `body` with XDG_DATA_HOME set to `value` (Linux: that is where
 /// the root lives), then put the old value back.
@@ -429,24 +420,4 @@ pub fn list_pharos_extracts_filters_test() {
     string.starts_with(p, burrito_dir <> "/pharos_") |> should.be_true
   })
   let _ = rm_rf(scratch_root)
-}
-
-pub fn purge_keeps_unpacks_a_command_line_names_test() {
-  let root = "/tmp/pharos-test-purge/.burrito"
-  let _ = rm_rf("/tmp/pharos-test-purge")
-  let used = root <> "/pharos_erts-16.1_0.1.3"
-  let idle = root <> "/pharos_erts-16.1_0.1.2"
-  let assert Ok(_) = mkdir_p(used <> "/bin")
-  let assert Ok(_) = mkdir_p(idle <> "/bin")
-  let results =
-    purge_legacy_unpacks([used, idle], [
-      "/usr/bin/bash",
-      used <> "/erts-16.1/bin/beam.smp -- -root " <> used <> " -progname erl",
-    ])
-  list.map(results, fn(r) { #(string.inspect(r.0), r.1) })
-  |> should.equal([#("Kept", used), #("Removed", idle)])
-  is_directory(used) |> should.be_true
-  is_directory(idle) |> should.be_false
-  let _ = rm_rf("/tmp/pharos-test-purge")
-  Nil
 }

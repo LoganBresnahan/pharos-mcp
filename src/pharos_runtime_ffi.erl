@@ -63,8 +63,6 @@
     session_overrides_load/0,
     argv/0,
     legacy_burrito_root/0,
-    command_lines/0,
-    purge_legacy_unpacks/2,
     list_pharos_extracts/0,
     beam_version_info/0,
     self_mailbox_len/0,
@@ -988,8 +986,8 @@ argv() ->
 %% Where pharos 0.1.x's Burrito wrapper unpacked itself (ADR-033): the
 %% `.burrito` root holding per-version dirs like
 %% `pharos_erts-16.1_0.1.2`. pharos 0.2 doesn't use it (ADR-035); it is
-%% read only so `--purge-cache` and `--doctor` can deal with what 0.1.x
-%% left. The root is SHARED with other Burrito apps (geex 0.2.0's
+%% read only so `--doctor` can report what 0.1.x left (the shim's
+%% `pharos self prune` removes it, by the same path rule). The root is SHARED with other Burrito apps (geex 0.2.0's
 %% `geex_erts-*`, next_ls, …), so callers MUST narrow every operation
 %% to `pharos_*` children: see list_pharos_extracts/0.
 %%
@@ -1065,35 +1063,6 @@ list_pharos_extracts() ->
                  lists:prefix("pharos_", N),
                  filelib:is_dir(filename:join(RootStr, N)) ]
     end.
-
-%% Every running process's command line, read once (`ps -A -ww -o
-%% args=`, the rule install.sh prunes by), or `error` where there is no
-%% `ps` (Windows).
-command_lines() ->
-    case os:type() of
-        {win32, _} -> {error, nil};
-        _ ->
-            case os:find_executable("ps") of
-                false -> {error, nil};
-                Ps ->
-                    Out = os:cmd(Ps ++ " -A -ww -o args="),
-                    {ok, [unicode:characters_to_binary(L)
-                          || L <- string:split(Out, "\n", all), L =/= ""]}
-            end
-    end.
-
-%% `--purge-cache` (ADR-035 §6): remove each pharos 0.1.x unpack in
-%% `Dirs` that no command line in `CommandLines` names (a running VM
-%% carries its unpack in `-root` and `-bindir`); keep the rest. Returns
-%% `{removed | kept, Dir}` per directory, in order.
-purge_legacy_unpacks(Dirs, CommandLines) ->
-    [case lists:any(fun(Line) -> binary:match(Line, <<Dir/binary, "/">>) =/= nomatch end,
-                    CommandLines) of
-         true -> {kept, Dir};
-         false ->
-             _ = file:del_dir_r(binary_to_list(Dir)),
-             {removed, Dir}
-     end || Dir <- Dirs].
 
 %% BEAM + ERTS version snapshot for `pharos --doctor`. Every value
 %% is a binary so the Gleam side can render without atom-to-string
