@@ -1,103 +1,38 @@
 #!/usr/bin/env node
-// Node shim that exec's the platform-native pharos burrito binary.
+// pharos-mcp's command, in the one case it is still JavaScript
+// (ADR-035 §5).
 //
-// MCP hosts (Claude Code, Cursor, ChatGPT Desktop, Claude Desktop)
-// configure pharos as `{ "command": "pharos" }` (after `npm install
-// -g pharos-mcp`) or `{ "command": "npx", "args": ["-y",
-// "pharos-mcp"] }`. Either way, npm puts this shim on PATH; the
-// shim resolves the right platform sub-package via require.resolve
-// and exec's its binary.
-//
-// The platform sub-packages (@pharos-mcp/linux-x64, etc.) are
-// declared as optionalDependencies in this package's package.json,
-// with `os` and `cpu` fields on each sub-package. npm filters
-// optional deps at install time, so exactly one platform package
-// lands on disk per host. If none does (unsupported platform, OR
-// `--no-optional` flag), we print a clear error.
-//
-// Stdio is "inherit" so the child sees the host's actual stdin pipe
-// — pharos's stdio_worker opens a `{fd, 0, 0}` port over it for MCP
-// NDJSON. shell=false ensures argv passes through without
-// intermediate shell quoting.
+// On Linux and macOS the postinstall replaces this file with a symlink
+// to the platform package's native `pharos` (the ADR-034 shim), so an
+// MCP client's `pharos` runs with no node in its process tree. This
+// file stays, and runs, only when the postinstall didn't: an install
+// with --ignore-scripts, a failed swap, or Windows (npm's .cmd shims
+// need a script target). Then it runs the native `pharos` as a child
+// with this process's stdio, passes signals through, and exits with
+// its status. That costs a node per session, but only in that case.
 
 "use strict";
 
 const { spawn } = require("node:child_process");
-const path = require("node:path");
-const fs = require("node:fs");
+const { resolve } = require("../scripts/platform.js");
 
-const PLATFORM_MAP = {
-  "linux-x64": { pkg: "@pharos-mcp/linux-x64", bin: "pharos" },
-  "linux-arm64": { pkg: "@pharos-mcp/linux-arm64", bin: "pharos" },
-  "darwin-x64": { pkg: "@pharos-mcp/darwin-x64", bin: "pharos" },
-  "darwin-arm64": { pkg: "@pharos-mcp/darwin-arm64", bin: "pharos" },
-  "win32-x64": { pkg: "@pharos-mcp/win-x64", bin: "pharos.exe" },
-};
-
-function resolve_binary() {
-  const key = process.platform + "-" + process.arch;
-  const entry = PLATFORM_MAP[key];
-
-  if (!entry) {
-    console.error(
-      "pharos: unsupported platform/arch combination: " +
-        key +
-        ". Supported: " +
-        Object.keys(PLATFORM_MAP).join(", ") +
-        ". " +
-        "Open an issue at https://github.com/LoganBresnahan/pharos-mcp/issues " +
-        "if you need a missing platform."
-    );
-    process.exit(1);
-  }
-
-  // require.resolve(<pkg>/package.json) succeeds iff the optional
-  // dep was installed by npm — i.e., the host platform matched its
-  // os/cpu filters. If it throws, the user is on a supported
-  // platform but the optional dep was skipped (--no-optional, lock
-  // file mismatch, registry mirror issue).
-  let pkg_json_path;
-  try {
-    pkg_json_path = require.resolve(entry.pkg + "/package.json");
-  } catch (_err) {
-    console.error(
-      "pharos: platform package '" +
-        entry.pkg +
-        "' was not installed. " +
-        "This usually means npm install was run with --no-optional, or your registry " +
-        "mirror blocked the optional dependency. Retry with: " +
-        "npm install -g --include=optional pharos-mcp"
-    );
-    process.exit(1);
-  }
-
-  return path.join(path.dirname(pkg_json_path), "bin", entry.bin);
+const found = resolve();
+if (found.error) {
+  console.error(found.error);
+  process.exit(1);
 }
 
-const binary_path = resolve_binary();
+const child = spawn(found.bin, process.argv.slice(2), { stdio: "inherit", shell: false });
 
-// Defensive chmod +x. npm strips the executable bit from files not
-// declared in a `bin` field, and our platform sub-packages intentionally
-// don't declare one (the wrapper above is the CLI entrypoint). The
-// postinstall warmup chmod's once, but corp envs running with
-// --ignore-scripts skip postinstall — self-heal here on every launch.
-try {
-  const st = fs.statSync(binary_path);
-  if (!(st.mode & 0o111)) {
-    fs.chmodSync(binary_path, st.mode | 0o755);
-  }
-} catch (_) {
-  // If stat fails, fall through and let spawn surface the real error.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    if (child.exitCode === null) child.kill(signal);
+  });
 }
-
-const child = spawn(binary_path, process.argv.slice(2), {
-  stdio: "inherit",
-  shell: false,
-});
 
 child.on("exit", (code, signal) => {
   if (signal !== null) {
-    // Re-raise the signal so callers see the real exit cause.
+    process.removeAllListeners(signal);
     process.kill(process.pid, signal);
     return;
   }
@@ -105,6 +40,6 @@ child.on("exit", (code, signal) => {
 });
 
 child.on("error", (err) => {
-  console.error("pharos: failed to spawn binary: " + err.message);
+  console.error("pharos: failed to start " + found.bin + ": " + err.message);
   process.exit(1);
 });

@@ -1,6 +1,6 @@
 # @pharos-mcp/linux-arm64
 
-Linux aarch64 binary for **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
+Linux aarch64 release of **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
 
 Do not install this package directly. Install `pharos-mcp` instead —
 this package is pulled in automatically as an optional dependency on

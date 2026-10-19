@@ -48,22 +48,25 @@ npm install -g pharos-mcp@next   # latest rc / preview
 (Replace with `{ "command": "npx", "args": ["-y", "pharos-mcp"] }`
 if you used the npx path.)
 
-## How the binary ships
+## How it ships
 
-Per-platform binaries live in separate npm packages
-(`@pharos-mcp/linux-x64`, `@pharos-mcp/darwin-arm64`, etc.) declared
-as `optionalDependencies` of this package. npm filters by host
-`os` + `cpu` and installs exactly one. The `pharos` shim on PATH
-resolves it via `require.resolve` and exec's it.
+Each platform's release lives in its own npm package
+(`@pharos-mcp/linux-x64`, `@pharos-mcp/darwin-arm64`, etc.), declared
+as an `optionalDependency` of this one. npm filters by host `os`, `cpu`
+and, on Linux, `libc`, and installs exactly one. It holds the release
+unpacked: the native `pharos` front end and the Erlang runtime it
+starts. Nothing extracts at run time.
 
-## Postinstall warmup
+On Linux and macOS the postinstall points the `pharos` command straight
+at the native binary, so an MCP session runs no node process. Several
+sessions share one pharos daemon per version, and with it the language
+servers they have in common. If the postinstall can't run
+(`--ignore-scripts`, `PHAROS_SKIP_POSTINSTALL=1`), and always on
+Windows, `pharos` is a small node launcher in front of the same binary.
 
-The first install runs a one-time warmup (~30-60s) that extracts
-the Burrito-wrapped Erlang VM payload to
-`~/.local/share/.burrito/`, so the first MCP connection is fast
-(otherwise MCP hosts time out before extract completes).
-
-To skip warmup (e.g. in CI): set `PHAROS_SKIP_POSTINSTALL=1`.
+Linux needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12, RHEL 9 or
+newer. pharos 0.2 doesn't run on Alpine/musl or older distros yet;
+`pharos-mcp@0.1.4` still does.
 
 ## Full documentation
 

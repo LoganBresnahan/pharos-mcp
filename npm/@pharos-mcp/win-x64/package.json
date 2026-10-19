@@ -1,7 +1,7 @@
 {
   "name": "@pharos-mcp/win-x64",
   "version": "0.1.0",
-  "description": "Windows x86-64 binary for pharos-mcp. Do not install directly — install pharos-mcp instead; this package is pulled in automatically as an optionalDependency.",
+  "description": "Windows x86-64 release of pharos-mcp (the native shim plus its Erlang runtime). Do not install directly — install pharos-mcp instead; this package is pulled in automatically as an optionalDependency.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/LoganBresnahan/pharos-mcp",
   "repository": {
@@ -19,7 +19,7 @@
     "x64"
   ],
   "files": [
-    "bin/",
+    "release/",
     "README.md",
     "LICENSE"
   ],

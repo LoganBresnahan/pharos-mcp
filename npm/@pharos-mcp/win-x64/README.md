@@ -1,6 +1,6 @@
 # @pharos-mcp/win-x64
 
-Windows x86-64 binary for **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
+Windows x86-64 release of **[pharos-mcp](https://www.npmjs.com/package/pharos-mcp)**.
 
 Do not install this package directly. Install `pharos-mcp` instead —
 this package is pulled in automatically as an optional dependency on

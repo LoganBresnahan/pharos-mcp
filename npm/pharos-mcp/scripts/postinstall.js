@@ -1,223 +1,75 @@
 #!/usr/bin/env node
-// Postinstall warmup: trigger Burrito's first-run cache extract so
-// the user's first MCP connection is fast.
+// pharos-mcp postinstall (ADR-035 §5): make `pharos` the native shim.
 //
-// Without this script, the very first time an MCP host launches
-// pharos, Burrito's Zig wrapper xz-decompresses the embedded ERTS +
-// BEAM payload (~50 seconds on typical SSDs). MCP hosts have a 30s
-// connect timeout — every fresh install fails on the first try and
-// only works after a manual retry once the cache is populated.
-// Running the wrapper once during `npm install` moves that 50s wait
-// to install time, where it is expected.
+// npm links the `pharos` command to bin/pharos.js. On Linux and macOS
+// this replaces that file with a symlink to the installed platform
+// package's release/bin/pharos (esbuild's pattern), so every MCP
+// session runs the native shim directly and no node stays resident.
+// The shim follows its own symlinks to find the release beside it.
 //
-// Behavior:
-//   1. Resolve the platform binary via require.resolve on the
-//      installed optional sub-package (same logic as bin/pharos.js).
-//   2. Spawn it with stdin closed and stdout/stderr to /dev/null.
-//   3. Poll for the burrito cache directory until it exists OR a
-//      generous deadline expires.
-//   4. SIGKILL the wrapper. The cache survives the kill.
-//   5. Exit 0 always — install must not fail because of warmup.
-//
-// Skip conditions (exit 0 cleanly):
-//   - Bundled binary missing for this platform (unsupported platform
-//     or optional dep filtered out).
-//   - Cache directory already exists (warmed by a prior install).
-//   - PHAROS_SKIP_POSTINSTALL=1 set in env.
+// - Unsupported host (no build, musl, glibc < 2.35): say so and exit
+//   non-zero, so the install fails loudly instead of at first use.
+// - Windows: nothing to swap; bin/pharos.js runs the native pharos.
+// - PHAROS_SKIP_POSTINSTALL=1, or any failure to swap: bin/pharos.js
+//   stays and works as a fallback.
 
 "use strict";
 
-const { spawn } = require("node:child_process");
-const path = require("node:path");
 const fs = require("node:fs");
-const os = require("node:os");
-
-const SKIP_VAR = "PHAROS_SKIP_POSTINSTALL";
-const DEADLINE_MS = 120_000; // 2 minutes — generous for slow disks
-const POLL_INTERVAL_MS = 500;
-
-const PLATFORM_MAP = {
-  "linux-x64": { pkg: "@pharos-mcp/linux-x64", bin: "pharos" },
-  "linux-arm64": { pkg: "@pharos-mcp/linux-arm64", bin: "pharos" },
-  "darwin-x64": { pkg: "@pharos-mcp/darwin-x64", bin: "pharos" },
-  "darwin-arm64": { pkg: "@pharos-mcp/darwin-arm64", bin: "pharos" },
-  "win32-x64": { pkg: "@pharos-mcp/win-x64", bin: "pharos.exe" },
-};
+const path = require("node:path");
+const { resolve } = require("./platform.js");
 
 function main() {
-  if (process.env[SKIP_VAR] === "1") {
-    console.error("pharos: postinstall skipped (" + SKIP_VAR + "=1)");
-    return;
+  if (process.env.PHAROS_SKIP_POSTINSTALL === "1") {
+    console.error("pharos: postinstall skipped (PHAROS_SKIP_POSTINSTALL=1); bin/pharos.js runs pharos");
+    return 0;
+  }
+  const found = resolve();
+  if (found.error) {
+    console.error(found.error);
+    return 1;
+  }
+  if (process.platform === "win32") return 0;
+
+  // Belt and braces: npm keeps executable bits on publish, but a
+  // tarball repacked elsewhere may not.
+  for (const dir of [path.join(found.root, "bin"), ...erts_bins(found.root)]) {
+    for (const name of safe_readdir(dir)) {
+      const file = path.join(dir, name);
+      try {
+        const st = fs.statSync(file);
+        if (st.isFile() && !(st.mode & 0o111)) fs.chmodSync(file, st.mode | 0o755);
+      } catch (_) {}
+    }
   }
 
-  const bin = resolve_binary();
-  if (bin === null) {
-    // No matching platform package; bin/pharos.js will print an
-    // error at first run. Postinstall stays silent — installs of
-    // supplementary tools on unsupported platforms shouldn't error
-    // out.
-    return;
-  }
-
-  if (cache_exists()) {
-    console.error("pharos: cache already populated; skipping warmup");
-    return;
-  }
-
-  console.error("pharos: warming Burrito cache (one-time, ~30-60s)...");
-  warmup(bin)
-    .then(() => {
-      console.error("pharos: cache populated; first launch will be fast");
-    })
-    .catch((err) => {
-      // Soft-fail: print a warning, exit 0. The user can still use
-      // pharos; they'll just hit the 50s wait on their first MCP
-      // connection.
-      console.error(
-        "pharos: warmup failed (" +
-          err.message +
-          "); first launch will be slow"
-      );
-    });
-}
-
-function resolve_binary() {
-  const entry = PLATFORM_MAP[process.platform + "-" + process.arch];
-  if (!entry) return null;
-
+  const wrapper = path.join(__dirname, "..", "bin", "pharos.js");
+  const target = path.relative(path.dirname(wrapper), found.bin);
+  const tmp = wrapper + ".swap-" + process.pid;
   try {
-    const pkg_json_path = require.resolve(entry.pkg + "/package.json");
-    const candidate = path.join(path.dirname(pkg_json_path), "bin", entry.bin);
-    if (!fs.existsSync(candidate)) return null;
-
-    // npm strips +x from files not in a `bin` field; platform sub-
-    // packages don't declare one. Set executable bit so the spawn
-    // below works instead of silently soft-failing.
+    fs.symlinkSync(target, tmp);
+    fs.renameSync(tmp, wrapper);
+  } catch (err) {
     try {
-      const st = fs.statSync(candidate);
-      if (!(st.mode & 0o111)) {
-        fs.chmodSync(candidate, st.mode | 0o755);
-      }
+      fs.unlinkSync(tmp);
     } catch (_) {}
-
-    return candidate;
-  } catch (_err) {
-    return null;
+    console.error("pharos: kept the JS launcher (" + err.message + "); pharos still works, through node");
   }
+  return 0;
 }
 
-function cache_root() {
-  // Mirrors Burrito's per-platform install location (Zig 0.13's
-  // fs.getAppDataDir(".burrito") — see
-  // deps/burrito/src/wrapper.zig get_base_install_dir).
-  //
-  //   Linux  : $XDG_DATA_HOME/.burrito  or  ~/.local/share/.burrito
-  //   macOS  : ~/Library/Application Support/.burrito
-  //   Windows: %LOCALAPPDATA%\.burrito   (NOT %APPDATA% — Zig reads LOCALAPPDATA)
-  //
-  // Honors PHAROS_INSTALL_DIR like Burrito's wrapper.zig
-  // {UPPER_RELEASE_NAME}_INSTALL_DIR override.
-  const override = process.env.PHAROS_INSTALL_DIR;
-  if (override) return path.join(override, ".burrito");
-
-  if (process.platform === "win32") {
-    // LOCALAPPDATA = %USERPROFILE%\AppData\Local on Windows. Fall back
-    // to deriving it from USERPROFILE if unset, NOT to APPDATA (which
-    // is %USERPROFILE%\AppData\Roaming — wrong dir).
-    const localAppData =
-      process.env.LOCALAPPDATA ||
-      (process.env.USERPROFILE &&
-        path.join(process.env.USERPROFILE, "AppData", "Local"));
-    if (!localAppData) return null;
-    return path.join(localAppData, ".burrito");
-  }
-
-  if (process.platform === "darwin") {
-    return path.join(
-      os.homedir(),
-      "Library",
-      "Application Support",
-      ".burrito"
-    );
-  }
-
-  // Linux + other unix-likes: XDG Base Directory Specification.
-  // Treat empty XDG_DATA_HOME as unset.
-  const xdg = process.env.XDG_DATA_HOME;
-  if (xdg) return path.join(xdg, ".burrito");
-  return path.join(os.homedir(), ".local", "share", ".burrito");
+function erts_bins(root) {
+  return safe_readdir(root)
+    .filter((name) => name.startsWith("erts-"))
+    .map((name) => path.join(root, name, "bin"));
 }
 
-function cache_exists() {
-  const root = cache_root();
-  if (root === null) return false;
-  if (!fs.existsSync(root)) return false;
-
-  // Burrito creates a versioned directory like
-  // `pharos_erts-16.1_0.1.0`. Any pharos_* entry counts as warm.
+function safe_readdir(dir) {
   try {
-    return fs.readdirSync(root).some((entry) => entry.startsWith("pharos_"));
+    return fs.readdirSync(dir);
   } catch (_) {
-    return false;
+    return [];
   }
 }
 
-function warmup(bin) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, [], {
-      stdio: ["ignore", "ignore", "ignore"],
-      detached: false,
-    });
-
-    let settled = false;
-    const settle = (fn) => {
-      if (settled) return;
-      settled = true;
-      fn();
-    };
-
-    const start = Date.now();
-    const poll = setInterval(() => {
-      if (cache_exists()) {
-        clearInterval(poll);
-        // Cache directory exists. Burrito creates it early in extract
-        // and finishes shortly after. Give it a small grace window so
-        // the *.beam files inside are flushed, then kill.
-        setTimeout(() => {
-          try {
-            child.kill("SIGKILL");
-          } catch (_) {}
-          settle(resolve);
-        }, 2_000);
-        return;
-      }
-
-      if (Date.now() - start > DEADLINE_MS) {
-        clearInterval(poll);
-        try {
-          child.kill("SIGKILL");
-        } catch (_) {}
-        settle(() => reject(new Error("cache populate timed out")));
-      }
-    }, POLL_INTERVAL_MS);
-
-    child.on("error", (err) => {
-      clearInterval(poll);
-      settle(() => reject(err));
-    });
-
-    child.on("exit", (code, signal) => {
-      // Burrito wrapper may exit on its own once extract is complete
-      // (depending on platform). Treat that as success.
-      clearInterval(poll);
-      if (signal === "SIGKILL") {
-        // We killed it after seeing the cache dir; settle is already
-        // pending via the poll interval's timeout.
-        return;
-      }
-      settle(resolve);
-    });
-  });
-}
-
-main();
+process.exitCode = main();
