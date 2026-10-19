@@ -290,6 +290,16 @@ variables outside `env_keys`. That is the documented trade, and
 `runtime_language_config` shows which session started each LSP, by
 session id and cwd.
 
+Known limit: the diagnostics cache stays keyed by `(uri, server id)`
+without the variant. When two variants of one server run on the same
+root (two sessions with different `VIRTUAL_ENV`s, say), their pushed
+diagnostics for a shared file overwrite each other, and the last push
+wins. Keying it by variant would need every diagnostics lookup to
+rebuild the spawn spec. Revisit if it shows up in practice.
+`runtime_kill_lsp` with a bare server id stops every variant, including
+ones other sessions are using. That is acceptable for a debug tool, and
+its description says so.
+
 ### Lifecycle
 
 - **Daemon idle exit**: no connections for `PHAROS_DAEMON_IDLE_SECS`

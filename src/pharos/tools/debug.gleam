@@ -674,7 +674,8 @@ fn runtime_kill_lsp_definition() -> Json {
         <> "supervised LSP workers. Pass `server_id` to target one "
         <> "specific server when a language has multiple (per "
         <> "ADR-019). Omit `server_id` to kill every server cached "
-        <> "for the (language, workspace) pair.",
+        <> "for the (language, workspace) pair. Affects every session "
+        <> "sharing the LSP.",
       ),
     ),
     #(
