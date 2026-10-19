@@ -62,7 +62,9 @@
     session_overrides_store/1,
     session_overrides_load/0,
     argv/0,
-    burrito_cache_root/0,
+    legacy_burrito_root/0,
+    command_lines/0,
+    purge_legacy_unpacks/2,
     list_pharos_extracts/0,
     beam_version_info/0,
     self_mailbox_len/0,
@@ -977,41 +979,31 @@ session_overrides_load() ->
         error:badarg -> {error, nil}
     end.
 
-%% Plain CLI argv (after BEAM/Erlang flags). Returns the args the user
-%% supplied to the Burrito-wrapped binary. Empty list under `mix run`.
+%% Plain CLI argv (after BEAM/Erlang flags): the arguments after
+%% `-extra`, which the shim passes through (ADR-034). Empty list under
+%% `mix run`.
 argv() ->
     [unicode:characters_to_binary(A) || A <- init:get_plain_arguments()].
 
-%% Burrito's install base directory: the `.burrito` root that
-%% contains versioned per-app extract dirs like
-%% `pharos_erts-16.1_0.1.2`. SHARED with other Burrito apps
-%% (e.g. next_ls_erts-...), so callers MUST narrow operations to
-%% `pharos_*` children — see list_pharos_extracts/0.
+%% Where pharos 0.1.x's Burrito wrapper unpacked itself (ADR-033): the
+%% `.burrito` root holding per-version dirs like
+%% `pharos_erts-16.1_0.1.2`. pharos 0.2 doesn't use it (ADR-035); it is
+%% read only so `--purge-cache` and `--doctor` can deal with what 0.1.x
+%% left. The root is SHARED with other Burrito apps (geex 0.2.0's
+%% `geex_erts-*`, next_ls, …), so callers MUST narrow every operation
+%% to `pharos_*` children: see list_pharos_extracts/0.
 %%
-%% Mirrors the path resolution in deps/burrito/src/wrapper.zig
-%% get_base_install_dir, which on each platform calls Zig 0.13's
+%% The path Burrito's wrapper.zig computed, via Zig 0.13's
 %% fs.getAppDataDir(".burrito"):
 %%
 %%   Linux  : $XDG_DATA_HOME/.burrito  or  $HOME/.local/share/.burrito
 %%   macOS  : $HOME/Library/Application Support/.burrito
 %%   Windows: %LOCALAPPDATA%\.burrito   (NOT %APPDATA%; Zig reads LOCALAPPDATA)
 %%
-%% Env override: if PHAROS_INSTALL_DIR is set non-empty, returns
-%% `<PHAROS_INSTALL_DIR>/.burrito`. Matches the
-%% `{UPPER_RELEASE_NAME}_INSTALL_DIR` env var Burrito's wrapper.zig
-%% honors (deps/burrito/src/wrapper.zig, `get_base_install_dir`).
-%%
-%% Returns the path as a binary even when the directory does not
-%% yet exist (e.g. running under `mix start` rather than the wrapped
-%% binary). Caller is expected to check `filelib:is_dir/1` before
-%% sizing or deleting.
-burrito_cache_root() ->
-    Base = case os:getenv("PHAROS_INSTALL_DIR") of
-        false    -> default_burrito_base();
-        ""       -> default_burrito_base();
-        Override -> Override
-    end,
-    list_to_binary(filename:join(Base, ".burrito")).
+%% PHAROS_INSTALL_DIR no longer moves it: that variable now names the
+%% install root (ADR-035 §4).
+legacy_burrito_root() ->
+    list_to_binary(filename:join(default_burrito_base(), ".burrito")).
 
 default_burrito_base() ->
     case os:type() of
@@ -1063,7 +1055,7 @@ linux_default_data_home() ->
 %% Returns a list of absolute-path binaries. Empty list if the cache
 %% root does not exist OR contains no pharos_* entries.
 list_pharos_extracts() ->
-    RootBin = burrito_cache_root(),
+    RootBin = legacy_burrito_root(),
     RootStr = binary_to_list(RootBin),
     case file:list_dir(RootStr) of
         {error, _} -> [];
@@ -1073,6 +1065,35 @@ list_pharos_extracts() ->
                  lists:prefix("pharos_", N),
                  filelib:is_dir(filename:join(RootStr, N)) ]
     end.
+
+%% Every running process's command line, read once (`ps -A -ww -o
+%% args=`, the rule install.sh prunes by), or `error` where there is no
+%% `ps` (Windows).
+command_lines() ->
+    case os:type() of
+        {win32, _} -> {error, nil};
+        _ ->
+            case os:find_executable("ps") of
+                false -> {error, nil};
+                Ps ->
+                    Out = os:cmd(Ps ++ " -A -ww -o args="),
+                    {ok, [unicode:characters_to_binary(L)
+                          || L <- string:split(Out, "\n", all), L =/= ""]}
+            end
+    end.
+
+%% `--purge-cache` (ADR-035 §6): remove each pharos 0.1.x unpack in
+%% `Dirs` that no command line in `CommandLines` names (a running VM
+%% carries its unpack in `-root` and `-bindir`); keep the rest. Returns
+%% `{removed | kept, Dir}` per directory, in order.
+purge_legacy_unpacks(Dirs, CommandLines) ->
+    [case lists:any(fun(Line) -> binary:match(Line, <<Dir/binary, "/">>) =/= nomatch end,
+                    CommandLines) of
+         true -> {kept, Dir};
+         false ->
+             _ = file:del_dir_r(binary_to_list(Dir)),
+             {removed, Dir}
+     end || Dir <- Dirs].
 
 %% BEAM + ERTS version snapshot for `pharos --doctor`. Every value
 %% is a binary so the Gleam side can render without atom-to-string

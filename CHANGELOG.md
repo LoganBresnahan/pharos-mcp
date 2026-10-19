@@ -7,33 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+pharos 0.2 changes how it runs and how it ships. MCP client configs keep
+working unchanged: the command is still `pharos`.
 
-- **Updating pharos no longer crashes pharos servers already running in
-  other sessions.** Burrito's launcher deleted every older pharos unpack
-  on each launch, while the VM, never actually in embedded mode,
-  lazy-loaded modules from it. After an update, the first new session
-  killed the LSP tools of every other open session. pharos now builds
-  with a Burrito fork that boots embedded for real and skips any unpack
-  still in use ([ADR-033](doc/adr/033-burrito-fork-embedded-mode-in-use-lock.md)).
-- **The release now boots in embedded mode.** Its boot script pointed at a
-  nonexistent hpack directory, a side effect of the ADR-011 app-name
-  workaround. A release-time check now fails the build if any boot-script
-  path or module is missing.
-- **`PHAROS_INSTALL_DIR` no longer corrupts the stdio stream.** With the
-  override set, Burrito's launcher printed `[i] Install path is being
-  overridden…` lines to stdout ahead of the JSON-RPC frames. The fork now
-  sends every launcher log line to stderr.
+### Added
+
+- **One shared pharos per version, started on demand.** Each MCP session
+  now runs a small native `pharos` that connects to a shared daemon for
+  its version, starting it if none runs, and the daemon exits once it has
+  been idle for 30 minutes. Sessions on the same project share their
+  language servers, so a second Claude session on a warm repo answers at
+  once instead of paying rust-analyzer's or jdtls's cold start again, and
+  N sessions cost one set of LSPs instead of N
+  ([ADR-034](doc/adr/034-shared-daemon-and-native-shim.md)). Each
+  session keeps its own tool filter, timeout overrides, project config
+  (`.pharos.toml` above its working directory) and environment, which
+  its LSPs run with. On Windows, and with `PHAROS_MODE=direct` or
+  `--direct` anywhere, a session runs in its own process as before.
+- **`pharos daemon status|stop [--all]`** to see and stop daemons.
+- **install.sh**: `curl -fsSL https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/install.sh | sh`
+  installs into `~/.local/share/pharos/versions/<version>/`, links
+  `~/.local/bin/pharos`, checks sha256, keeps the previous version for
+  `--rollback`, and removes older ones once no running pharos uses them.
+- **Language servers stop after 30 idle minutes** (2 hours for Java,
+  Scala and Haskell) and restart on the next call; `idle_stop_secs` per
+  language, or `PHAROS_LSP_IDLE_SECS`, changes it, and `0` never stops.
+- **`env_keys`** per language (e.g. `VIRTUAL_ENV` for Python): sessions
+  that disagree on them get separate LSPs instead of sharing one.
 
 ### Changed
 
-- **`pharos --purge-cache` only removes extracted runtimes no running
-  pharos uses.** It used to delete every pharos extract, including ones
-  that other open sessions were running from. It now delegates to the
-  launcher's new `maintenance purge`, which follows the same in-use lock
-  as Burrito's own cleanup and reports each extract as removed or kept,
-  with the reason. The running pharos's own extract is always kept. To
-  remove all of them, quit every pharos and run `pharos maintenance purge`.
+- **No more Burrito.** Each platform ships its release unpacked, built
+  natively per target with a statically linked OpenSSL; nothing extracts
+  at run time, and there is no cache to warm or purge
+  ([ADR-035](doc/adr/035-releases-without-burrito.md)). After
+  `npm install -g pharos-mcp`, `pharos` is the native binary on Linux and
+  macOS: no node process per session.
+- **Linux needs glibc 2.35 or newer** (Ubuntu 22.04, Debian 12, RHEL 9 or
+  newer). pharos 0.2 needs glibc 2.35+ (Alpine/musl and older distros
+  aren't supported yet); pharos-mcp@0.1.4 still runs there.
+- **`PHAROS_INSTALL_DIR` now means install.sh's install root** (default
+  `~/.local/share/pharos`), not Burrito's extraction directory.
+  `PHAROS_BIN_DIR` sets where the `pharos` link goes.
+- **`pharos --purge-cache`** now only cleans up after 0.1.x: it removes
+  `~/.local/share/.burrito/pharos_*` unpacks no running process uses, and
+  touches nothing else there.
+- **Logs and crash dumps moved to `~/.local/state/pharos/log/`**
+  (`$XDG_STATE_HOME` honoured; the directory is 0700, crash files 0600).
+  0.1.x wrote to `~/.cache/pharos/log/`.
+- `runtime_set_tool_timeout` lasts until the session ends.
+- OTP 28.1.1.
+
+### Fixed
+
+- **A cancelled request is really cancelled.** `notifications/cancelled`
+  forwarded `$/cancelRequest` but never stopped pharos's own worker, so
+  the reply still went out. The worker is now killed first, and no reply
+  is sent.
+- **pharos exits in about a second**, not six, when its client closes
+  stdin or it is stopped: the LSP pool ignored the supervisor's shutdown
+  and was killed only after a 5 s timeout.
+- **Project memories land in the project**: the `.pharos/memories` layer
+  resolved against the server process's working directory, not the
+  session's.
+- The release boots in embedded mode, with a build-time check of its
+  boot script; a fresh build no longer ships the ADR-011 `hpack_erl`
+  wrapper app with an unbootable path.
 
 ## [0.1.4] — 2026-07-10
 

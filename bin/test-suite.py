@@ -148,7 +148,7 @@ SPECS = {
         expect_diagnostics=False,
         # gleam-lsp 1.16.0 panics ("Receiving LSP message: RecvError")
         # on stdin close mid-drain when many requests are in-flight,
-        # specifically reproducible under the burrito-built runtime;
+        # specifically reproducible under the release runtime;
         # serial mode dispatches one-at-a-time and dodges the race.
         # Dev-wrapper stdio doesn't trigger it but serial is a no-op
         # cost for a 13-tool harness.

@@ -14,8 +14,8 @@
 #   2. Boots Erlang directly (no Mix in the runtime path) so STDOUT stays
 #      reserved for the MCP protocol.
 #
-# Replaced by the Burrito-built binary at Milestone 6; until then, MCP
-# config points at this script.
+# The installed `pharos` (the shim plus a release, ADR-034/035) is what
+# MCP clients run; this script is for developing against `_build/dev`.
 
 set -euo pipefail
 
@@ -50,7 +50,7 @@ cd "$ORIG_CWD"
 # `prim_tty` driver claims fd 0 and emits a `driver_select stealing
 # control of fd=0` error to fd 1 once pharos opens its own
 # `{fd, 0, 0}` port for synchronous per-line stdin (M11 fix; mirrors
-# rel/vm.args.eex for the burrito release). The stray error line
+# rel/vm.args.eex for the release). The stray error line
 # corrupts the MCP NDJSON stream and the host hangs up.
 #
 # Code paths use absolute paths anchored at PROJECT_ROOT so they
@@ -63,7 +63,7 @@ cd "$ORIG_CWD"
 # `-extra` does NOT propagate plain arguments when `-noinput` is in
 # effect — empirically confirmed; meta flags silently fell through to
 # the normal boot path otherwise. The M11 stdio fix added `-noinput`
-# for the burrito-release prim_tty issue and quietly broke meta-flag
+# for the release prim_tty issue and quietly broke meta-flag
 # forwarding here at the same time.
 # SASL crash + supervisor reports surface silently-restarted children
 # (e.g. pool actor) in stderr so we can chase pool-cache-wipe events.

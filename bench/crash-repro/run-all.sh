@@ -6,15 +6,17 @@
 # asserts the post-condition. Tests are sequential, stop-on-fail by
 # default; pass --keep-going to run them all regardless.
 #
-# Requires: a freshly-built burrito binary at
-# `burrito_out/pharos_linux_x64`. Run `MIX_ENV=prod mix release
-# --overwrite` if you have edited source.
+# Requires: a freshly-built release at `_build/prod/rel/pharos`. Run
+# `MIX_ENV=prod mix release --overwrite` if you have edited source.
+# PHAROS_MODE=direct below: these tests signal one pharos process and
+# its LSP children, which a shared daemon would not be.
 #
 # Exits 0 when every gating test passes; non-zero when any fails.
 
 set -u
 
-PHAROS_BIN="${PHAROS_BIN:-$(dirname "$0")/../../burrito_out/pharos_linux_x64}"
+PHAROS_BIN="${PHAROS_BIN:-$(dirname "$0")/../../_build/prod/rel/pharos/bin/pharos}"
+export PHAROS_MODE="${PHAROS_MODE:-direct}"
 KEEP_GOING="${KEEP_GOING:-0}"
 
 if [[ ! -x "$PHAROS_BIN" ]]; then
@@ -22,11 +24,6 @@ if [[ ! -x "$PHAROS_BIN" ]]; then
     echo "       run: MIX_ENV=prod mix release --overwrite" >&2
     exit 1
 fi
-
-# Ensure a clean burrito extract for each run so cached old code
-# does not silently mask a regression.
-BURRITO_CACHE="$HOME/.local/share/.burrito"
-rm -rf "$BURRITO_CACHE"/pharos_erts-* 2>/dev/null || true
 
 INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"crash-repro","version":"1.0"}}}'
 

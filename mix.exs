@@ -13,14 +13,13 @@ defmodule Pharos.MixProject do
   #   - Set `PHAROS_RELEASE=1` to ship the clean base version
   #     (e.g. `0.1.0`) at tag time.
   #
-  # Why this matters: Burrito names its extracted-runtime directory
-  # `<release>_erts-<erts>_<app_version>/` and gates re-extraction on
-  # that directory's existence (deps/burrito/src/wrapper.zig, `main` checking
-  # `_metadata.json` under the dir from `get_install_dir`).
-  # If two builds share the same version string, the second build
-  # silently reuses the first build's extracted beam files — a known
-  # foot-gun that bit us once during ADR-029 dogfood. Suffixing the
-  # version per build forces a fresh extract automatically.
+  # Why this matters: install.sh installs each version into its own
+  # `versions/<version>/` directory and treats the same version as
+  # already installed (ADR-035), so two builds of one version string
+  # would collide. Under Burrito (ADR-033) the same collision made a
+  # fresh binary run the previous build's extracted code, which bit us
+  # during ADR-029 dogfood. Each build's daemon is told apart by its
+  # BUILD_ID, a content hash (ADR-034), independently of this suffix.
   @version_base "0.1.4"
 
   defp version do
@@ -85,7 +84,7 @@ defmodule Pharos.MixProject do
       mod: {:pharos_app_ffi, [auto_boot: Mix.env() != :test]},
       # `:crypto` — `pharos_session_ffi:generate_session_id/0` uses
       # `crypto:strong_rand_bytes/1` for HTTP `Mcp-Session-Id`s. Under
-      # `mix release` (Burrito), apps not listed here are stripped, so
+      # `mix release`, apps not listed here are stripped, so
       # the runtime sees `Undef` on the first crypto call when pharos
       # boots in `PHAROS_TRANSPORT=http` mode. Surfaced as HTTP 500
       # on the first POST /mcp under release runtime; works under dev
@@ -118,29 +117,7 @@ defmodule Pharos.MixProject do
       # oas_generator_utils release; unpin if it builds clean.
       {:gleam_javascript, "1.0.0", override: true},
       {:gleeunit, "~> 1.10", only: [:dev, :test], runtime: false},
-      {:qcheck, "~> 1.0", only: [:dev, :test], runtime: false},
-      # A fork of Burrito v1.5.0, not hex. Fork-only: nothing goes upstream.
-      # Upstream 1.5.0 crashes running pharos servers on a version bump: every
-      # launch deletes all semver-older unpacks with no in-use check, and the
-      # launcher passed `"-mode embedded"` as one argv element, so the VM ran
-      # interactive and lazy-loaded modules from the unpack being deleted.
-      # The fork (see FORK.md on the branch) boots embedded for real, skips
-      # any unpack whose `.burrito-in-use` flock is held, keeps the
-      # wrapper's own log lines off stdout, and adds `maintenance purge`,
-      # which `pharos --purge-cache` delegates to.
-      #
-      # Still 1.5.x underneath, deliberately: Burrito 1.6.0 raises its
-      # required Zig to 0.16.0 (`Burrito.check_zig_version/0`), while our
-      # release toolchain — and the `mlugg/setup-zig` pin in
-      # .github/workflows/release.yml — is 0.15.2. Under 1.6.0 the compile and
-      # assemble steps both succeed and only the wrap step fails, so the
-      # breakage is invisible to `mix gleam.test` and only shows up at release
-      # time. Rebasing the fork onto 1.6.0 means bumping Zig to 0.16.0 and
-      # re-verifying all five cross-compiled targets; that is its own work.
-      {:burrito,
-       github: "LoganBresnahan/burrito",
-       ref: "4407714f192e47c0e3b4794a8f16d8f3fdbe93f4",
-       runtime: false}
+      {:qcheck, "~> 1.0", only: [:dev, :test], runtime: false}
     ]
   end
 
@@ -265,11 +242,10 @@ defmodule Pharos.MixProject do
       # republish. See doc/adr/011-mix-app-name-symlink-workaround.md
       "deps.compile": ["deps.compile", &fix_app_names/1],
       compile: ["deps.compile", "compile"],
-      # `mix start` invokes pharos:main/0 directly. The OTP application
-      # callback (pharos_app_ffi:start/2) only auto-spawns main when
-      # __BURRITO is set, so this -e path runs main exactly once. mix
-      # run still loads applications (so the pool actor and other
-      # children are running) — main is on top of that.
+      # `mix start` invokes pharos:main/0 directly. mix run still loads
+      # applications (so the pool actor and other children are running),
+      # and boot/0 is idempotent, so main's own boot call finds the tree
+      # already up.
       start: ["run -e \":pharos.main()\""],
     ]
   end
@@ -390,14 +366,19 @@ defmodule Pharos.MixProject do
       if otp_name != dep_name do
         otp_dir = Path.join(build_lib, otp_name)
 
-        if File.exists?(otp_dir) do
-          otp_ebin =
-            otp_dir
-            |> Path.join("ebin")
-            |> String.to_charlist()
-
-          :code.add_patha(otp_ebin)
+        # The mirror can go missing while the wrapper stays: `mix
+        # deps.clean --unused` removes `<lib>/hpack` because no dep is
+        # named that. Recreate it, or the release can't find `:hpack`.
+        unless File.exists?(otp_dir) do
+          mirror_dep_dir_under_otp_name(ebin, dep_name, otp_name)
         end
+
+        otp_ebin =
+          otp_dir
+          |> Path.join("ebin")
+          |> String.to_charlist()
+
+        :code.add_patha(otp_ebin)
       end
     end)
   end

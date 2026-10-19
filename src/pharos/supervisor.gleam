@@ -17,7 +17,7 @@
 //// Restart strategies are per ADR-013/017. `intensity 5 / period 60`
 //// applies to every internal supervisor: 5 child failures in 60s
 //// shuts the whole tree down so the BEAM (or external supervisor:
-//// systemd, Burrito wrapper, MCP host) can restart pharos fresh
+//// systemd, the pharos shim, MCP host) can restart pharos fresh
 //// instead of thrashing.
 
 import gleam/erlang/process

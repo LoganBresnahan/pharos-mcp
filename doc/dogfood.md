@@ -6,22 +6,19 @@ top-to-bottom — later steps depend on earlier servers being warm.
 
 ## Prereqs (binary runs only)
 
-Burrito's runtime cache key is `pharos_erts-<erts_ver>_<app_ver>` — it
-does not include payload bytes, so a rebuild of the same `app_version`
-silently re-runs old beams from the prior extract. ADR-020 captures the
-mechanism. Until that's fixed (deferred; see ADR-020 deferral note),
-clear the cache before every full-binary dogfood run:
+Since 0.2 (ADR-035) nothing extracts at run time, so a rebuild can't
+silently re-run old beams. A rebuild does get a new BUILD_ID, and with it
+its own daemon (ADR-034): an old daemon from the previous build keeps
+serving the sessions it has until they end.
 
 ```sh
-rm -rf ~/.local/share/.burrito/pharos_erts-*
 MIX_ENV=prod mix release --overwrite
-# `npm/scripts/postinstall.js` warms the extract from `npm/vendor/`,
-# NOT `burrito_out/`. If `npm/vendor/` is older than the just-built
-# `burrito_out/`, the cache extracts STALE beams — silently dropping
-# any module added since the last vendor refresh. Always copy first.
-cp burrito_out/pharos_linux_x64 npm/vendor/pharos_linux_x64
-node /home/oof/pharos-mcp/npm/scripts/postinstall.js   # warmup re-extract
-# Then /mcp reconnect pharos in Claude Code
+_build/prod/rel/pharos/bin/pharos --version
+# Install it the way users do, into ~/.local/share/pharos/versions/:
+PHAROS_DOWNLOAD_URL=file://$PWD/_build/package sh install.sh --force \
+  --version "$(ls _build/package/*.tar.gz | sed 's/.*pharos-\(.*\)-[a-z]*-[a-z0-9]*.tar.gz/\1/')"
+# Then /mcp reconnect pharos in Claude Code; `pharos daemon status`
+# shows the new build's daemon.
 ```
 
 Daily iteration uses `pharos-dev` (no cache, hits `_build/dev/lib/*/ebin`

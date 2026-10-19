@@ -1,7 +1,7 @@
 //// Tests for `pharos/lsp/proc` Phase B/C surface that does not
 //// require an LSP subprocess.
 ////
-//// Real LSP-driven tests live in dogfood (rebuilt Burrito binary
+//// Real LSP-driven tests live in dogfood (a rebuilt release
 //// run against the *_dev/ workspaces). Here we verify the proc
 //// module's helpers compile + behave for inputs that do not need
 //// a live Port.

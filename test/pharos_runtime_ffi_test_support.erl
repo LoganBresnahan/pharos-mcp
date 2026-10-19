@@ -10,8 +10,16 @@
     mixed_iolist/0,
     divide_by_zero/0,
     explicit_exit/0,
-    string_to_codepoint_list/1
+    string_to_codepoint_list/1,
+    getenv_or_empty/1
 ]).
+
+%% An env var's value as a binary, "" when unset.
+getenv_or_empty(Name) ->
+    case os:getenv(binary_to_list(Name)) of
+        false -> <<>>;
+        Value -> unicode:characters_to_binary(Value)
+    end.
 
 %% Build a typical io_lib:format-style iolist: nested list mixing
 %% binaries and codepoint integers. unicode:characters_to_binary

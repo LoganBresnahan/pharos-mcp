@@ -1,6 +1,6 @@
 %% OTP application start callback.
 %%
-%% Mix release / Burrito boot the BEAM and start :pharos via the OTP
+%% A Mix release boots the BEAM and starts :pharos via the OTP
 %% application controller, which calls this module's start/2. We
 %% delegate to `pharos:boot/0` (Gleam) which is idempotent and
 %% returns the root supervisor's pid. Returning that pid (instead of
@@ -29,7 +29,7 @@ start(_Type, Args) ->
             Pid = spawn_link(fun idle/0),
             {ok, Pid};
         true ->
-            %% Burrito-wrapped releases start :pharos via the OTP
+            %% Releases start :pharos via the OTP
             %% application controller — `pharos:main/0` is NOT
             %% called. Meta-flag dispatch (handle_meta_flags) lives
             %% inside main/0, so without this hook flags like

@@ -39,8 +39,8 @@ def drive(env_overrides, requests, timeout=20, expected_ids=None):
         expected_ids = [r["id"] for r in requests if "id" in r]
 
     # PHAROS_TEST_BIN override — Phase 8 dogfood points this at the
-    # burrito-built binary (`burrito_out/pharos_linux_x64`) so the
-    # entire harness re-runs against the release runtime. Default is
+    # assembled release's shim (`_build/prod/rel/pharos/bin/pharos`) so
+    # the entire harness re-runs against the release runtime. Default is
     # bin/pharos-dev which uses raw `_build/dev/lib/*/ebin`.
     bin_path = os.environ.get(
         "PHAROS_TEST_BIN", os.path.join(project_root, "bin", "pharos-dev")

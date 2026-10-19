@@ -26,68 +26,65 @@ import pharos/lsp/languages.{type LanguageConfig}
 import pharos/lsp/registry as lsp_registry
 import pharos/version
 
-/// Clear Burrito's extract-cache for pharos (`pharos_erts-<v>_<vsn>`
-/// under the `.burrito` root) by the in-use lock contract of ADR-033:
-/// remove every pharos unpack no running process holds, keep the rest.
+/// Remove what pharos 0.1.x's Burrito wrapper unpacked
+/// (`<data>/.burrito/pharos_*`, ADR-033) that no running process still
+/// uses (ADR-035 §6). pharos 0.2 unpacks nothing; this is a one-release
+/// cleanup for upgraders. Only `pharos_*` entries are touched: the same
+/// root holds other Burrito apps' unpacks, geex 0.2.0's among them.
 ///
-/// Delegates to the Burrito wrapper's `maintenance purge` rather than
-/// deleting from here. The contract needs an exclusive `flock`, which
-/// the BEAM cannot take without a NIF (ruled out for v1.0, ADR-030),
-/// and `flock(1)` is Linux-only; the wrapper's Zig implementation is
-/// the one copy of the contract on every platform. Its stdout (one
-/// `removed <dir>` / `kept <dir>: <why>` line per unpack, then a
-/// summary) is relayed verbatim. This pharos's own unpack is always
-/// among the kept: its wrapper took the shared lock before booting.
-/// Returns the exit code main should propagate.
+/// "Uses" is the rule install.sh prunes by: a running VM names its
+/// unpack on its command line (`-root`, `-bindir`). pharos 0.2 can't
+/// take the 0.1.x fork's `.burrito-in-use` lock (that needed the
+/// wrapper), but a 0.1.x process names its unpack either way. On
+/// Windows, with no `ps` to read, it lists the unpacks to remove by
+/// hand. Returns the exit code main should propagate.
 pub fn purge_cache() -> Int {
-  case env.get("__BURRITO_BIN_PATH") {
-    None | Some("") -> {
-      io.println(
-        "pharos --purge-cache: not running from the installed pharos binary, "
-        <> "so there is no Burrito wrapper to purge with. "
-        <> "Run `pharos maintenance purge` with the installed binary.",
-      )
-      2
+  let root = legacy_burrito_root()
+  case list_pharos_extracts() {
+    [] -> {
+      io.println("pharos --purge-cache: no pharos 0.1.x unpacks under " <> root)
+      0
     }
-    Some(bin) ->
-      case run_executable(bin, ["maintenance", "purge"]) {
-        Error(reason) -> {
+    dirs ->
+      case command_lines() {
+        Error(_) -> {
           io.println(
-            "pharos --purge-cache: could not run `"
-            <> bin
-            <> " maintenance purge`: "
-            <> reason,
+            "pharos --purge-cache: can't list running processes here; once no "
+            <> "pharos 0.1.x runs, remove these by hand:",
           )
-          2
+          list.each(dirs, fn(dir) { io.println("  " <> dir) })
+          0
         }
-        Ok(#(status, output)) -> {
-          io.print(output)
-          case env.get("RELEASE_ROOT") {
-            Some(own) if own != "" ->
-              io.println(
-                "This pharos's own unpack ("
-                <> own
-                <> ") is kept while it runs: it holds the in-use lock. "
-                <> "To remove it too, quit every pharos and run "
-                <> "`pharos maintenance purge`.",
-              )
-            _ -> Nil
-          }
-          case status {
-            0 -> 0
-            _ -> 2
-          }
+        Ok(lines) -> {
+          let results = purge_legacy_unpacks(dirs, lines)
+          list.each(results, fn(result) {
+            case result {
+              #(Removed, dir) -> io.println("removed " <> dir)
+              #(Kept, dir) ->
+                io.println("kept " <> dir <> ": a running pharos 0.1.x uses it")
+            }
+          })
+          let removed = list.count(results, fn(result) { result.0 == Removed })
+          io.println(
+            int.to_string(removed)
+            <> " removed, "
+            <> int.to_string(list.length(results) - removed)
+            <> " kept",
+          )
+          0
         }
       }
   }
 }
 
+type PurgeOutcome {
+  Removed
+  Kept
+}
+
 /// Self-diagnostic. Loads Config the same way `pharos.boot` does,
 /// then walks every knob and language entry, printing resolved
 /// values and flagging anything that would break a normal run.
-/// Doubles as a Burrito warmup — running it once after install
-/// extracts the payload so the first MCP host spawn does not see
-/// the cold-extract latency.
 /// The last `n` lines of `<log dir>/fallbacks.log`, written by the
 /// shim each time `auto` mode fell back to direct mode.
 pub fn recent_fallbacks(n: Int) -> List(String) {
@@ -128,18 +125,26 @@ pub fn doctor() -> Int {
   io.println("OTP release:         " <> beam.otp)
   io.println("ERTS version:        " <> beam.erts)
 
-  let cache_path = burrito_cache_root()
-  let extracts = list_pharos_extracts()
-  let cache_size =
-    list.fold(extracts, 0, fn(acc, entry) { acc + dir_size_bytes(entry) })
-  io.println("Burrito cache:       " <> cache_path)
   io.println(
-    "Burrito cache size:  "
-    <> mb_str(cache_size)
-    <> " across "
-    <> int.to_string(list.length(extracts))
-    <> " pharos extract(s)",
+    "release root:        "
+    <> opt_str(env.get("RELEASE_ROOT"), "(not a release: mix)"),
   )
+  io.println(
+    "launched by:         "
+    <> opt_str(env.get("PHAROS_SHIM_PATH"), "(not the pharos shim)"),
+  )
+  let legacy = list_pharos_extracts()
+  case legacy {
+    [] -> Nil
+    _ ->
+      io.println(
+        "pharos 0.1.x unpacks: "
+        <> int.to_string(list.length(legacy))
+        <> " under "
+        <> legacy_burrito_root()
+        <> " (`pharos --purge-cache` removes the unused ones)",
+      )
+  }
   io.println("")
 
   // Section: daemon fallbacks (ADR-034). In `auto` mode a shim that
@@ -288,15 +293,6 @@ fn bool_str(b: Bool) -> String {
   case b {
     True -> "true"
     False -> "false"
-  }
-}
-
-fn mb_str(bytes: Int) -> String {
-  case bytes {
-    0 -> "0 bytes (empty / not yet extracted)"
-    n if n < 1024 -> int.to_string(n) <> " bytes"
-    n if n < 1_048_576 -> int.to_string(n / 1024) <> " KB"
-    n -> int.to_string(n / 1_048_576) <> " MB"
   }
 }
 
@@ -511,26 +507,24 @@ fn beam_version_info() -> BeamInfo {
   }
 }
 
-@external(erlang, "pharos_runtime_ffi", "burrito_cache_root")
-fn burrito_cache_root() -> String
+@external(erlang, "pharos_runtime_ffi", "legacy_burrito_root")
+fn legacy_burrito_root() -> String
 
-/// Enumerate pharos's per-version Burrito extract directories under
-/// the shared `.burrito` root. Returns absolute paths as a Gleam list
-/// of strings. Empty list if the root does not exist OR contains no
-/// `pharos_*` entries (e.g. running under `mix start` or after a
-/// purge). Filters out sibling apps' caches (`next_ls_*` etc.) by
-/// construction.
+/// pharos 0.1.x's per-version Burrito unpacks under the shared
+/// `.burrito` root, as absolute paths. Only `pharos_*` entries: other
+/// apps' unpacks (`geex_*`, `next_ls_*`) are filtered out by
+/// construction. Empty when the root doesn't exist.
 @external(erlang, "pharos_runtime_ffi", "list_pharos_extracts")
 fn list_pharos_extracts() -> List(String)
 
-@external(erlang, "pharos_fs_ffi", "run_executable")
-fn run_executable(
-  path: String,
-  args: List(String),
-) -> Result(#(Int, String), String)
+@external(erlang, "pharos_runtime_ffi", "command_lines")
+fn command_lines() -> Result(List(String), Nil)
 
-@external(erlang, "pharos_fs_ffi", "dir_size_bytes")
-fn dir_size_bytes(path: String) -> Int
+@external(erlang, "pharos_runtime_ffi", "purge_legacy_unpacks")
+fn purge_legacy_unpacks(
+  dirs: List(String),
+  command_lines: List(String),
+) -> List(#(PurgeOutcome, String))
 
 @external(erlang, "pharos_fs_ffi", "which_executable")
 fn which_executable(cmd: String) -> Result(String, Nil)

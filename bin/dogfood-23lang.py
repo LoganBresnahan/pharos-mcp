@@ -25,7 +25,7 @@ Usage:
     python3 bin/dogfood-23lang.py                       # dev/stdio/all
     python3 bin/dogfood-23lang.py --transport http      # dev/http/all
     python3 bin/dogfood-23lang.py --profile default     # default surface
-    PHAROS_TEST_BIN=burrito_out/pharos_linux_x64 \\
+    PHAROS_TEST_BIN=_build/prod/rel/pharos/bin/pharos \\
       python3 bin/dogfood-23lang.py --label "binary, post-rebuild"
 
 Pass label appears in the report header so multiple runs can be

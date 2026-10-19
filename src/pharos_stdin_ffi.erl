@@ -5,7 +5,7 @@
 %% tuples that match the StdinResult variant in Gleam.
 %%
 %% **Why `write_line/1` exists.** Under Erlang's `-noshell -mode
-%% embedded` release runtime (Burrito ships with these flags), the
+%% embedded` release runtime (the shim boots with these flags), the
 %% default `standard_io` group leader buffers writes and only flushes
 %% on stdin EOF. MCP hosts hold stdin open and wait for the response
 %% on stdout — the response sits in the buffer indefinitely and the
@@ -41,7 +41,7 @@ decode_port_event(_) ->
 %% Read one newline-terminated line from fd 0 directly, bypassing
 %% Erlang's `:user` group leader.
 %%
-%% Why: under burrito's release runtime (`-noshell -mode embedded`),
+%% Why: under the release runtime (`-noshell -mode embedded`),
 %% the `:user` port-driver delivers stdin reads only when stdin
 %% closes — it buffers waiting for a full chunk and never flushes
 %% mid-stream. MCP hosts hold stdin open and write one line per
@@ -100,7 +100,7 @@ stdin_port() ->
 %% queue before the port shuts down, so each line hits fd 1 before
 %% this function returns. A persistent cached port over many writes
 %% turned out to leave bytes queued in the driver indefinitely under
-%% burrito's release runtime — close-per-write is the fix.
+%% the release runtime — close-per-write is the fix.
 write_line(Body) when is_binary(Body) ->
     Port = erlang:open_port({fd, 1, 1}, [out, binary]),
     true = erlang:port_command(Port, [Body, $\n]),

@@ -1,6 +1,6 @@
 # 033. Burrito from a fork: real embedded mode and an in-use lock on unpacks
 
-**Status:** Accepted
+**Status:** Superseded by [035](035-releases-without-burrito.md)
 **Date:** 2026-10-18
 
 ## Context

@@ -339,18 +339,26 @@ fn explicit_exit() -> Int
 @external(erlang, "pharos_runtime_ffi", "wildcard")
 fn wildcard_atom() -> Dynamic
 
-// -- Burrito cache path FFI (v0.1.2 fix) ---------------------------------
+// -- pharos 0.1.x Burrito unpacks (ADR-035 §6) --------------------------
 //
-// Pin the path-shape contract burrito_cache_root/0 + list_pharos_extracts/0
-// must satisfy. The pre-v0.1.2 FFI used filename:basedir(user_cache, ...)
-// joined with "burrito_runtime/_/pharos" — a path Burrito never creates.
-// These tests fail loudly if anyone reintroduces that bug class.
+// pharos 0.2 unpacks nothing, but `--purge-cache` and `--doctor` deal
+// with what 0.1.x's Burrito wrapper left under `<data>/.burrito`. Pin
+// the path shape (the pre-v0.1.2 FFI used filename:basedir(user_cache,
+// ...) joined with "burrito_runtime/_/pharos", a path Burrito never
+// creates) and the purge rule: only pharos_* entries, and only those
+// no running command line names.
 
-@external(erlang, "pharos_runtime_ffi", "burrito_cache_root")
-fn burrito_cache_root() -> String
+@external(erlang, "pharos_runtime_ffi", "legacy_burrito_root")
+fn legacy_burrito_root() -> String
 
 @external(erlang, "pharos_runtime_ffi", "list_pharos_extracts")
 fn list_pharos_extracts() -> List(String)
+
+@external(erlang, "pharos_runtime_ffi", "purge_legacy_unpacks")
+fn purge_legacy_unpacks(
+  dirs: List(String),
+  command_lines: List(String),
+) -> List(#(Dynamic, String))
 
 @external(erlang, "pharos_fs_ffi", "setenv")
 fn setenv(key: String, value: String) -> Nil
@@ -364,79 +372,81 @@ fn rm_rf(path: String) -> Result(Nil, String)
 @external(erlang, "pharos_fs_ffi", "atomic_write_text")
 fn atomic_write_text(path: String, text: String) -> Result(Nil, String)
 
-pub fn burrito_cache_root_shape_test() {
-  // Must end with ".burrito" and must never reference the old buggy
-  // segments anywhere in the path.
-  let path = burrito_cache_root()
+@external(erlang, "pharos_fs_ffi", "is_directory")
+fn is_directory(path: String) -> Bool
+
+/// Run `body` with XDG_DATA_HOME set to `value` (Linux: that is where
+/// the root lives), then put the old value back.
+fn with_data_home(value: String, body: fn() -> a) -> a {
+  let previous = os_getenv("XDG_DATA_HOME")
+  setenv("XDG_DATA_HOME", value)
+  let result = body()
+  setenv("XDG_DATA_HOME", previous)
+  result
+}
+
+@external(erlang, "pharos_runtime_ffi_test_support", "getenv_or_empty")
+fn os_getenv(name: String) -> String
+
+pub fn legacy_burrito_root_shape_test() {
+  let path = legacy_burrito_root()
   string.ends_with(path, ".burrito") |> should.be_true
   string.contains(path, "burrito_runtime") |> should.be_false
   string.contains(path, "_/pharos") |> should.be_false
   string.contains(path, ".cache/.burrito") |> should.be_false
 }
 
-pub fn burrito_cache_root_honors_pharos_install_dir_test() {
-  // Override should win unconditionally.
+pub fn legacy_burrito_root_ignores_pharos_install_dir_test() {
+  // PHAROS_INSTALL_DIR names the 0.2 install root now (ADR-035 §4); it
+  // no longer moves where 0.1.x unpacked.
   setenv("PHAROS_INSTALL_DIR", "/tmp/pharos-test-override")
-  let path = burrito_cache_root()
-  should.equal(path, "/tmp/pharos-test-override/.burrito")
-  // Empty-string env should fall back to default (same semantics as
-  // unset, per the FFI's contract).
+  let path = legacy_burrito_root()
   setenv("PHAROS_INSTALL_DIR", "")
-  let default_path = burrito_cache_root()
-  string.contains(default_path, "/tmp/pharos-test-override") |> should.be_false
-  string.ends_with(default_path, ".burrito") |> should.be_true
+  string.contains(path, "/tmp/pharos-test-override") |> should.be_false
 }
 
 pub fn list_pharos_extracts_missing_root_test() {
-  // Point at a path that does not exist; expect empty list, no crash.
-  setenv("PHAROS_INSTALL_DIR", "/tmp/pharos-test-does-not-exist-xyz")
-  let extracts = list_pharos_extracts()
-  should.equal(list.length(extracts), 0)
-  setenv("PHAROS_INSTALL_DIR", "")
+  with_data_home("/tmp/pharos-test-does-not-exist-xyz", list_pharos_extracts)
+  |> should.equal([])
 }
 
 pub fn list_pharos_extracts_filters_test() {
-  // Stage a scratch .burrito root with two pharos_* dirs, one sibling
-  // app dir, and one stray regular file. Confirm list_pharos_extracts
-  // returns only the two pharos_* directories.
+  // A scratch .burrito root with two pharos_* dirs, other apps' dirs
+  // (geex 0.2.0's unpacks live here too) and a stray file: only the
+  // two pharos_* directories come back.
   let scratch_root = "/tmp/pharos-test-list-filter"
   let burrito_dir = scratch_root <> "/.burrito"
   let _ = rm_rf(scratch_root)
   let assert Ok(_) = mkdir_p(burrito_dir <> "/pharos_erts-16.1_0.1.2")
   let assert Ok(_) = mkdir_p(burrito_dir <> "/pharos_erts-16.1_0.1.1")
+  let assert Ok(_) = mkdir_p(burrito_dir <> "/geex_erts-16.1_0.2.0")
   let assert Ok(_) = mkdir_p(burrito_dir <> "/next_ls_erts-15.2_0.23.4")
   let assert Ok(_) = atomic_write_text(burrito_dir <> "/stray.txt", "")
 
-  setenv("PHAROS_INSTALL_DIR", scratch_root)
-  let extracts = list_pharos_extracts()
+  let extracts = with_data_home(scratch_root, list_pharos_extracts)
   should.equal(list.length(extracts), 2)
   list.each(extracts, fn(p) {
     string.starts_with(p, burrito_dir <> "/pharos_") |> should.be_true
   })
-
-  setenv("PHAROS_INSTALL_DIR", "")
   let _ = rm_rf(scratch_root)
 }
 
-// -- pharos_fs_ffi: run_executable ----------------------------------------
-//
-// `pharos --purge-cache` runs the Burrito wrapper's `maintenance purge`
-// through this and relays its stdout, so both the exit status and the
-// output must come back intact, and a missing executable must be an
-// Error rather than a crash.
-
-@external(erlang, "pharos_fs_ffi", "run_executable")
-fn run_executable(
-  path: String,
-  args: List(String),
-) -> Result(#(Int, String), String)
-
-pub fn run_executable_status_and_stdout_test() {
-  run_executable("/bin/sh", ["-c", "printf 'removed a\\nkept b\\n'; exit 3"])
-  |> should.equal(Ok(#(3, "removed a\nkept b\n")))
-}
-
-pub fn run_executable_missing_binary_test() {
-  run_executable("/nonexistent/pharos-test-no-such-binary", [])
-  |> should.be_error
+pub fn purge_keeps_unpacks_a_command_line_names_test() {
+  let root = "/tmp/pharos-test-purge/.burrito"
+  let _ = rm_rf("/tmp/pharos-test-purge")
+  let used = root <> "/pharos_erts-16.1_0.1.3"
+  let idle = root <> "/pharos_erts-16.1_0.1.2"
+  let assert Ok(_) = mkdir_p(used <> "/bin")
+  let assert Ok(_) = mkdir_p(idle <> "/bin")
+  let results =
+    purge_legacy_unpacks([used, idle], [
+      "/usr/bin/bash",
+      used <> "/erts-16.1/bin/beam.smp -- -root " <> used <> " -progname erl",
+    ])
+  list.map(results, fn(r) { #(string.inspect(r.0), r.1) })
+  |> should.equal([#("Kept", used), #("Removed", idle)])
+  is_directory(used) |> should.be_true
+  is_directory(idle) |> should.be_false
+  let _ = rm_rf("/tmp/pharos-test-purge")
+  Nil
 }

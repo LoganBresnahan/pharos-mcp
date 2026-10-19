@@ -9,7 +9,7 @@
 %% Returns Gleam-friendly tagged tuples shaped as Result(t, e).
 
 -module(pharos_fs_ffi).
--export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, run_executable/2, dir_size_bytes/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1, days_since_iso8601/1, setenv/2]).
+-export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1, days_since_iso8601/1, setenv/2]).
 
 is_regular_file(Path) ->
     filelib:is_regular(binary_to_list(Path)).
@@ -84,8 +84,7 @@ format_reason(Reason) ->
 %%   {error, Bin} — error binary
 %%
 %% Safe on a path that does not exist (returns ok). Used by tests to
-%% clean scratch dirs. (`pharos --purge-cache` no longer deletes from
-%% the BEAM — see run_executable/2.)
+%% clean scratch dirs.
 rm_rf(Path) when is_binary(Path) ->
     PathStr = binary_to_list(Path),
     case filelib:is_dir(PathStr) orelse filelib:is_regular(PathStr) of
@@ -96,50 +95,6 @@ rm_rf(Path) when is_binary(Path) ->
                 {error, enoent} -> {ok, nil};
                 {error, Reason} -> {error, format_reason(Reason)}
             end
-    end.
-
-%% Run an executable directly — no shell, so a path with spaces (macOS's
-%% `~/Library/Application Support/...`) needs no quoting, and the exit
-%% status survives, which os:cmd/1 loses. Collects the child's stdout
-%% until it exits; its stderr is inherited, not captured. Returns
-%%   {ok, {ExitStatus, StdoutBin}}
-%%   {error, Bin}  — the executable could not be spawned
-%% Used by `pharos --purge-cache` to run the Burrito wrapper's
-%% `maintenance purge`, which owns the ADR-033 lock contract.
-run_executable(Path, Args) when is_binary(Path), is_list(Args) ->
-    try erlang:open_port({spawn_executable, binary_to_list(Path)},
-                         [{args, [binary_to_list(A) || A <- Args]},
-                          exit_status, binary, use_stdio, hide]) of
-        Port -> collect_port_output(Port, [])
-    catch
-        error:Reason -> {error, format_reason(Reason)}
-    end.
-
-collect_port_output(Port, Acc) ->
-    receive
-        {Port, {data, Bytes}} -> collect_port_output(Port, [Acc, Bytes]);
-        {Port, {exit_status, Status}} -> {ok, {Status, iolist_to_binary(Acc)}}
-    end.
-
-%% Recursive directory size in bytes. Returns 0 for missing paths.
-%% Used by `pharos --doctor` + `--purge-cache` so output reports
-%% how many MB the cache holds before/after.
-dir_size_bytes(Path) when is_binary(Path) ->
-    PathStr = binary_to_list(Path),
-    case filelib:is_dir(PathStr) of
-        false -> 0;
-        true ->
-            Files = filelib:wildcard(filename:join(PathStr, "**/*")),
-            lists:foldl(fun(F, Acc) ->
-                case filelib:is_regular(F) of
-                    true ->
-                        case file:read_file_info(F) of
-                            {ok, Info} -> Acc + element(2, Info); %% size
-                            _ -> Acc
-                        end;
-                    false -> Acc
-                end
-            end, 0, Files)
     end.
 
 %% Resolve a bare command name through PATH. Mirrors `which`. Returns:

@@ -8,8 +8,8 @@
 # collide with Phase 5 results.
 #
 # Prereqs:
-#   * fresh burrito binary at `burrito_out/pharos_linux_x64` (Phase 5
-#     also requires this, so build once for both)
+#   * a fresh release at `_build/prod/rel/pharos` (`MIX_ENV=prod mix
+#     release --overwrite`; Phase 5 also needs it, so build once for both)
 #   * `DEEPSEEK_API_KEY` exported
 #   * `bench/data/stress-{ts-broken,py-binary,polyglot}.jsonl` present
 #     (built by `bench/oracle.py` against fixtures under
@@ -23,7 +23,7 @@ cd "$REPO"
 OUT_DIR="${OUT_DIR:-bench/results/v1.0-final/stress}"
 mkdir -p "$OUT_DIR"
 
-BIN="${PHAROS_TEST_BIN:-$REPO/burrito_out/pharos_linux_x64}"
+BIN="${PHAROS_TEST_BIN:-$REPO/_build/prod/rel/pharos/bin/pharos}"
 if [ ! -x "$BIN" ]; then
   echo "FATAL: pharos binary not found / not executable at $BIN" >&2
   echo "Build with: MIX_ENV=prod mix release --overwrite" >&2

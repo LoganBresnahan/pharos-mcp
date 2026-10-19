@@ -12,10 +12,6 @@
 #    state inside pharos between langs.
 #  * Each lang's workspace lives in a distinct corpus dir, so file
 #    walks / find_symbol globs never cross lang boundaries.
-#  * Each pharos extracts the same Burrito payload into the same
-#    user-cache dir (`~/.local/share/.burrito/pharos_erts-...`) —
-#    handled by pre-extracting once below so the 5 spawns don't race
-#    on the metadata file.
 #  * Each harness invocation pre-warms its LSP on its own clock.
 #
 # Outputs land under `bench/results/v1.0-final/phase5/<lang>.jsonl`
@@ -29,7 +25,7 @@ cd "$REPO"
 OUT_DIR="${OUT_DIR:-bench/results/v1.0-final/phase5}"
 mkdir -p "$OUT_DIR"
 
-BIN="${PHAROS_TEST_BIN:-$REPO/burrito_out/pharos_linux_x64}"
+BIN="${PHAROS_TEST_BIN:-$REPO/_build/prod/rel/pharos/bin/pharos}"
 if [ ! -x "$BIN" ]; then
   echo "FATAL: pharos binary not found / not executable at $BIN" >&2
   echo "Build with: MIX_ENV=prod mix release --overwrite" >&2
@@ -43,14 +39,6 @@ fi
 
 VARIANT="${VARIANT:-pro-thinking}"
 TRIALS="${TRIALS:-3}"
-
-# Pre-extract the Burrito payload once so the 5 lang spawns below
-# don't race on writing `_metadata.json` into the user-cache dir.
-# A single "tools/list" round-trip is enough.
-echo "[phase5] pre-extracting Burrito payload..."
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"warmup","version":"0"}}}' \
-  | timeout 30 "$BIN" >/dev/null 2>&1 || true
-echo "[phase5] Burrito payload extracted"
 
 # Per-lang: workspace path, bank path, label.
 LANGS=(

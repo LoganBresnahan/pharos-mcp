@@ -1,8 +1,9 @@
 //// Library entry / facade for `pharos`.
 ////
-//// `main/0` is the CLI entrypoint — invoked from Mix via the `start`
-//// alias defined in `mix.exs` (`mix start`) and from the
-//// Burrito-wrapped binary at runtime. Behaviour:
+//// `main/0` is the CLI entrypoint invoked from Mix via the `start`
+//// alias defined in `mix.exs` (`mix start`). A release, which the
+//// native `pharos` shim starts (ADR-034), enters through
+//// `pharos_app_ffi:start/2` instead. Behaviour:
 ////
 ////   1. Parse argv. Recognised meta flags short-circuit and exit:
 ////        --version, -V             — print version and exit
@@ -94,12 +95,11 @@ pub fn main() -> Nil {
 }
 
 /// Hook called from `pharos_app_ffi:start/2` so meta-flag dispatch
-/// works in Burrito-wrapped release mode. The release entry path
-/// bypasses `main/0` entirely — it goes straight from `:elixir`'s
-/// start_cli through the OTP application controller into
-/// `pharos_app_ffi:start/2`, which means `--doctor`, `--purge-cache`,
-/// and `--cleanup` would never be checked. This function lets the
-/// app-start callback run the same dispatch.
+/// works in a release. The release boots through the OTP application
+/// controller into `pharos_app_ffi:start/2` and never calls `main/0`,
+/// so `--doctor`, `--purge-cache` and `--cleanup` would never be
+/// checked. This function lets the app-start callback run the same
+/// dispatch.
 ///
 /// Returns `True` when a meta flag fired (caller should halt) and
 /// `False` when normal boot should continue.
@@ -210,7 +210,7 @@ fn do_boot() -> Result(Pid, String) {
       register_root_supervisor(started.pid)
       // ADR-030 I1: spawn the linked heartbeat process AFTER the
       // root supervisor is up. Wiring it here (not in main/0) means
-      // both `mix start` and the burrito release path get the
+      // both `mix start` and the release path get the
       // heartbeat — the release path enters via
       // `pharos_app_ffi:start/2` → `boot/0` and bypasses `main/0`
       // entirely. Cheap loop (`erlang:memory/1` +
@@ -408,7 +408,7 @@ fn print_language_config(language: String) -> Nil {
     Error(_) ->
       // Route through the unbuffered stdio FFI: io.println goes via
       // Erlang's `:user` group leader which the M11 `-noinput` flag
-      // makes flaky under pharos-dev / burrito release stdio. The
+      // makes flaky under pharos-dev / release stdio. The
       // FFI helper bypasses `:user` and writes directly to fd 1.
       stdio_write_line(
         "language `"
@@ -471,7 +471,7 @@ pub fn warm_langs(langs: List(String)) -> Nil {
 /// `PHAROS_WARM_LANGS` and stay alive).
 ///
 /// Called by both `main/0` (mix start path) and
-/// `pharos_app_ffi:start/2` (burrito release path). Always spawns
+/// `pharos_app_ffi:start/2` (release path). Always spawns
 /// the actual work so the caller can return immediately to
 /// `process.sleep_forever/0` or the OTP application controller.
 pub fn post_boot_dispatch() -> Nil {
@@ -685,11 +685,27 @@ fn split_csv(raw: String) -> List(String) {
 }
 
 fn usage() -> String {
-  "Usage: pharos [FLAG]
+  "Usage: pharos [FLAG | COMMAND]
 
 pharos is an MCP server bridging LLMs to LSP servers. Configuration
 lives in TOML and environment variables — there are no runtime
 configuration CLI flags.
+
+With no arguments pharos is the MCP stdio server an MCP client runs.
+On Linux and macOS each session connects to one shared pharos daemon
+per version, started on demand, so sessions share language servers;
+PHAROS_MODE=direct (or --direct) runs a session in its own process
+instead, as on Windows. PHAROS_MODE=daemon fails rather than falling
+back to direct mode when the daemon can't be reached.
+
+Commands
+  --direct                   Run this session in-process, without
+                             the daemon.
+  daemon status [--all]      Show this version's daemon (or every
+                             daemon): sessions and language servers.
+  daemon stop [--all]        Stop this version's daemon (or all).
+  daemon                     Run this version's daemon in the
+                             foreground.
 
 Flags
   --version, -V              Print version and exit.
@@ -711,19 +727,14 @@ Flags
   --doctor                   Self-diagnostic. Resolves Config the
                              same way a normal boot does, probes
                              each language server's binary on PATH,
-                             and reports anything that would break.
-                             Doubles as a Burrito-cache warmup —
-                             run once after install so the first
-                             MCP host spawn is fast.
-  --purge-cache              Remove pharos's extracted ERTS+BEAM
-                             payloads that no running pharos uses;
-                             ones in use (this one included) are
-                             kept. `pharos maintenance purge` does
-                             the same without starting pharos, so
-                             with every pharos quit it removes all
-                             of them. Next run re-extracts.
-                             Does NOT remove the binary itself or
-                             your config files.
+                             and reports anything that would break,
+                             plus recent daemon fallbacks.
+  --cleanup [--yes]          List (with --yes, stop) language servers
+                             orphaned by a pharos that died uncleanly.
+  --purge-cache              Remove what pharos 0.1.x unpacked under
+                             <data>/.burrito/pharos_* that no running
+                             process uses. pharos 0.2 unpacks
+                             nothing; this is upgrade cleanup.
 
 Configuration sources (precedence: lower wins under higher)
   1. Compiled-in defaults

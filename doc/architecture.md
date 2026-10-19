@@ -80,7 +80,7 @@ Restart strategy summary:
 
 - `pharos_root` — **one_for_one**. One child failing doesn't cascade.
   `intensity 5 / period 60` shuts the whole tree if more than 5
-  children die in a minute (BEAM / Burrito / systemd then restarts
+  children die in a minute (the shim, systemd or the MCP host then restarts
   pharos cleanly).
 - `log_subtree`, `pool_subtree` — **rest_for_one**. If `ring_keeper`
   dies, `log_writer` is restarted; if `pool_actor` dies, `lsp_dyn_sup`

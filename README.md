@@ -61,19 +61,43 @@ methodology, per-question data, and per-kind drill-downs at
 
 ## Install
 
-Pharos is a single self-contained binary (Erlang runtime included via
-[Burrito](https://github.com/burrito-elixir/burrito)). Three channels —
-all produce the same binary; pick whichever fits your workflow.
+pharos ships per platform as a release: a small native `pharos`
+front end plus the Erlang runtime it starts, unpacked. Nothing extracts
+at run time. Each MCP session runs `pharos`, which connects to one
+shared pharos daemon per version (started on demand, exiting when idle),
+so sessions on the same project share language servers
+([ADR-034](doc/adr/034-shared-daemon-and-native-shim.md),
+[ADR-035](doc/adr/035-releases-without-burrito.md)).
 
-### 1. npm (cross-platform — recommended for MCP clients)
+Linux needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9 or
+newer); pharos 0.2 doesn't run on Alpine/musl or older distros yet, and
+`pharos-mcp@0.1.4` still does.
+
+### 1. install.sh (Linux, macOS)
+
+```bash
+curl -fsSL https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/install.sh | sh
+curl -fsSL …/install.sh | sh -s -- --version 0.2.0      # a given version
+```
+
+It installs `~/.local/share/pharos/versions/<version>/` and links
+`~/.local/bin/pharos` to it, checking the download's sha256 first. It
+keeps the current and previous version (`--rollback` switches back),
+removes older ones once no running pharos uses them, and never edits
+shell or MCP client config. `--uninstall` removes it. Overrides:
+`PHAROS_INSTALL_DIR`, `PHAROS_BIN_DIR`.
+
+### 2. npm (Linux, macOS, Windows)
 
 ```bash
 npm install -g pharos-mcp
 ```
 
-The post-install script copies the platform-correct binary into your
-npm prefix and prints the resolved path. Add to your MCP host's
-config:
+npm installs the one platform package that fits the host, and on Linux
+and macOS the postinstall points `pharos` straight at the native
+binary, so no node process stays resident per session.
+
+Either way, add pharos to your MCP host's config:
 
 ```jsonc
 {
@@ -83,49 +107,13 @@ config:
 }
 ```
 
-### 2. Direct download from GitHub Releases
-
-Grab the binary matching your platform from
-[github.com/LoganBresnahan/pharos-mcp/releases/latest](https://github.com/LoganBresnahan/pharos-mcp/releases/latest):
-
-| Asset | Platform |
-|-------|----------|
-| `pharos_linux_x64` | Linux x86-64 |
-| `pharos_linux_arm64` | Linux aarch64 |
-| `pharos_darwin_x64` | macOS Intel |
-| `pharos_darwin_arm64` | macOS Apple Silicon |
-| `pharos_win_x64.exe` | Windows x86-64 |
-
-```bash
-curl -L \
-  https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/pharos_linux_x64 \
-  -o ~/.local/bin/pharos
-chmod +x ~/.local/bin/pharos
-```
-
-Or via the GitHub CLI:
-
-```bash
-gh release download v0.1.4 --repo LoganBresnahan/pharos-mcp -p 'pharos_linux_x64'
-chmod +x pharos_linux_x64
-```
-
-> **Heads up:** GitHub Release assets are uploaded without an
-> executable bit, so you must `chmod +x` the downloaded binary before
-> running it. The npm install path handles this automatically.
+On Windows, pharos runs each session in its own process (no daemon).
+Anywhere, `PHAROS_MODE=direct` does the same.
 
 ### 3. Build from source
 
-Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, Zig 0.15.2.
-See [Development](#development).
-
-### First-run cold extract
-
-The first invocation extracts the Burrito payload to
-`~/.local/share/.burrito/pharos_*/` (~80 MB, ~3-5 seconds).
-Subsequent boots are <100 ms because the extract is cached. Run
-`pharos --doctor` once after install to warm both the Burrito cache
-and verify every LSP binary resolves on PATH.
+Requires Erlang/OTP 28.1.1, Elixir 1.19.5, Gleam 1.17 and a Rust
+toolchain (for the native front end). See [Development](#development).
 
 [↑ top](#pharos)
 
@@ -297,11 +285,13 @@ commands.
 | `pharos` | MCP server (default — what your client invokes). Reads JSON-RPC from stdin, writes responses to stdout, logs to stderr. |
 | `pharos warm <lang>...` | Pre-warm the named languages' LSPs against cwd. Spawns each LSP, runs the readiness gate, exits. Subsequent MCP-server runs in the same workspace boot ~10-20× faster because the LSPs' on-disk indexes are now hot. |
 | `pharos warm --all` | Same as above but enumerates every language pharos knows about and warms whichever ones have project markers in cwd. Languages without markers (e.g. `Cargo.toml` for rust, `go.mod` for go) are skipped with a clear log line. |
-| `pharos --doctor` | Self-diagnostic. Resolves config the same way a normal boot does, probes each language server's binary on PATH, reports anything that would break a real run. Doubles as a Burrito-cache warmup. |
+| `pharos --doctor` | Self-diagnostic. Resolves config the same way a normal boot does, probes each language server's binary on PATH, reports anything that would break a real run, and lists recent daemon fallbacks. |
 | `pharos --cleanup` | List orphan LSP children left behind by prior pharos sessions that exited uncleanly (host crash, SIGKILL, OOM-killer). Dry-run by default — adds nothing destructive without a flag. |
 | `pharos --cleanup --yes` | Reap the orphans listed by `--cleanup`: SIGTERM each, wait 5 s, SIGKILL survivors, remove their per-PID tracking directory. |
-| `pharos --purge-cache` | Remove pharos's extracted runtimes under Burrito's cache (`~/.local/share/.burrito/pharos_erts-*` on Linux) that no running pharos uses. Unpacks in use, this one included, are kept and listed. Next run re-extracts. |
-| `pharos maintenance purge` | The same, handled by the launcher before pharos starts, so with every pharos quit it removes all of them. |
+| `pharos daemon status [--all]` | This version's shared daemon (or every daemon): its sessions and language servers. |
+| `pharos daemon stop [--all]` | Stop this version's daemon (or all). Sessions on it see their server exit; MCP clients restart it on reconnect. |
+| `pharos --direct` | Run this session in its own process instead of the shared daemon (also `PHAROS_MODE=direct`). |
+| `pharos --purge-cache` | Upgrade cleanup: remove what pharos 0.1.x unpacked under `~/.local/share/.burrito/pharos_*` that no running process uses. pharos 0.2 unpacks nothing. |
 | `pharos --print-default-config` | Print the canonical `pharos.toml` starter with comments. Pipe to `~/.config/pharos/pharos.toml` to begin customising. |
 | `pharos --print-language-config <id>` | Print one language's resolved registry entry (after `pharos.toml` overlays). Useful for debugging "why isn't my custom binary path being used?". |
 | `pharos --version` / `-V` | Print version and exit. |
@@ -839,20 +829,24 @@ cwd.
 ### Updating
 
 ```bash
-npm update -g pharos-mcp                   # npm channel
-# or direct download from GitHub Releases
+curl -fsSL https://github.com/LoganBresnahan/pharos-mcp/releases/latest/download/install.sh | sh
+# or: npm update -g pharos-mcp
 
-# After update:
-pharos --purge-cache                       # reclaim old extracts no session uses
-pharos --doctor                            # warm fresh cache + verify
+pharos --doctor                            # verify
+pharos --purge-cache                       # once, after upgrading from 0.1.x
 ```
+
+Sessions already running keep their daemon (the old version) until they
+end; it exits when idle and install.sh removes its files on a later run.
+New sessions start the new version's daemon.
 
 ### Uninstalling
 
 ```bash
+pharos daemon stop --all
+sh install.sh --uninstall                  # if installed by install.sh
 npm uninstall -g pharos-mcp                # if installed via npm
-rm ~/.local/bin/pharos                     # if installed via direct download
-rm -rf ~/.local/share/.burrito/pharos_*    # extract cache
+rm -rf ~/.local/share/.burrito/pharos_*    # pharos 0.1.x unpacks, if any
 rm -rf ~/.local/share/pharos/              # instance tracking
 rm -rf ~/.local/state/pharos/              # logs + crash dumps
 rm -rf ~/.cache/pharos/                    # logs from before 0.2.0
@@ -864,7 +858,8 @@ rm -rf ~/.config/pharos/                   # user config (only if you want it go
 ## Architecture
 
 Pharos is a Gleam application running on the Erlang/OTP 28 BEAM,
-distributed via [Burrito](https://github.com/burrito-elixir/burrito).
+behind a small native front end that starts or joins a shared daemon
+(ADR-034) and ships per platform as an unpacked release (ADR-035).
 Key design choices live in
 [doc/adr/](doc/adr/):
 
@@ -903,8 +898,8 @@ Full prose architecture overview at
 
 ## Development
 
-Requires Erlang/OTP 28, Elixir 1.19, Gleam 1.16+, rebar3 3.27+,
-Zig 0.15.2 (for binary builds). Pinned versions in
+Requires Erlang/OTP 28.1.1, Elixir 1.19.5, Gleam 1.17, rebar3 3.27+,
+and Rust (stable, for the native front end in `shim/`). Pinned versions in
 [.tool-versions](.tool-versions) — `asdf install` resolves all of
 them.
 
@@ -932,11 +927,14 @@ Erlang directly so it picks up edits without a release build.
 For a release binary:
 
 ```bash
-MIX_ENV=prod mix release   # produces burrito_out/pharos_<target>
+MIX_ENV=prod mix release   # this machine's target: _build/package/pharos-<vsn>-<os>-<arch>.tar.gz
 ```
 
-Multi-target build needs Zig + `xz`. Windows builds additionally need
-`7z`/`7zz` on PATH.
+It builds for the machine it runs on (cargo builds the front end), and
+`_build/prod/rel/pharos/bin/pharos` runs it in place. Release builds
+use the OTP that [rel/build-runtime.sh](rel/build-runtime.sh) builds,
+one runner per target; with another OTP the native check only prints
+notes.
 
 The crash-repro suite at [bench/crash-repro/run-all.sh](bench/crash-repro/run-all.sh)
 exercises six lifecycle failure modes and is gating for release tags.
