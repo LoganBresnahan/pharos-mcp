@@ -206,12 +206,15 @@ model string is per-session). Commit only when asked; branch first if on `main`.
   behaviour (`PHAROS_CONFIG_FILE`, `PHAROS_TOOLS`, `PHAROS_WARM_LANGS`,
   `PHAROS_MEMORY_ROOT`, `PHAROS_USER_MEMORY_ROOT`).
 - runtime state: `~/.local/share/pharos/instances/<pharos-pid>/` for per-instance
-  LSP child tracking; installs in `~/.local/share/pharos/versions/<version>/`;
-  daemon sockets in `$XDG_RUNTIME_DIR/pharos/` (macOS: `$TMPDIR/pharos/`); logs
-  and crash dumps in `~/.local/state/pharos/log/`. pharos 0.1.x's Burrito unpacks
-  under `~/.local/share/.burrito/pharos_*` are removed by `pharos --purge-cache`
-  (that path is XDG **data**, not cache — the wrong-XDG-var bug is in the fossil
-  guard).
+  LSP child tracking (a dead instance's dir is reaped at the next daemon or
+  server start, [ADR-037](doc/adr/037-lsp-process-group-reaping.md)); installs in
+  `~/.local/share/pharos/versions/<version>/`; daemon sockets in
+  `$XDG_RUNTIME_DIR/pharos/` (macOS: `$TMPDIR/pharos/`); logs and crash dumps in
+  `~/.local/state/pharos/log/`. pharos 0.1.x's Burrito unpacks under
+  `~/.local/share/.burrito/pharos_*` are removed by `pharos self prune`
+  ([ADR-036](doc/adr/036-self-management-commands.md); `--purge-cache` is its
+  deprecated alias, due to go). That path is XDG **data**, not cache — the
+  wrong-XDG-var bug is in the fossil guard.
 
 ⚠ Dogfooding runs pharos against **your own machine's LSPs and caches** (jdtls
 workspaces, `~/.m2`, cargo target dirs). A dogfood run that wipes or rebuilds
