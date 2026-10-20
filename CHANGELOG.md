@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The release workflow can finish a release that npm was slow to serve.**
+  Each npm publish skips a version npm already has. A manual run with
+  `republish: <version>` publishes what's missing from that version's
+  GitHub release, then smokes it (the smoke step was skipped on the first
+  such run, because `build` didn't run; fixed). 0.2.2 needed this: npm took about
+  55 min to serve its two arm64 packages, so `pharos-mcp` 0.2.2 went out
+  later than the GitHub release (ADR-035 §7).
+
 ## [0.2.2] — 2026-10-19
 
 ### Fixed

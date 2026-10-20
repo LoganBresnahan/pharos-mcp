@@ -168,6 +168,18 @@ this change.
     platform packages, then `pharos-mcp`, all on `latest` and through the existing trusted
     publishing.
   - Branch runs (`ci/**`) build and test everything and publish nothing.
+  - *Added 2026-10-20, after 0.2.2:* npm accepts a publish and then validates it (a malware
+    scan) before serving it. For 0.2.2 that took 2–3 min for the x64 packages and about 55 min
+    for the two arm64 ones. A re-publish meanwhile answers E409 "previously staged version".
+    Two things made it recoverable without a new version:
+    - the publish job waits until npm can install every platform package before it publishes
+      `pharos-mcp`, so no user could install a main package whose platform package was missing;
+    - every publish skips a version npm already serves, and a manual `release.yml` run with
+      `republish: <version>` refills the npm packages from that version's GitHub release
+      (SHA256SUMS checked) and publishes what is missing.
+
+    The Trusted Publisher configs (`npm trust list`) allow publish and stage publish on every
+    package, so nothing needed approving.
 - **`smoke.yml`** (post-release, fresh runners, from public URLs) runs on ubuntu-22.04/24.04,
   their -arm variants, macos-14/15 and macos-15-intel:
   - install twice: `npm i -g pharos-mcp@<v>` in one job, and the `curl … install.sh | sh` one-liner
