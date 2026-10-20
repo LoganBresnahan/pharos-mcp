@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-10-19
+
 ### Fixed
 
 - **Nothing an LSP started outlives it any more.** When pharos stopped
@@ -360,7 +362,8 @@ Initial public release. Headless LSP↔MCP bridge for AI agents.
   project; pass explicit languages (`pharos warm rust go`) for
   precise control.
 
-[Unreleased]: https://github.com/LoganBresnahan/pharos-mcp/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/LoganBresnahan/pharos-mcp/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.2.2
 [0.2.1]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.2.1
 [0.2.0]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.2.0
 [0.1.4]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.1.4
