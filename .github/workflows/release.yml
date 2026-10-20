@@ -16,6 +16,13 @@ name: release
 # A branch push (ci/**) or a manual run builds and checks everything and
 # publishes nothing.
 #
+# Recovery: a manual run with `republish: <version>` builds nothing. It
+# refills the npm packages from that version's GitHub release (tag
+# checkout, SHA256SUMS checked), publishes whichever of the five npm
+# hasn't got, and smokes. 0.2.2 needed it: npm accepted all four platform
+# publishes ("being processed"), then never stored the two arm64 ones (no
+# tarball, no attestation), and the wait step held pharos-mcp back.
+#
 # There is no Windows build: Windows users run pharos inside WSL (ADR-035).
 #
 # Auth: npm Trusted Publishing (OIDC), no NPM_TOKEN. The Trusted Publisher
@@ -27,6 +34,11 @@ on:
     tags: ["v*"]
     branches: ["ci/**"]
   workflow_dispatch:
+    inputs:
+      republish:
+        description: "Recovery: a released version (e.g. 0.2.2) whose npm publish didn't finish. Builds nothing."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -51,6 +63,7 @@ jobs:
             runner: macos-14
           - target: darwin-x64
             runner: macos-15-intel
+    if: ${{ !inputs.republish }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -111,8 +124,10 @@ jobs:
 
   publish:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ !cancelled() && ((startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success') || inputs.republish) }}
     runs-on: ubuntu-22.04
+    env:
+      RELEASE_TAG: ${{ inputs.republish && format('v{0}', inputs.republish) || github.ref_name }}
     permissions:
       contents: write   # the GitHub release
       id-token: write   # npm trusted publishing
@@ -120,32 +135,49 @@ jobs:
       version: ${{ steps.files.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/download-artifact@v4
+        if: ${{ !inputs.republish }}
         with:
           path: built
 
       - name: Gather the release files
         id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPUBLISH: ${{ inputs.republish }}
         run: |
-          version=${GITHUB_REF_NAME#v}
+          set -e
+          version=${RELEASE_TAG#v}
+          if ! printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?'; then
+            echo "not a version: $version" >&2
+            exit 1
+          fi
           mkdir dist
-          cp built/*/pharos-*.tar.gz dist/
-          cat built/*/SHA256SUMS | sort -k2 > dist/SHA256SUMS
-          cp install.sh dist/
+          if [ -n "$REPUBLISH" ]; then
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+              --pattern 'pharos-*.tar.gz' --pattern SHA256SUMS --pattern install.sh
+          else
+            cp built/*/pharos-*.tar.gz dist/
+            cat built/*/SHA256SUMS | sort -k2 > dist/SHA256SUMS
+            cp install.sh dist/
+          fi
           (cd dist && sha256sum -c SHA256SUMS)
           ls -l dist
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # A normal release, marked latest: releases/latest/download/install.sh is this one.
       - name: Publish the GitHub release
+        if: ${{ !inputs.republish }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=${GITHUB_REF_NAME#v}
+          version=${RELEASE_TAG#v}
           prerelease=--latest
           if [[ "$version" == *-* ]]; then prerelease=--prerelease; fi
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$RELEASE_TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "pharos $version" \
             $prerelease \
@@ -162,7 +194,7 @@ jobs:
           - Windows: install it inside WSL (pharos-mcp@0.1.4 was the last native Windows build).
           - Installed with install.sh: \`pharos self update\` upgrades, \`pharos self rollback\` goes back, \`pharos self prune\` removes old versions (and what pharos 0.1.x unpacked), \`pharos self uninstall\` removes it. Installed with npm: \`npm install -g pharos-mcp@latest\`.
 
-          What changed: [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md)."
+          What changed: [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$RELEASE_TAG/CHANGELOG.md)."
 
       - uses: actions/setup-node@v4
         with:
@@ -177,7 +209,7 @@ jobs:
       - name: Fill the npm platform packages from the release files
         run: |
           set -e
-          version=${GITHUB_REF_NAME#v}
+          version=${RELEASE_TAG#v}
           for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
             dest="npm/@pharos-mcp/$target"
             rm -rf "$dest/release" "$RUNNER_TEMP/unpack"
@@ -190,7 +222,7 @@ jobs:
       - name: Stamp the version into all five package.jsons, and LICENSE into each
         run: |
           set -e
-          version=${GITHUB_REF_NAME#v}
+          version=${RELEASE_TAG#v}
           for pkg in pharos-mcp @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
             node -e '
               const fs = require("fs");
@@ -203,13 +235,22 @@ jobs:
             cp LICENSE "npm/$pkg/LICENSE"
           done
 
+      # Idempotent, so a recovery run (or a re-run) publishes only what npm
+      # hasn't got. `npm view` reads the full document from the registry
+      # origin. If npm answers "previously published" for a version it
+      # doesn't show, it holds that version somewhere it won't serve: the
+      # version is burnt, and only a new release can fix it.
       - name: Publish the platform packages
         run: |
           set -e
-          version=${GITHUB_REF_NAME#v}
+          version=${RELEASE_TAG#v}
           tag=latest
           if [[ "$version" == *-* ]]; then tag=next; fi
           for pkg in @pharos-mcp/linux-x64 @pharos-mcp/linux-arm64 @pharos-mcp/darwin-x64 @pharos-mcp/darwin-arm64; do
+            if [ "$(npm view "$pkg@$version" version 2>/dev/null)" = "$version" ]; then
+              echo "==> $pkg $version is already on npm; skipping"
+              continue
+            fi
             echo "==> $pkg $version ($tag)"
             (cd "npm/$pkg" && npm publish --provenance --access public --tag "$tag")
           done
@@ -224,7 +265,7 @@ jobs:
       # for users.
       - name: Wait until npm can install every platform package
         run: |
-          version=${GITHUB_REF_NAME#v}
+          version=${RELEASE_TAG#v}
           for i in $(seq 1 60); do
             missing=
             for plat in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
@@ -252,15 +293,19 @@ jobs:
       - name: Publish pharos-mcp
         run: |
           set -e
-          version=${GITHUB_REF_NAME#v}
+          version=${RELEASE_TAG#v}
           tag=latest
           if [[ "$version" == *-* ]]; then tag=next; fi
+          if [ "$(npm view "pharos-mcp@$version" version 2>/dev/null)" = "$version" ]; then
+            echo "==> pharos-mcp $version is already on npm; skipping"
+            exit 0
+          fi
           echo "==> pharos-mcp $version ($tag)"
           (cd npm/pharos-mcp && npm publish --provenance --access public --tag "$tag")
 
   smoke:
     needs: publish
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.republish }}
     uses: ./.github/workflows/smoke.yml
     with:
       version: ${{ needs.publish.outputs.version }}
