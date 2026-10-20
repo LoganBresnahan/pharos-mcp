@@ -9,6 +9,7 @@
 //// setsid()s it exactly as it does an LSP.
 
 import gleam/erlang/process
+import gleam/string
 import gleeunit/should
 import pharos/lsp/instance_track
 
@@ -121,3 +122,42 @@ pub fn reap_leaves_an_unverifiable_live_group_alone_test() {
     }
   }
 }
+
+/// The start identity is stable for one live process and empty once it
+/// is gone. On Linux it must not come from `ps -o lstart`, which follows
+/// wall-clock adjustments (one live process read 2 s apart on WSL), so a
+/// live leader would look like a reused pid and never be signalled.
+pub fn process_start_is_stable_and_empty_when_gone_test() {
+  case spawn_script("sleep 30 & echo $$ $!; sleep 30") {
+    #(0, 0) -> Nil
+    #(leader, child) -> {
+      let start = process_start(leader)
+      should.not_equal(start, "")
+      process.sleep(1100)
+      should.equal(process_start(leader), start)
+      case os_family() {
+        Linux -> should.equal(string.starts_with(start, "linux:"), True)
+        _ -> Nil
+      }
+      let _ = instance_track.signal_pid(child, "KILL")
+      let _ = instance_track.signal_pid(leader, "KILL")
+      process.sleep(200)
+      should.equal(process_start(child), "")
+    }
+  }
+}
+
+type OsFamily {
+  Linux
+  Other
+}
+
+fn os_family() -> OsFamily {
+  case os_type() {
+    #(_, "linux") -> Linux
+    _ -> Other
+  }
+}
+
+@external(erlang, "pharos_signal_test_support", "os_type")
+fn os_type() -> #(String, String)

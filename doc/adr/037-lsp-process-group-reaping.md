@@ -52,8 +52,11 @@ What the measurement showed:
 
 No native code, and no bosun.
 
-1. **Every LSP stop reaps the LSP's process group.** `register_lsp/4` records the LSP's start time
-   (`ps -o lstart`) and starts one reaper process. The reaper monitors the lsp_proc actor that
+1. **Every LSP stop reaps the LSP's process group.** `register_lsp/4` records the LSP's start
+   identity and starts one reaper process. On Linux that identity is the boot id plus the start
+   time in clock ticks from `/proc/<pid>/stat`; on macOS, `ps -o lstart`. Not `ps -o lstart` on
+   Linux: procps derives it from btime, which moves when the wall clock is adjusted, and on WSL
+   one live process read 2 s apart, so it would have looked like a reused pid. The reaper monitors the lsp_proc actor that
    spawned the LSP; `client.close` also wakes it. When the actor goes, for any reason (close,
    eviction, idle stop, session end, `daemon stop`, a crash), the reaper:
    - waits up to 3 s for the group to empty by itself (most LSPs exit on EOF in milliseconds);

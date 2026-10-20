@@ -7,11 +7,18 @@
 -module(pharos_signal_test_support).
 
 -export([
+    os_type/0,
     own_os_pid/0,
     signal_target/1,
     spawn_child_with_grandchild/0,
     spawn_script/1
 ]).
+
+%% `os:type()` as two strings, for tests that differ between Linux and
+%% macOS.
+os_type() ->
+    {Family, Name} = os:type(),
+    {atom_to_binary(Family), atom_to_binary(Name)}.
 
 %% This BEAM's own OS pid, as an integer.
 own_os_pid() ->

@@ -539,14 +539,41 @@ ps_pid_pgid() ->
         end,
         string:split(Out, "\n", all)).
 
-%% A process's start time as `ps -o lstart=` prints it (portable), or
-%% <<>> when it is gone. Two reads of one process agree; a different
-%% process under a reused pid shows a different one.
+%% An opaque start identity for a process, or <<>> when it is gone. Two
+%% reads of one process agree; a different process under a reused pid
+%% shows a different one.
+%%
+%% Linux: the boot id plus the start time in clock ticks since boot,
+%% from /proc. Not `ps -o lstart`: procps derives that from btime,
+%% which moves whenever the wall clock is adjusted, so one live process
+%% read 2 s apart on WSL (and would look reused). macOS has no /proc;
+%% its `ps` reads the kernel's absolute start time, which doesn't move.
 process_start(Pid) when is_integer(Pid), Pid > 0 ->
-    Out = os:cmd("ps -o lstart= -p " ++ integer_to_list(Pid) ++ " 2>/dev/null"),
-    list_to_binary(string:trim(Out));
+    case os:type() of
+        {unix, linux} ->
+            case file:read_file("/proc/" ++ integer_to_list(Pid) ++ "/stat") of
+                {ok, Stat} -> proc_start(Stat);
+                {error, _} -> <<>>
+            end;
+        _ ->
+            ps_lstart(Pid)
+    end;
 process_start(_) ->
     <<>>.
+
+proc_start(Stat) ->
+    %% Field 2 (comm) may hold spaces and parens; fields after the last
+    %% ')' start at 3 (state), so starttime (22) is the 20th.
+    [_, Rest] = string:split(Stat, <<")">>, trailing),
+    Ticks = lists:nth(20, string:lexemes(Rest, " \n")),
+    case file:read_file("/proc/sys/kernel/random/boot_id") of
+        {ok, Boot} -> <<"linux:", (string:trim(Boot))/binary, ":", Ticks/binary>>;
+        _ -> <<"linux::", Ticks/binary>>
+    end.
+
+ps_lstart(Pid) ->
+    Out = os:cmd("ps -o lstart= -p " ++ integer_to_list(Pid) ++ " 2>/dev/null"),
+    list_to_binary(string:trim(Out)).
 
 %% Application stop: reap whatever this instance still records, at
 %% once and with the short timings, before the VM halts. Reapers still
