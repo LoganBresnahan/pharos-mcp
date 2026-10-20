@@ -580,6 +580,17 @@ def t_cli_new_language(sb):
           "the stub language wasn't printed: %r %r" % (out.stdout[:300], out.stderr[:300]))
 
 
+def t_process_id(sb):
+    """initialize carries the daemon's OS pid as processId (ADR-037), so
+    servers that watch their client exit by themselves when it dies."""
+    a = sb.start()
+    a.initialize()
+    hover(a, sb, 10)
+    log = open(os.path.join(sb.fixture, "stub.log")).read()
+    check("initialize processId=%d" % sb.daemon_pid() in log,
+          "processId isn't the daemon pid %s: %s" % (sb.daemon_pid(), log))
+
+
 def t_reap_on_stop(sb):
     """`pharos daemon stop` takes what an LSP left in its process group
     with it (rust-analyzer's in-flight cargo check, measured surviving)."""
@@ -631,6 +642,7 @@ SCENARIOS = [
     ("cancel_lands", t_cancel_lands),
     ("restart_survives", t_restart_survives),
     ("cli_new_language", t_cli_new_language),
+    ("process_id", t_process_id),
     ("reap_on_stop", t_reap_on_stop),
     ("reap_on_idle", t_reap_on_idle),
     ("reap_after_death", t_reap_after_death),

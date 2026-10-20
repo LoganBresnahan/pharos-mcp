@@ -14,7 +14,8 @@ Behavior is controlled via env vars:
   STUB_LSP_FAIL_HANDSHAKE=0   if 1, never reply to initialize
   STUB_LSP_LOG=path           append "<pid> <method>" for every message
                               received (proves e.g. that a cancel
-                              reached the LSP as $/cancelRequest)
+                              reached the LSP as $/cancelRequest);
+                              initialize also logs its processId
   STUB_LSP_GRANDCHILD=path    at startup, start a long-lived `sleep` in
                               the stub's process group, detached from
                               its stdio, and append its pid to path:
@@ -148,7 +149,11 @@ def main():
         log_path = os.environ.get("STUB_LSP_LOG")
         if log_path:
             with open(log_path, "a") as log:
-                log.write(f"{os.getpid()} {method}\n")
+                if method == "initialize":
+                    pid_param = (msg.get("params") or {}).get("processId")
+                    log.write(f"{os.getpid()} {method} processId={pid_param}\n")
+                else:
+                    log.write(f"{os.getpid()} {method}\n")
         if method == "initialize":
             resp = handle_initialize(msg)
             if resp is not None:

@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `languageId`. The `--cleanup` section no longer claims a
   process-name check it never made.
 
+### Changed
+
+- **`initialize` sends pharos's OS pid as `processId`** (it was `null`),
+  so servers that watch their client exit by themselves if pharos dies
+  without closing their pipes. Nine of the 23 bundled servers do,
+  including pyright, typescript-language-server and the vscode-langservers.
+
 ## [0.2.1] — 2026-10-19
 
 ### Added

@@ -43,8 +43,8 @@ What the measurement showed:
 - **The systemd scope changes nothing about survivors.** They stay in its cgroup, and the scope
   lingers until they exit.
 - **pharos sent `"processId": null`** in every `initialize`. That opts each server out of the LSP
-  spec's own way to notice a dead client, which jdtls and the vscode-languageserver servers
-  (pyright, typescript-language-server, …) implement.
+  spec's own way to notice a dead client, which jdtls and the servers built on
+  vscode-languageserver (pyright, typescript-language-server, …) implement.
 - **Signal state an LSP starts with** (from a probe LSP, Linux): SigBlk 0; SigIgn 0x1080 (SIGPIPE
   and SIGFPE).
 
@@ -80,8 +80,17 @@ No native code, and no bosun.
    deleted and nothing is signalled, because they can be months old, with their numbers reused
    since. `pharos --cleanup` uses the same code.
 4. **`initialize` carries the VM's OS pid as `processId`.** Servers that watch their client now
-   exit by themselves when pharos dies without closing their pipes. A dogfood pass across the 23
-   bundled languages compared it with 0.2.1's `null`.
+   exit by themselves when pharos dies without closing their pipes. No per-language opt-out: a
+   probe of all 23 bundled servers found none that minds. Each server was started from its
+   `--print-language-config` entry on its dogfood fixture, with `processId` set to a live process
+   that isn't its parent (pharos's VM isn't the LSP's parent either; erl_child_setup is). Every
+   one initialized and was still running 15 s later. Then that process was killed. These exited
+   by themselves, within 0–2.5 s: typescript-language-server, pyright,
+   vscode-html/css/json-language-server, yaml-language-server, bash-language-server,
+   perlnavigator, clojure-lsp. The other 14 were still running 20 s later; jdtls is among them,
+   though it implements the watch. Driving pharos itself (direct mode, which sends the VM pid)
+   across the 23 languages, every LSP answered `hover` cold and again at the end of the pass, with
+   no restarts.
 
 ## Consequences
 

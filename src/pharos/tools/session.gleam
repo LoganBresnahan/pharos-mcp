@@ -1307,7 +1307,10 @@ fn build_initialize_params(
 ) -> json.Json {
   let root_uri = workspace_root.path_to_uri(workspace_path)
   json.object([
-    #("processId", json.null()),
+    // The VM's OS pid (ADR-037): servers that watch their client's
+    // process exit by themselves when pharos dies without closing
+    // their pipes (SIGKILL, OOM). Was `null` through 0.2.1.
+    #("processId", json.int(vm_os_pid())),
     #("rootUri", json.string(root_uri)),
     #("rootPath", json.string(workspace_path)),
     #("capabilities", build_client_capabilities()),
@@ -1529,3 +1532,6 @@ fn ensure_doc_opened_for_server_id(
       }
   }
 }
+
+@external(erlang, "pharos_daemon_ffi", "os_pid")
+fn vm_os_pid() -> Int
