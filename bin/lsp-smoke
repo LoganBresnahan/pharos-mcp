@@ -30,9 +30,11 @@ fi
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-if [ -d "$HOME/.asdf/shims" ]; then
-  export PATH="$HOME/.asdf/shims:$PATH"
-fi
+for shims in "$HOME/.asdf/shims" "$HOME/.local/share/mise/shims"; do
+  if [ -d "$shims" ]; then
+    export PATH="$shims:$PATH"
+  fi
+done
 
 mix compile 1>&2
 

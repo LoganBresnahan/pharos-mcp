@@ -23,11 +23,13 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ORIG_CWD="$(pwd)"
 cd "$PROJECT_ROOT"
 
-# Ensure asdf shims are reachable. Claude Code's spawned subprocess may
-# inherit a minimal PATH that omits ~/.asdf/shims; prepend it defensively.
-if [ -d "$HOME/.asdf/shims" ]; then
-  export PATH="$HOME/.asdf/shims:$PATH"
-fi
+# Ensure version-manager shims are reachable (mise ahead of asdf). Claude Code's
+# spawned subprocess may inherit a minimal PATH that omits them; prepend defensively.
+for shims in "$HOME/.asdf/shims" "$HOME/.local/share/mise/shims"; do
+  if [ -d "$shims" ]; then
+    export PATH="$shims:$PATH"
+  fi
+done
 
 # Compile if needed. All output goes to stderr — the host only watches
 # stdout. Mix is the canonical build path now (the hpack_erl naming
