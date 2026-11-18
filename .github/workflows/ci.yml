@@ -78,6 +78,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-otp28-elixir1.19-gleam1.17-mix-
 
+      # Hex 2.7.0 leaves some packages half-unpacked on a cold fetch (no
+      # gleam.toml), so mix_gleam's deps.get hook never writes their mix.exs
+      # (pharos-mcp#15). Pinned to a version proven cold.
+      - name: Pin Hex
+        run: mix local.hex 2.4.2 --force
+
       - name: Install mix_gleam archive (LoganBresnahan/mix_gleam fork)
         run: mix archive.install --force github LoganBresnahan/mix_gleam
 
@@ -178,6 +184,12 @@ jobs:
           key: ${{ runner.os }}-prod-otp28-elixir1.19-gleam1.17-mix-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
             ${{ runner.os }}-prod-otp28-elixir1.19-gleam1.17-mix-
+
+      # Hex 2.7.0 leaves some packages half-unpacked on a cold fetch (no
+      # gleam.toml), so mix_gleam's deps.get hook never writes their mix.exs
+      # (pharos-mcp#15). Pinned to a version proven cold.
+      - name: Pin Hex
+        run: mix local.hex 2.4.2 --force
 
       - name: Install mix_gleam archive (LoganBresnahan/mix_gleam fork)
         run: mix archive.install --force github LoganBresnahan/mix_gleam
