@@ -6,33 +6,43 @@
 //// `diagnostics_mode`:
 ////
 //// - **Single-server.** Use the language's primary server with
-////   `Push` (drain `textDocument/publishDiagnostics`
-////   notifications) or `Pull` (`textDocument/diagnostic` request).
-////   Reads from `pharos_diagnostics_cache` first; cache miss falls
-////   through to the live drain or pull request.
+////   `Push` (read the server's last `textDocument/publishDiagnostics`
+////   from `pharos_diagnostics_cache`, waiting for one if needed) or
+////   `Pull` (`textDocument/diagnostic` request).
 ////
 //// - **Multi-server (M10 / ADR-019 Stage 3 follow-up).** Every
 ////   server whose scope COVERS `textDocument/diagnostic` runs its
 ////   own per-mode fetch in turn; the resulting `diagnostics`
 ////   arrays are concatenated into one synthesized
-////   publishDiagnostics envelope. The cache is bypassed in this
-////   branch — it stores one entry per URI, which would conflict
-////   with N servers contributing different subsets. Used today by
-////   python (pyright type-errors + ruff lint violations) and by
-////   any future multi-server language declaration.
+////   publishDiagnostics envelope. Used today by python (pyright
+////   type-errors + ruff lint violations) and by any future
+////   multi-server language declaration.
+////
+//// ADR-038: preparing the session re-syncs the file from disk, so a
+//// push entry is either fresh (published about the text the server
+//// has now), carried over (published before the last sync), or
+//// missing. A carried-over entry gets a short settle window to be
+//// replaced, then is answered from and marked. Every wait polls the
+//// cache from this process; none runs inside the proc actor, so a
+//// wait never holds up other sessions' requests to the server. A
+//// server that reports nothing in time is named in the result, never
+//// counted as clean.
 ////
 //// In every case the result body is shaped as a synthetic
 //// `textDocument/publishDiagnostics` envelope so the MCP caller
 //// reads identical JSON structure regardless of how many servers
-//// answered.
+//// answered. Notes about the answer go in a top-level `pharos`
+//// member of that envelope.
 
+import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/erlang/atom
+import gleam/erlang/process.{type Pid}
+import gleam/int
 import gleam/json
 import gleam/list
-import gleam/option
 import pharos/log
 import pharos/log/entry as log_entry
-import pharos/lsp/client
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/languages.{type LanguageConfig, type ServerConfig, Pull, Push}
 import pharos/lsp/pool.{type Pool}
@@ -41,6 +51,8 @@ import pharos/tools/session
 import pharos/tools/tool_helpers
 
 const default_drain_window_ms: Int = 8000
+
+const poll_step_ms: Int = 50
 
 const diagnostic_method: String = "textDocument/diagnostic"
 
@@ -71,12 +83,12 @@ pub type DiagnosticsError {
 }
 
 pub type DiagnosticsResult {
-  /// Server published or returned diagnostics for the file.
-  /// `body_json` is a `textDocument/publishDiagnostics`-shaped
-  /// envelope — verbatim from the server in single-server push
-  /// mode, synthesized otherwise.
+  /// At least one server published or returned diagnostics for the
+  /// file (possibly none). `body_json` is a
+  /// `textDocument/publishDiagnostics`-shaped envelope: the server's
+  /// own params in single-server push mode, synthesized otherwise.
   Diagnostics(uri: String, body_json: String)
-  /// No diagnostics observed from any contributing server.
+  /// No contributing server reported within the timeout.
   NoDiagnosticsObserved(uri: String)
 }
 
@@ -93,10 +105,27 @@ pub fn handle(
     Ok(config) -> {
       let covering =
         languages.servers_covering_method(config, diagnostic_method)
+      // Every wait below comes out of this call's own budget.
+      let deadline_ms = now_ms() + timeout_ms
       case covering {
         [_single] ->
-          attempt_single(pool, file_uri, config, timeout_ms, retries_left: 1)
-        _ -> attempt_merge(pool, file_uri, config, covering, timeout_ms)
+          attempt_single(
+            pool,
+            file_uri,
+            config,
+            timeout_ms,
+            deadline_ms,
+            retries_left: 1,
+          )
+        _ ->
+          attempt_merge(
+            pool,
+            file_uri,
+            config,
+            covering,
+            timeout_ms,
+            deadline_ms,
+          )
       }
     }
   }
@@ -113,52 +142,43 @@ pub fn handle_with_default_timeout(
 
 /// Single-server attempt. On `TransportFailed`, evict the pool
 /// entry for this language+workspace and recurse once with a fresh
-/// session. Retains the cache check so warm runs hit at O(1).
+/// session.
 fn attempt_single(
   pool: Pool,
   file_uri: String,
   config: LanguageConfig,
   timeout_ms: Int,
+  deadline_ms: Int,
   retries_left retries_left: Int,
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
   case session.prepare(pool, file_uri) {
     Error(err) -> Error(map_session_error(err))
     Ok(lsp) -> {
-      let primary_id = case languages.primary_server(config) {
-        Ok(s) -> s.id
-        Error(_) -> ""
+      let #(server_id, mode) = case languages.primary_server(config) {
+        Ok(server) -> #(server.id, server.diagnostics_mode)
+        Error(_) -> #("", Push)
       }
-      case lookup_cached(file_uri, primary_id) {
-        option.Some(body_json) ->
-          Ok(Diagnostics(uri: file_uri, body_json: body_json))
-
-        option.None -> {
-          let mode = case languages.primary_server(config) {
-            Ok(server) -> server.diagnostics_mode
-            Error(_) -> Push
-          }
-          let result = case mode {
-            Push -> push_drain(lsp, file_uri, timeout_ms)
-            Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
-          }
-          case result, retries_left > 0 {
-            Error(TransportFailed(_)), True -> {
-              log.warn_at(
-                "pharos/tools/diagnostics",
-                "transport error during diagnostics; evicting and retrying once",
-              )
-              evict_for_uri(pool, file_uri, config)
-              attempt_single(
-                pool,
-                file_uri,
-                config,
-                timeout_ms,
-                retries_left: retries_left - 1,
-              )
-            }
-            _, _ -> result
-          }
+      let result = case mode {
+        Push -> Ok(push_result(file_uri, server_id, proc.pid(lsp), deadline_ms))
+        Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
+      }
+      case result, retries_left > 0 {
+        Error(TransportFailed(_)), True -> {
+          log.warn_at(
+            "pharos/tools/diagnostics",
+            "transport error during diagnostics; evicting and retrying once",
+          )
+          evict_for_uri(pool, file_uri, config)
+          attempt_single(
+            pool,
+            file_uri,
+            config,
+            timeout_ms,
+            deadline_ms,
+            retries_left: retries_left - 1,
+          )
         }
+        _, _ -> result
       }
     }
   }
@@ -168,16 +188,11 @@ fn attempt_single(
 
 /// Multi-server attempt. Every server whose scope covers
 /// `textDocument/diagnostic` runs its own fetch sequentially; their
-/// items concatenate. Per-server failures warn-log and contribute
-/// an empty array — the surviving servers' diagnostics still reach
-/// the LLM.
-///
-/// Cache participation: the cache is keyed by `(uri, server_id)`
-/// (M11 fix), so each server's cached items are addressable. For
-/// each contributing server we hit the cache first; on miss we run
-/// the live fetch (push drain or pull request) and lifecycle's
-/// classifier writes the response back to the cache for next time.
-/// No transport-error retry on this path — partial results are
+/// items concatenate. A server that fails or reports nothing in time
+/// contributes no items and is named under `pharos.not_reported`: its
+/// diagnostics are unknown, which is not the same as none. When no
+/// server reported, the answer is `NoDiagnosticsObserved`. No
+/// transport-error retry on this path — partial results are
 /// preferable to all-or-nothing failure.
 fn attempt_merge(
   pool: Pool,
@@ -185,104 +200,103 @@ fn attempt_merge(
   config: LanguageConfig,
   _covering: List(ServerConfig),
   timeout_ms: Int,
+  deadline_ms: Int,
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
   case session.prepare_all_covering_method(pool, file_uri, diagnostic_method) {
     Error(err) -> Error(map_session_error(err))
     Ok([]) -> Ok(NoDiagnosticsObserved(uri: file_uri))
     Ok(prepared) -> {
-      let server_results =
+      let reports =
         list.map(prepared, fn(entry) {
           let #(server, lsp) = entry
-          let items = case server.diagnostics_mode {
-            Push ->
-              case fetch_items_cached(file_uri, server.id) {
-                option.Some(cached) -> cached
-                option.None ->
-                  fetch_items_one(server, lsp, file_uri, timeout_ms)
-              }
-            Pull -> fetch_items_one(server, lsp, file_uri, timeout_ms)
-          }
-          #(server.id, items)
+          #(
+            server.id,
+            server_report(server, lsp, file_uri, timeout_ms, deadline_ms),
+          )
         })
-
-      let merged_items = merge_items_arrays(server_results)
       let _ = config
       let _ = pool
-      case merged_items == "[]" {
-        True -> Ok(NoDiagnosticsObserved(uri: file_uri))
-        False ->
+      let reported =
+        list.filter_map(reports, fn(r) {
+          case r.1 {
+            Reported(items:, carried_over: _) -> Ok(#(r.0, items))
+            Silent -> Error(Nil)
+          }
+        })
+      let carried =
+        list.filter_map(reports, fn(r) {
+          case r.1 {
+            Reported(items: _, carried_over: True) -> Ok(r.0)
+            _ -> Error(Nil)
+          }
+        })
+      let silent =
+        list.filter_map(reports, fn(r) {
+          case r.1 {
+            Silent -> Ok(r.0)
+            _ -> Error(Nil)
+          }
+        })
+      case reported {
+        [] -> Ok(NoDiagnosticsObserved(uri: file_uri))
+        _ ->
           Ok(Diagnostics(
             uri: file_uri,
-            body_json: synthesize_publish_body(file_uri, merged_items),
+            body_json: publish_envelope(
+              synthesized_params(file_uri, merge_items_arrays(reported)),
+              carried,
+              silent,
+            ),
           ))
       }
     }
   }
 }
 
-/// Per-server cache hit on the merge path. Returns the JSON-string
-/// `diagnostics` array if cached; `None` on miss so the live fetch
-/// runs. The cache stored params verbatim from publishDiagnostics
-/// (`{uri, version?, diagnostics}`); we extract `diagnostics` and
-/// re-encode as JSON.
-fn fetch_items_cached(
-  file_uri: String,
-  server_id: String,
-) -> option.Option(String) {
-  case diagnostics_cache.get(file_uri, server_id) {
-    Error(_) -> option.None
-    Ok(params_value) -> {
-      let envelope =
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
-        <> "\"params\":"
-        <> tool_helpers.json_encode(params_value)
-        <> "}"
-      case extract_items_from_envelope(envelope) {
-        Ok(items) -> option.Some(items)
-        Error(_) -> option.None
-      }
-    }
-  }
+/// One server's contribution to a merged answer.
+type ServerReport {
+  Reported(items: String, carried_over: Bool)
+  Silent
 }
 
-/// Run one server's diagnostics fetch and return the items array as
-/// a JSON string. Errors return `"[]"` after a warn log; the merge
-/// path treats them as "no items from this server" rather than
-/// failing the whole call.
-fn fetch_items_one(
+fn server_report(
   server: ServerConfig,
   lsp: proc.Proc,
   file_uri: String,
   timeout_ms: Int,
-) -> String {
-  let result = case server.diagnostics_mode {
-    Push -> push_drain_items(lsp, file_uri, timeout_ms)
-    Pull -> pull_items(lsp, file_uri, timeout_ms)
+  deadline_ms: Int,
+) -> ServerReport {
+  let fetched = case server.diagnostics_mode {
+    Push ->
+      case resolve_push(file_uri, server.id, proc.pid(lsp), deadline_ms) {
+        FreshEntry(params) ->
+          items_from_params(params) |> result_map(fn(i) { #(i, False) })
+        CarriedEntry(params) ->
+          items_from_params(params) |> result_map(fn(i) { #(i, True) })
+        NotReported -> Error("no publishDiagnostics within the timeout")
+      }
+    Pull ->
+      pull_items(lsp, file_uri, timeout_ms)
+      |> result_map(fn(i) { #(i, False) })
   }
-  case result {
-    Ok(items) -> items
+  case fetched {
+    Ok(#(items, carried_over)) -> Reported(items:, carried_over:)
     Error(reason) -> {
       log.fields_at(
         "pharos/tools/diagnostics",
         log_entry.Warn,
-        "server diagnostics fetch failed; contributing empty array",
+        "server reported no diagnostics; naming it as not reported",
         [#("server", server.id), #("reason", reason)],
       )
-      "[]"
+      Silent
     }
   }
 }
 
-fn push_drain_items(
-  lsp: proc.Proc,
-  file_uri: String,
-  timeout_ms: Int,
-) -> Result(String, String) {
-  case proc.wait_for_publish_diagnostics(lsp, file_uri, timeout_ms) {
-    Error(err) ->
-      Error("publishDiagnostics drain: " <> describe_client_error(err))
-    Ok(option.None) -> Ok("[]")
-    Ok(option.Some(envelope)) -> extract_items_from_envelope(envelope)
+fn result_map(r: Result(a, e), f: fn(a) -> b) -> Result(b, e) {
+  case r {
+    Ok(v) -> Ok(f(v))
+    Error(e) -> Error(e)
   }
 }
 
@@ -314,23 +328,200 @@ fn pull_items(
   }
 }
 
-/// Pull `params.diagnostics` out of a publishDiagnostics envelope and
-/// return as a JSON string suitable for concatenation. Returns an
-/// `Error` on decode failure so the caller can fall back to live fetch
-/// instead of silently contributing `"[]"` to the merged result.
-/// Earlier behaviour returned `Ok("[]")` on every failure, which made
-/// the multi-server merge collapse to empty whenever the cached params
-/// failed to round-trip — surfaced in M11 dogfood Run 4 as
-/// `NoDiagnosticsObserved` for python despite pyright having items.
-fn extract_items_from_envelope(envelope: String) -> Result(String, String) {
-  let decoder = {
-    use params <- decode.field("params", params_with_diagnostics_decoder())
-    decode.success(params)
+// -- Push: the cache, freshness and waits (ADR-038) ----------------------
+
+type PushEntry {
+  FreshEntry(params: Dynamic)
+  CarriedEntry(params: Dynamic)
+  NotReported
+}
+
+/// The diagnostics the proc `pid` cached for `file_uri`:
+/// - fresh: answer now;
+/// - carried over: wait out what is left of the last sync's settle
+///   window (`diagnostics_cache.settle_ms`, run from when the sync was
+///   written, so a later question does not wait again) for a publish
+///   about the new text. Once the window has passed, an entry carried
+///   over only by other documents' changes is fresh (the server left
+///   this file's set as it was); one from before this document's own
+///   latest sync is answered marked as carried over. If the call's
+///   deadline ends the wait first, the entry is answered marked;
+/// - missing (nothing cached, or only from before pharos closed the
+///   document): wait until the call's deadline for a first publish.
+fn resolve_push(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  deadline_ms: Int,
+) -> PushEntry {
+  case diagnostics_cache.lookup(file_uri, server_id, pid) {
+    diagnostics_cache.Fresh(params) -> FreshEntry(params)
+    diagnostics_cache.CarriedOver(params) ->
+      case
+        await_lookup(
+          file_uri,
+          server_id,
+          pid,
+          int.min(now_ms() + diagnostics_cache.settle_left_ms(pid), deadline_ms),
+          fresh_only: True,
+        )
+      {
+        diagnostics_cache.Fresh(newer) -> FreshEntry(newer)
+        diagnostics_cache.CarriedOver(latest) -> CarriedEntry(latest)
+        diagnostics_cache.Missing -> CarriedEntry(params)
+      }
+    diagnostics_cache.Missing ->
+      case
+        await_lookup(file_uri, server_id, pid, deadline_ms, fresh_only: False)
+      {
+        diagnostics_cache.Fresh(params) -> FreshEntry(params)
+        diagnostics_cache.CarriedOver(params) -> CarriedEntry(params)
+        diagnostics_cache.Missing -> NotReported
+      }
   }
-  case json.parse(envelope, decoder) {
-    Ok(items_json) -> Ok(items_json)
-    Error(_) -> Error("publishDiagnostics envelope decode failed")
+}
+
+/// Poll the cache from the calling process until the entry is what we
+/// want or the budget runs out; return the last lookup. The proc actor
+/// caches publishes as they arrive, idle or mid-request, so nothing
+/// needs to drain inside it.
+fn await_lookup(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  until_ms: Int,
+  fresh_only fresh_only: Bool,
+) -> diagnostics_cache.Lookup {
+  poll_lookup(file_uri, server_id, pid, until_ms, fresh_only)
+}
+
+fn poll_lookup(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  deadline_ms: Int,
+  fresh_only: Bool,
+) -> diagnostics_cache.Lookup {
+  // The clock is read before the lookup, so the last lookup comes after
+  // the deadline: when the deadline is the end of a settle window, that
+  // lookup already counts the window as passed.
+  let expired = now_ms() >= deadline_ms
+  let current = diagnostics_cache.lookup(file_uri, server_id, pid)
+  let wanted = case current, fresh_only {
+    diagnostics_cache.Fresh(_), _ -> True
+    diagnostics_cache.CarriedOver(_), False -> True
+    _, _ -> False
   }
+  case wanted || expired {
+    True -> current
+    False -> {
+      process.sleep(poll_step_ms)
+      poll_lookup(file_uri, server_id, pid, deadline_ms, fresh_only)
+    }
+  }
+}
+
+fn now_ms() -> Int {
+  monotonic_time(atom.create("millisecond"))
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn monotonic_time(unit: atom.Atom) -> Int
+
+fn push_result(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  deadline_ms: Int,
+) -> DiagnosticsResult {
+  case resolve_push(file_uri, server_id, pid, deadline_ms) {
+    FreshEntry(params) ->
+      Diagnostics(
+        uri: file_uri,
+        body_json: publish_envelope(tool_helpers.json_encode(params), [], []),
+      )
+    CarriedEntry(params) ->
+      Diagnostics(
+        uri: file_uri,
+        body_json: publish_envelope(
+          tool_helpers.json_encode(params),
+          [server_id],
+          [],
+        ),
+      )
+    NotReported -> NoDiagnosticsObserved(uri: file_uri)
+  }
+}
+
+fn items_from_params(params: Dynamic) -> Result(String, String) {
+  case decode.run(params, params_with_diagnostics_decoder()) {
+    Ok(items) -> Ok(items)
+    Error(_) -> Error("publishDiagnostics params decode failed")
+  }
+}
+
+/// A `textDocument/publishDiagnostics` envelope around `params_json`,
+/// plus a `pharos` member when the answer needs a note.
+fn publish_envelope(
+  params_json: String,
+  carried_over: List(String),
+  not_reported: List(String),
+) -> String {
+  let base =
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
+    <> "\"params\":"
+    <> params_json
+  case carried_over, not_reported {
+    [], [] -> base <> "}"
+    _, _ ->
+      base
+      <> ",\"pharos\":"
+      <> json.to_string(answer_note(carried_over, not_reported))
+      <> "}"
+  }
+}
+
+fn answer_note(
+  carried_over: List(String),
+  not_reported: List(String),
+) -> json.Json {
+  let carried = case carried_over {
+    [] -> []
+    ids -> [
+      #("carried_over", json.array(ids, json.string)),
+      #(
+        "carried_over_note",
+        json.string(
+          "No publish since this file, or another file the server has "
+          <> "open, last changed: this is the server's last set from before "
+          <> "the change. It still holds if the change left the diagnostics "
+          <> "as they were; ask again if the server may still be analysing.",
+        ),
+      ),
+    ]
+  }
+  let silent = case not_reported {
+    [] -> []
+    ids -> [
+      #("not_reported", json.array(ids, json.string)),
+      #(
+        "not_reported_note",
+        json.string(
+          "These servers reported nothing in time: their diagnostics are "
+          <> "unknown, not empty.",
+        ),
+      ),
+    ]
+  }
+  json.object(list.append(carried, silent))
+}
+
+fn synthesized_params(uri: String, items_json: String) -> String {
+  "{\"uri\":"
+  <> json.to_string(json.string(uri))
+  <> ",\"diagnostics\":"
+  <> items_json
+  <> "}"
 }
 
 fn params_with_diagnostics_decoder() -> decode.Decoder(String) {
@@ -395,23 +586,6 @@ fn string_join(parts: List(String), sep: String) -> String {
   }
 }
 
-// -- Single-server push (cache hit + drain) -----------------------------
-
-fn push_drain(
-  lsp: proc.Proc,
-  file_uri: String,
-  timeout_ms: Int,
-) -> Result(DiagnosticsResult, DiagnosticsError) {
-  case proc.wait_for_publish_diagnostics(lsp, file_uri, timeout_ms) {
-    Error(err) ->
-      Error(TransportFailed(
-        "publishDiagnostics drain failed: " <> describe_client_error(err),
-      ))
-    Ok(option.None) -> Ok(NoDiagnosticsObserved(uri: file_uri))
-    Ok(option.Some(body)) -> Ok(Diagnostics(uri: file_uri, body_json: body))
-  }
-}
-
 // -- Single-server pull -------------------------------------------------
 
 fn pull_diagnostics(
@@ -440,15 +614,17 @@ fn pull_diagnostics(
             <> describe_decode_errors(decode_errs),
           ))
 
+        // The server answered, so an empty list means clean, not
+        // "nothing observed".
         Ok(items_json) ->
-          case items_json == "[]" {
-            True -> Ok(NoDiagnosticsObserved(uri: file_uri))
-            False ->
-              Ok(Diagnostics(
-                uri: file_uri,
-                body_json: synthesize_publish_body(file_uri, items_json),
-              ))
-          }
+          Ok(Diagnostics(
+            uri: file_uri,
+            body_json: publish_envelope(
+              synthesized_params(file_uri, items_json),
+              [],
+              [],
+            ),
+          ))
       }
   }
 }
@@ -466,30 +642,7 @@ fn full_report_items_decoder() -> decode.Decoder(String) {
   }
 }
 
-fn synthesize_publish_body(uri: String, items_json: String) -> String {
-  "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
-  <> "\"params\":{\"uri\":\""
-  <> uri
-  <> "\",\"diagnostics\":"
-  <> items_json
-  <> "}}"
-}
-
-// -- Cache + eviction (single-server only) -------------------------------
-
-fn lookup_cached(file_uri: String, server_id: String) -> option.Option(String) {
-  case diagnostics_cache.get(file_uri, server_id) {
-    Error(_) -> option.None
-    Ok(params_value) -> {
-      let envelope =
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
-        <> "\"params\":"
-        <> tool_helpers.json_encode(params_value)
-        <> "}"
-      option.Some(envelope)
-    }
-  }
-}
+// -- Eviction ------------------------------------------------------------
 
 /// Evict every server for the workspace owning `file_uri`.
 ///
@@ -522,15 +675,6 @@ fn map_session_error(err: session.SessionError) -> DiagnosticsError {
       NoActiveSessionForLanguage(uri, language)
     session.AmbiguousSessionForLanguage(uri, language, workspaces) ->
       AmbiguousSessionForLanguage(uri, language, workspaces)
-  }
-}
-
-fn describe_client_error(err: client.Error) -> String {
-  case err {
-    client.PortReceiveError(_) -> "port receive error"
-    client.PortSendError(_) -> "port send error"
-    client.FramingError(_) -> "framing error"
-    client.SpawnError(_) -> "spawn error"
   }
 }
 

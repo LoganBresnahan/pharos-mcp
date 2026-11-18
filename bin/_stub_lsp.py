@@ -27,6 +27,32 @@ STUB_LSP_HOVER_RESPONSES=whoami answers hover with the stub's pid and
 the value of STUB_LSP_TAG, so a test can tell which LSP process, started
 under which environment, answered (ADR-034 sharing).
 
+Document sync (ADR-038). The stub keeps each open document's text and
+version, applies didOpen / didChange / didClose, and logs what it got:
+
+  STUB_LSP_HOVER_RESPONSES=line
+                              answer hover with the stub's copy of the
+                              hovered line ("line N: <text>"), so a
+                              test can tell which text the server holds
+  STUB_LSP_SYNC_KIND=1        the advertised TextDocumentSyncKind (0, 1,
+                              2), or "omit" to leave textDocumentSync out
+  STUB_LSP_SYNC_SAVE=         unset: the number form. Set, the options
+                              form with save = "none" (left out),
+                              "true", or "text" ({includeText: true})
+  STUB_LSP_DIAGNOSTICS=       unset: never publish. "push": publish after
+                              every open/change, one diagnostic per line
+                              containing ERROR. "push-suppress": the same,
+                              but skip a publish whose diagnostics equal
+                              the last ones for the file (rust-analyzer's
+                              behaviour). "push-versionless": like push,
+                              without the `version` field
+
+With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
+line like "<pid> textDocument/didChange main.stub v=3 changes=1
+range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
+for which file. Publishes carry the document's current version, the way
+rust-analyzer and pyright stamp them.
+
 Used by `bin/test-edges.py` to simulate cold-start races, transport
 errors, content-modified races deterministically — without depending
 on any real language server's behavior.
@@ -41,6 +67,11 @@ import time
 
 
 HOVER_RETRY_STATE: dict[str, int] = {}
+
+# uri -> {"version": int, "text": str}
+DOCS: dict[str, dict] = {}
+# uri -> the diagnostics last published for it
+LAST_PUBLISHED: dict[str, list] = {}
 
 
 def read_message(stream):
@@ -74,18 +105,99 @@ def handle_initialize(req):
         time.sleep(delay)
     if os.environ.get("STUB_LSP_FAIL_HANDSHAKE") == "1":
         return None
+    capabilities = {
+        "hoverProvider": True,
+        "documentSymbolProvider": True,
+    }
+    kind = os.environ.get("STUB_LSP_SYNC_KIND", "1")
+    save = os.environ.get("STUB_LSP_SYNC_SAVE")
+    if kind != "omit":
+        if save is None:
+            capabilities["textDocumentSync"] = int(kind)
+        else:
+            options = {"openClose": True, "change": int(kind)}
+            if save == "true":
+                options["save"] = True
+            elif save == "text":
+                options["save"] = {"includeText": True}
+            capabilities["textDocumentSync"] = options
     return {
         "jsonrpc": "2.0",
         "id": req["id"],
         "result": {
-            "capabilities": {
-                "hoverProvider": True,
-                "documentSymbolProvider": True,
-                "textDocumentSync": 1,
-            },
+            "capabilities": capabilities,
             "serverInfo": {"name": "stub_lsp", "version": "0.0.1"},
         },
     }
+
+
+def sha8(text):
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def sync_log_suffix(method, params):
+    doc = params.get("textDocument") or {}
+    name = os.path.basename(doc.get("uri", ""))
+    return (" " + name if name else "") + sync_log_detail(method, params, doc)
+
+
+def sync_log_detail(method, params, doc):
+    if method == "textDocument/didOpen":
+        return " v=%s sha=%s" % (doc.get("version"), sha8(doc.get("text", "")))
+    if method == "textDocument/didChange":
+        changes = params.get("contentChanges") or []
+        ranged = any("range" in c or "rangeLength" in c for c in changes)
+        text = changes[-1].get("text", "") if changes else ""
+        return " v=%s changes=%d range=%s sha=%s" % (
+            doc.get("version"), len(changes), ranged, sha8(text))
+    if method == "textDocument/didSave":
+        return " save_text=%s" % ("text" in params)
+    return ""
+
+
+def apply_sync(method, params):
+    """Keep the stub's copy of each document. Returns the uri touched."""
+    doc = params.get("textDocument") or {}
+    uri = doc.get("uri")
+    if method == "textDocument/didOpen":
+        DOCS[uri] = {"version": doc.get("version"), "text": doc.get("text", "")}
+    elif method == "textDocument/didChange":
+        changes = params.get("contentChanges") or []
+        # Full-content changes only: a change with a range would need
+        # applying, and pharos never sends one.
+        if len(changes) == 1 and "range" not in changes[0] and uri in DOCS:
+            DOCS[uri] = {"version": doc.get("version"), "text": changes[0].get("text", "")}
+    elif method == "textDocument/didClose":
+        DOCS.pop(uri, None)
+        LAST_PUBLISHED.pop(uri, None)
+    return uri
+
+
+def maybe_publish(stdout, uri):
+    mode = os.environ.get("STUB_LSP_DIAGNOSTICS", "")
+    if not mode or uri not in DOCS:
+        return
+    doc = DOCS[uri]
+    diagnostics = [
+        {
+            "range": {"start": {"line": i, "character": 0},
+                      "end": {"line": i, "character": len(line)}},
+            "severity": 1,
+            "source": "stub",
+            "message": "stub error on line %d" % i,
+        }
+        for i, line in enumerate(doc["text"].split("\n")) if "ERROR" in line
+    ]
+    if mode == "push-suppress" and LAST_PUBLISHED.get(uri) == diagnostics:
+        return
+    LAST_PUBLISHED[uri] = diagnostics
+    params = {"uri": uri, "diagnostics": diagnostics}
+    if mode != "push-versionless":
+        params["version"] = doc["version"]
+    write_message(stdout, {"jsonrpc": "2.0",
+                           "method": "textDocument/publishDiagnostics",
+                           "params": params})
 
 
 def handle_hover(req):
@@ -96,6 +208,18 @@ def handle_hover(req):
     if mode == "panic":
         # Crash the process — pharos should detect via port DOWN.
         sys.exit(1)
+    if mode == "line":
+        params = req.get("params") or {}
+        uri = (params.get("textDocument") or {}).get("uri")
+        line_no = (params.get("position") or {}).get("line", 0)
+        lines = DOCS.get(uri, {}).get("text", "").split("\n")
+        text = lines[line_no] if line_no < len(lines) else "<no such line>"
+        return {
+            "jsonrpc": "2.0",
+            "id": req["id"],
+            "result": {"contents": {"kind": "plaintext",
+                                    "value": "line %d: %s" % (line_no, text)}},
+        }
     if mode == "whoami":
         tag = os.environ.get("STUB_LSP_TAG", "")
         return {
@@ -153,7 +277,8 @@ def main():
                     pid_param = (msg.get("params") or {}).get("processId")
                     log.write(f"{os.getpid()} {method} processId={pid_param}\n")
                 else:
-                    log.write(f"{os.getpid()} {method}\n")
+                    suffix = sync_log_suffix(method, msg.get("params") or {})
+                    log.write(f"{os.getpid()} {method}{suffix}\n")
         if method == "initialize":
             resp = handle_initialize(msg)
             if resp is not None:
@@ -165,11 +290,12 @@ def main():
             write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"], "result": None})
         elif method == "exit":
             return
-        elif method == "textDocument/didOpen":
-            continue  # no reply for notification
-        elif method == "textDocument/didChange":
-            continue
+        elif method in ("textDocument/didOpen", "textDocument/didChange"):
+            uri = apply_sync(method, msg.get("params") or {})
+            maybe_publish(stdout, uri)
         elif method == "textDocument/didClose":
+            apply_sync(method, msg.get("params") or {})
+        elif method == "textDocument/didSave":
             continue
         elif method == "textDocument/hover":
             resp = handle_hover(msg)

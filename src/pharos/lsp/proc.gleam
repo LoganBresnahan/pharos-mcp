@@ -24,12 +24,15 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/json.{type Json}
-import gleam/option.{type Option, None, Some}
+import gleam/list
+import gleam/option.{type Option}
 import gleam/otp/actor
 import gleam/result
 import pharos/log
+import pharos/log/entry as log_entry
 import pharos/lsp/client.{type Client}
 import pharos/lsp/diagnostics_cache
+import pharos/lsp/doc_sync.{type SyncCaps, type SyncOp}
 import pharos/lsp/inflight
 import pharos/lsp/lifecycle
 import pharos/lsp/port
@@ -89,11 +92,11 @@ pub opaque type Msg {
     reply_to: Subject(Result(Nil, lifecycle.RequestError)),
   )
   SendNotification(body: BitArray, reply_to: Subject(Result(Nil, client.Error)))
-  WaitForPublish(
-    target_uri: String,
-    timeout_ms: Int,
-    reply_to: Subject(Result(Option(String), client.Error)),
-  )
+  /// ADR-038: bring the server's copies of documents up to date with
+  /// the disk, stamping each sync in the diagnostics cache once
+  /// written. Sent (not called) by the pool, so the pool never waits
+  /// on a busy proc; callers wait on the stamps.
+  SyncBatch(batch: Int, ops: List(SyncOp))
   /// Catch-all for Port-emitted messages (server-side notifications,
   /// server-requests, exit_status) that arrive at the actor's
   /// mailbox between Request handlers. Without this, gleam_otp's
@@ -111,7 +114,10 @@ type State {
   /// table for cancel routing (ADR-016). gleam_otp surfaces `self`
   /// to the initialiser closure but not to handler invocations,
   /// hence the need to keep it in state.
-  State(client: Client, self_subject: Subject(Msg))
+  ///
+  /// `sync` is the server's `textDocumentSync` capability, read once
+  /// from the initialize result (ADR-038).
+  State(client: Client, self_subject: Subject(Msg), sync: SyncCaps)
 }
 
 /// Spawn a fresh LSP via `client.start`, run the initialize +
@@ -153,6 +159,7 @@ pub fn start(
             // becomes Unknown at the gate, which falls back to the
             // old optimistic-dispatch path.
             store_capabilities_for_self(initialize_result)
+            let sync = sync_caps_of(initialize_result)
             // M10: drain `$/progress` notifications until the language's
             // readiness token reaches `end` (rust-analyzer's
             // `rustAnalyzer/Indexing`, gopls's `setup`, pyright's
@@ -181,7 +188,7 @@ pub fn start(
               |> process.select(self)
               |> process.select_other(PortMessage)
             Ok(
-              actor.initialised(State(client: c, self_subject: self))
+              actor.initialised(State(client: c, self_subject: self, sync:))
               |> actor.selecting(selector)
               |> actor.returning(self),
             )
@@ -577,39 +584,16 @@ fn lsp_capabilities_store(pid: Pid, capabilities: Dynamic) -> Nil
 @external(erlang, "pharos_runtime_ffi", "safe_call_0")
 fn safe_call_0(closure: fn() -> a) -> Result(a, String)
 
-/// Drain inbound notifications inside the proc actor (where the
-/// Port owner lives) until either:
-///   - a `textDocument/publishDiagnostics` for `target_uri` arrives
-///     (returns `Ok(Some(<envelope JSON>))`)
-///   - the time budget expires (returns `Ok(None)`)
-///
-/// Used by `tools/tier1/diagnostics` on cache miss to grab the
-/// first publishDiagnostics emitted post-`didOpen`. Side-effect:
-/// publishDiagnostics for any URI seen during the drain is written
-/// to the diagnostics cache.
-pub fn wait_for_publish_diagnostics(
-  proc: Proc,
-  target_uri: String,
-  timeout_ms: Int,
-) -> Result(Option(String), client.Error) {
+/// Bring the server's copies of documents up to date (ADR-038).
+/// Fire-and-forget: the proc writes the notifications
+/// `doc_sync.notifications` builds for each op under the server's sync
+/// capability and stamps each in the diagnostics cache once written.
+/// The pool sends every batch, so one sender keeps a document's syncs
+/// in version order. A failed write marks the unwritten documents'
+/// stamps as failed, so waiting callers stop at once.
+pub fn sync_batch(proc: Proc, batch: Int, ops: List(SyncOp)) -> Nil {
   let Proc(subject) = proc
-  let call_timeout = timeout_ms + 5000
-  // Same containment as `request/4`: gleam_otp's actor.call uses
-  // let_assert on the reply Subject. If the proc actor is busy
-  // draining a long notification queue or has died, the timeout
-  // raises and kills the dispatcher worker. Convert to a typed
-  // transport error so the diagnostics tool surfaces a proper
-  // result instead of crashing mid-pass.
-  case
-    safe_call_0(fn() {
-      actor.call(subject, call_timeout, fn(reply) {
-        WaitForPublish(target_uri, timeout_ms, reply)
-      })
-    })
-  {
-    Ok(result) -> result
-    Error(_reason) -> Error(client.PortSendError(port.Closed))
-  }
+  process.send(subject, SyncBatch(batch, ops))
 }
 
 /// Tear down the proc. Sends `Close`; the actor exits and the
@@ -699,8 +683,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
 
-    WaitForPublish(target_uri:, timeout_ms:, reply_to:) ->
-      handle_wait_for_publish(state, target_uri, timeout_ms, reply_to)
+    SyncBatch(batch:, ops:) -> handle_sync_batch(state, batch, ops)
 
     PortMessage(payload:) -> handle_port_message(state, payload)
 
@@ -886,101 +869,89 @@ fn next_id() -> Int {
   unique_integer([Positive, Monotonic])
 }
 
-const drain_step_ms: Int = 500
-
-fn handle_wait_for_publish(
+fn handle_sync_batch(
   state: State,
-  target_uri: String,
-  remaining_ms: Int,
-  reply_to: Subject(Result(Option(String), client.Error)),
+  batch: Int,
+  ops: List(SyncOp),
 ) -> actor.Next(State, Msg) {
-  case drain_loop(state.client, target_uri, remaining_ms, option.None) {
-    Ok(#(updated_client, found)) -> {
-      process.send(reply_to, Ok(found))
-      actor.continue(State(..state, client: updated_client))
-    }
-    Error(err) -> {
-      process.send(reply_to, Error(err))
-      actor.continue(state)
-    }
-  }
-}
-
-fn drain_loop(
-  c: Client,
-  target_uri: String,
-  remaining_ms: Int,
-  latest: Option(String),
-) -> Result(#(Client, Option(String)), client.Error) {
-  // Cache poll: the actor's PortMessage handler may already have
-  // cached publishDiagnostics for `target_uri` between handler
-  // invocations. The server_id lives on the Client so cache lookup
-  // is keyed by `(uri, server_id)` — multi-LSP languages do not
-  // cross-pollute each other's cache rows.
-  let server_id = client.server_id(c)
-  case latest, lookup_cached_envelope(target_uri, server_id) {
-    None, Some(envelope) -> Ok(#(c, Some(envelope)))
-
-    _, _ ->
-      case remaining_ms <= 0 {
-        True -> Ok(#(c, latest))
-        False ->
-          case client.next_message(c, drain_step_ms) {
-            Error(client.PortReceiveError(_)) ->
-              drain_loop(c, target_uri, remaining_ms - drain_step_ms, latest)
-
-            Error(other) -> Error(other)
-
-            Ok(#(body, c)) -> {
-              // Dispatch the frame through lifecycle's classifier
-              // so server-requests (notably gopls's
-              // workspace/configuration) get replies. Without
-              // this, gopls blocks forever waiting for a
-              // configuration response and never publishes
-              // diagnostics. After dispatch, side-effect
-              // cache_publish_diagnostics has updated the cache
-              // for any publishDiagnostics frame; check the
-              // cache for our target_uri to capture the body.
-              let updated_client = case
-                lifecycle.classify_and_dispatch(c, body)
-              {
-                Ok(uc) -> uc
-                Error(_) -> c
-              }
-              let next_latest = case latest {
-                Some(_) -> latest
-                None -> lookup_cached_envelope(target_uri, server_id)
-              }
-              drain_loop(
-                updated_client,
-                target_uri,
-                remaining_ms - drain_step_ms,
-                next_latest,
-              )
-            }
-          }
-      }
-  }
-}
-
-/// Read the cache and re-shape into a `publishDiagnostics`
-/// notification envelope so drain_loop's caller can return the
-/// same JSON shape whether the body came from cache or live drain.
-fn lookup_cached_envelope(
-  target_uri: String,
-  server_id: String,
-) -> Option(String) {
-  case diagnostics_cache.get(target_uri, server_id) {
-    Error(_) -> None
-    Ok(params) ->
-      Some(
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
-        <> "\"params\":"
-        <> tool_helpers_json_encode(params)
-        <> "}",
+  let server_id = client.server_id(state.client)
+  // Before any write, so every entry cached from here on is known to
+  // come after the batch (no frame is read in between).
+  diagnostics_cache.mark_batch(batch)
+  case write_ops(state, server_id, ops) {
+    Ok(Nil) -> Nil
+    Error(unwritten) -> {
+      // Mark the op that failed and every one after it, so callers
+      // waiting on their stamps stop now. The proc keeps running: a
+      // failed write means the port is gone, the caller's request then
+      // fails, and the tool layer's transport-error path evicts and
+      // retries. Stopping here instead would restart the proc under
+      // the dyn_sup, against a restart limit every LSP shares.
+      list.each(unwritten, fn(op) {
+        diagnostics_cache.mark_failed(op_uri(op), server_id)
+      })
+      log.fields_at(
+        "pharos/lsp/proc",
+        log_entry.Warn,
+        "document sync write failed",
+        [
+          #("server", server_id),
+          #("documents", int_to_text(list.length(unwritten))),
+        ],
       )
+    }
+  }
+  actor.continue(state)
+}
+
+/// Write each op and stamp it; on a failed write, the ops not written.
+fn write_ops(
+  state: State,
+  server_id: String,
+  ops: List(SyncOp),
+) -> Result(Nil, List(SyncOp)) {
+  case ops {
+    [] -> Ok(Nil)
+    [op, ..rest] -> {
+      let written =
+        doc_sync.notifications(state.sync, op)
+        |> list.try_each(fn(body) {
+          client.send_body(state.client, bit_array.from_string(body))
+        })
+      case written {
+        Error(_) -> Error(ops)
+        Ok(Nil) -> {
+          // Stamp after the write and before any later frame is read:
+          // every publish this actor caches from here on comes after it.
+          case op {
+            doc_sync.OpOpen(uri:, version:, ..)
+            | doc_sync.OpChange(uri:, version:, ..) ->
+              diagnostics_cache.mark_synced(uri, server_id, version)
+            doc_sync.OpClose(uri:) ->
+              diagnostics_cache.mark_closed(uri, server_id)
+          }
+          write_ops(state, server_id, rest)
+        }
+      }
+    }
   }
 }
 
-@external(erlang, "pharos_fs_ffi", "encode_json")
-fn tool_helpers_json_encode(value: Dynamic) -> String
+fn op_uri(op: SyncOp) -> String {
+  case op {
+    doc_sync.OpOpen(uri:, ..) | doc_sync.OpChange(uri:, ..) -> uri
+    doc_sync.OpClose(uri:) -> uri
+  }
+}
+
+fn sync_caps_of(initialize_result: Dynamic) -> SyncCaps {
+  case
+    decode.run(
+      initialize_result,
+      decode.field("capabilities", decode.dynamic, decode.success),
+    )
+  {
+    Ok(caps) -> doc_sync.caps_from_capabilities(caps)
+    Error(_) -> doc_sync.caps_from_capabilities(dynamic.nil())
+  }
+}

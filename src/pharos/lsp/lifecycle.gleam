@@ -352,13 +352,16 @@ pub fn classify_and_dispatch(
 /// Side-effect for `Notification` classifications: when the server
 /// emits `textDocument/publishDiagnostics`, store the params keyed
 /// by `(uri, server_id)` so the get_diagnostics tool can read them
-/// on subsequent calls instead of waiting for a re-emit that never
-/// comes (pool's didOpen-once policy means servers do not re-publish
-/// for the same version). The `server_id` lives on the `Client`
-/// itself (1:1 with the LSP subprocess) so multi-LSP languages
-/// (python = pyright + ruff) cache each server's items independently
-/// without cross-overwrites. All other notification methods are
-/// dropped here; the caller's loop continues draining.
+/// on subsequent calls instead of waiting for a re-emit that may
+/// never come (a server publishes when it has something new to say).
+/// The `server_id` lives on the `Client` itself (1:1 with the LSP
+/// subprocess) so multi-LSP languages (python = pyright + ruff)
+/// cache each server's items independently without cross-overwrites.
+/// A publish whose `version` is older than the text last synced is
+/// not stored (ADR-038). Runs in the proc actor, the same process
+/// that stamps each sync, so entry and sync stamps order exactly.
+/// All other notification methods are dropped here; the caller's
+/// loop continues draining.
 fn cache_publish_diagnostics(
   client: Client,
   method: String,
@@ -366,16 +369,30 @@ fn cache_publish_diagnostics(
 ) -> Nil {
   case method {
     "textDocument/publishDiagnostics" ->
-      case decode.run(params, publish_diagnostics_uri_decoder()) {
-        Ok(uri) -> diagnostics_cache.put(uri, client.server_id(client), params)
+      case decode.run(params, publish_diagnostics_key_decoder()) {
+        Ok(#(uri, version)) ->
+          diagnostics_cache.put_publish(
+            uri,
+            client.server_id(client),
+            version,
+            params,
+          )
         Error(_) -> Nil
       }
     _ -> Nil
   }
 }
 
-fn publish_diagnostics_uri_decoder() -> decode.Decoder(String) {
-  decode.field("uri", decode.string, decode.success)
+fn publish_diagnostics_key_decoder() -> decode.Decoder(
+  #(String, option.Option(Int)),
+) {
+  use uri <- decode.field("uri", decode.string)
+  use version <- decode.optional_field(
+    "version",
+    option.None,
+    decode.optional(decode.int),
+  )
+  decode.success(#(uri, version))
 }
 
 /// Send a JSON-RPC request whose `params` field is supplied as
@@ -518,8 +535,8 @@ fn wait_for_response(
     Notification(method: method, params: params) -> {
       // Side-effect: cache publishDiagnostics so subsequent
       // get_diagnostics calls can return immediately even when the
-      // server has stopped re-emitting (didOpen-once flow). Stage 2
-      // second-pass C. Other notifications drain unchanged. Stage 0F's
+      // server does not re-emit (it publishes when it has something
+      // new to say). Stage 2 second-pass C; ADR-038. Other notifications drain unchanged. Stage 0F's
       // wait_for_ready/3 is the place to consume $/progress
       // selectively when a tool needs to wait for indexing.
       cache_publish_diagnostics(client, method, params)

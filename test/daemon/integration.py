@@ -627,6 +627,201 @@ def t_reap_after_death(sb):
     wait_until(lambda: not alive(grandchild), 20, "the next daemon to reap the grandchild")
 
 
+# -- ADR-038: documents follow the disk -------------------------------------
+
+def stub_file(sb, name, text):
+    path = os.path.join(sb.fixture, name)
+    with open(path, "w") as f:
+        f.write(text)
+    return "file://" + path
+
+
+def sync_lines(sb, method=None):
+    path = os.path.join(sb.fixture, "stub.log")
+    if not os.path.exists(path):
+        return []
+    lines = [l.split(None, 1)[1].strip() for l in open(path) if " textDocument/did" in l]
+    return [l for l in lines if method is None or l.startswith(method)]
+
+
+def hover_line(shim, uri, id_, line=0):
+    return shim.tool(id_, "hover", {"uri": uri, "line": line, "character": 0})
+
+
+def t_resync_follows_disk(sb):
+    """A file saved between two questions gets the second answer about the
+    new text: one full-text didChange at the next version, then didSave; an
+    unchanged file sends nothing."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_SYNC_KIND": "2",
+                  "STUB_LSP_SYNC_SAVE": "true"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "first\n")
+    check("line 0: first" in hover_line(a, uri, 10), "first answer")
+    stub_file(sb, "main.stub", "second\n")
+    h = hover_line(a, uri, 11)
+    check("line 0: second" in h, "answer did not follow the disk: %s" % h)
+    check("line 0: second" in hover_line(a, uri, 12), "unchanged re-ask")
+    changes = sync_lines(sb, "textDocument/didChange")
+    check(len(changes) == 1 and "v=2" in changes[0] and "changes=1" in changes[0]
+          and "range=False" in changes[0], "expected one full-text didChange v=2: %r" % changes)
+    saves = sync_lines(sb, "textDocument/didSave")
+    check(len(saves) == 1 and "save_text=False" in saves[0], "expected one plain didSave: %r" % saves)
+    check(len(sync_lines(sb, "textDocument/didOpen")) == 1, "reopened: %r" % sync_lines(sb))
+
+
+def t_resync_shared_sessions(sb):
+    """One session's first question doesn't pin the text for the others."""
+    env = {"STUB_LSP_HOVER_RESPONSES": "line"}
+    a = sb.start(env)
+    a.initialize()
+    b = sb.start(env)
+    b.initialize()
+    uri = stub_file(sb, "main.stub", "old\n")
+    check("line 0: old" in hover_line(a, uri, 10), "A's first answer")
+    stub_file(sb, "main.stub", "new\n")
+    h = hover_line(b, uri, 11)
+    check("line 0: new" in h, "B got the text A's question pinned: %s" % h)
+
+
+def t_resync_other_open_documents(sb):
+    """A question about one file re-syncs every other document open on that
+    server: B changed on disk is re-sent before the question about A."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    ua = stub_file(sb, "a.stub", "a1\n")
+    ub = stub_file(sb, "b.stub", "b1\n")
+    hover_line(a, ua, 10)
+    hover_line(a, ub, 11)
+    stub_file(sb, "b.stub", "b2\n")
+    hover_line(a, ua, 12)
+    changes = sync_lines(sb, "textDocument/didChange")
+    check(any("b.stub v=2" in c for c in changes), "b.stub was not re-synced: %r" % sync_lines(sb))
+    check(not any("a.stub" in c for c in changes), "a.stub didn't change: %r" % changes)
+    os.remove(os.path.join(sb.fixture, "b.stub"))
+    hover_line(a, ua, 13)
+    check(any("didClose b.stub" in c for c in sync_lines(sb)),
+          "a deleted file was not closed: %r" % sync_lines(sb))
+
+
+def t_resync_sync_kind_none(sb):
+    """A server that syncs nothing (TextDocumentSyncKind None) still gets a
+    balanced close + reopen at the next version, never a second didOpen."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_SYNC_KIND": "0"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "one\n")
+    hover_line(a, uri, 10)
+    stub_file(sb, "main.stub", "two\n")
+    check("line 0: two" in hover_line(a, uri, 11), "reopen didn't carry the new text")
+    lines = sync_lines(sb)
+    check(not any(l.startswith("textDocument/didChange") for l in lines), "didChange sent: %r" % lines)
+    check(any("didClose main.stub" in l for l in lines) and any("didOpen main.stub v=2" in l for l in lines),
+          "expected didClose then didOpen v=2: %r" % lines)
+
+
+def t_resync_unchanged_diagnostics(sb):
+    """A server that skips a publish when a file's diagnostics didn't change
+    (rust-analyzer's behaviour) costs the settle window, not the timeout, and
+    the answer is marked carried over."""
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push-suppress"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "ok\nERROR one\n")
+    d1 = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    check("stub error on line 1" in d1, "first diagnostics: %s" % d1)
+    stub_file(sb, "main.stub", "still ok\nERROR one\n")
+    t0 = time.time()
+    d2 = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    took = time.time() - t0
+    check("stub error on line 1" in d2 and "carried_over" in d2, "expected the carried-over set: %s" % d2)
+    check(took < 6, "took %.1fs: waited the timeout, not the settle window" % took)
+    # The window runs from the sync, so asking again doesn't wait again.
+    # The file's own change was never answered, so it stays marked.
+    t0 = time.time()
+    d2b = a.tool(13, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    took = time.time() - t0
+    check("stub error on line 1" in d2b and "carried_over" in d2b, "re-ask: %s" % d2b)
+    check(took < 1, "re-ask took %.1fs: waited out the window again" % took)
+    stub_file(sb, "main.stub", "fixed\n")
+    d3 = a.tool(12, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    check("stub error" not in d3 and "carried_over" not in d3, "expected a fresh empty set: %s" % d3)
+
+
+def t_resync_settles_after_window(sb):
+    """A server that never republishes an unchanged set (gopls,
+    rust-analyzer): after another document opens or changes, an unchanged
+    file's diagnostics are carried over for the settle window only. A call
+    that waits the window out, or comes after it, gets them fresh; only a
+    call whose own timeout ends inside the window gets them marked."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_DIAGNOSTICS": "push-suppress"})
+    a.initialize()
+    ua = stub_file(sb, "a.stub", "ERROR a\n")
+    ub = stub_file(sb, "b.stub", "b1\n")
+    d = a.tool(10, "get_diagnostics", {"uri": ua, "timeout_ms": 20000})
+    check("stub error on line 0" in d and "carried_over" not in d, "first: %s" % d)
+
+    def inside_then_after(what, id_):
+        # A call whose own timeout ends inside the window: marked.
+        t0 = time.time()
+        cut = a.tool(id_, "get_diagnostics", {"uri": ua, "timeout_ms": 400})
+        took = time.time() - t0
+        check("stub error on line 0" in cut and "carried_over" in cut,
+              "%s, cut short inside the window: %s" % (what, cut))
+        check(took < 1.5, "%s: the cut-short call took %.1fs" % (what, took))
+        # A call that waits the window out: the server stayed quiet, so
+        # the set stands, unmarked.
+        t0 = time.time()
+        rest = a.tool(id_ + 1, "get_diagnostics", {"uri": ua, "timeout_ms": 20000})
+        took = time.time() - t0
+        check("stub error on line 0" in rest and "carried_over" not in rest,
+              "%s, waited out the window: %s" % (what, rest))
+        check(took < 3, "%s: waiting out the window took %.1fs" % (what, took))
+        # After the window: at once.
+        t0 = time.time()
+        after = a.tool(id_ + 2, "get_diagnostics", {"uri": ua, "timeout_ms": 20000})
+        took = time.time() - t0
+        check("stub error on line 0" in after and "carried_over" not in after,
+              "%s, after the window: %s" % (what, after))
+        check(took < 1, "%s: after the window took %.1fs" % (what, took))
+
+    hover_line(a, ub, 11)               # opens b.stub on the same server
+    inside_then_after("another file opened", 12)
+    stub_file(sb, "b.stub", "b2\n")      # and now changes
+    inside_then_after("another file changed", 15)
+
+
+def t_resync_subject_deleted(sb):
+    """The file asked about is deleted: pharos closes it, never reopens it,
+    and neither hover nor get_diagnostics answers from the old text."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_DIAGNOSTICS": "push"})
+    a.initialize()
+    uri = stub_file(sb, "gone.stub", "oldtext ERROR\n")
+    d1 = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    check("stub error on line 0" in d1, "first diagnostics: %s" % d1)
+    os.remove(os.path.join(sb.fixture, "gone.stub"))
+    h = hover_line(a, uri, 11)
+    check("oldtext" not in h, "hover answered from the deleted text: %s" % h)
+    check(any(l == "textDocument/didClose gone.stub" for l in sync_lines(sb)),
+          "the deleted file was not closed: %r" % sync_lines(sb))
+    d2 = a.tool(12, "get_diagnostics", {"uri": uri, "timeout_ms": 1500})
+    check("stub error" not in d2, "diagnostics of the deleted text: %s" % d2)
+    opens = [l for l in sync_lines(sb, "textDocument/didOpen") if "gone.stub" in l]
+    check(len(opens) == 1, "a gone file was opened again: %r" % opens)
+
+
+def t_resync_open_cap(sb):
+    """At most 32 documents stay open per server; the least recently asked
+    about is closed."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    uris = [stub_file(sb, "f%02d.stub" % i, "f%d\n" % i) for i in range(33)]
+    for i, uri in enumerate(uris):
+        hover_line(a, uri, 100 + i)
+    closes = [l for l in sync_lines(sb) if l.startswith("textDocument/didClose")]
+    check(closes == ["textDocument/didClose f00.stub"], "expected only f00 closed: %r" % closes)
+    check("line 0: f0" in hover_line(a, uris[0], 200), "reopen after close")
+    check(any("didOpen f00.stub v=2" in l for l in sync_lines(sb)),
+          "a reopen must go out at the next version: %r" % sync_lines(sb)[-5:])
+
+
 SCENARIOS = [
     ("share", t_share),
     ("spawn_race", t_spawn_race),
@@ -646,6 +841,14 @@ SCENARIOS = [
     ("reap_on_stop", t_reap_on_stop),
     ("reap_on_idle", t_reap_on_idle),
     ("reap_after_death", t_reap_after_death),
+    ("resync_follows_disk", t_resync_follows_disk),
+    ("resync_shared_sessions", t_resync_shared_sessions),
+    ("resync_other_open_documents", t_resync_other_open_documents),
+    ("resync_sync_kind_none", t_resync_sync_kind_none),
+    ("resync_unchanged_diagnostics", t_resync_unchanged_diagnostics),
+    ("resync_open_cap", t_resync_open_cap),
+    ("resync_settles_after_window", t_resync_settles_after_window),
+    ("resync_subject_deleted", t_resync_subject_deleted),
 ]
 
 

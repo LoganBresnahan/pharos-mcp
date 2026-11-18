@@ -36,6 +36,7 @@
 import gleam/bit_array
 import gleam/dict.{type Dict}
 import gleam/dynamic
+import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
@@ -43,10 +44,11 @@ import gleam/list
 import gleam/option
 import gleam/otp/actor
 import gleam/result
-import gleam/set.{type Set}
 import gleam/string
 import pharos/log
 import pharos/log/entry as log_entry
+import pharos/lsp/diagnostics_cache
+import pharos/lsp/doc_sync.{type DiskState, type DocState}
 import pharos/lsp/languages.{
   type WarmProbe, ProbeDocumentSymbol, ProbeNone, ProbeWorkspaceSymbol,
 }
@@ -224,14 +226,26 @@ pub opaque type Msg {
   /// workspace, not just the one that hit the error.
   EvictAllServers(language: String, workspace: String)
   CloseAll
-  EnsureOpen(
+  /// ADR-038: the URIs of the documents pharos holds open on one LSP.
+  OpenDocuments(
     language: String,
     workspace: String,
     server_id: String,
-    uri: String,
+    reply_to: Subject(List(String)),
+  )
+  /// ADR-038: the caller read these documents from disk (the subject
+  /// of its question plus every other document open on the LSP).
+  /// Plan, record, send the proc one batch, and reply with the version
+  /// each open document must reach before the question is sent.
+  SyncDocuments(
+    language: String,
+    workspace: String,
+    server_id: String,
+    cache_server_id: String,
     language_id: String,
-    content: String,
-    reply_to: Subject(Result(Nil, EnsureOpenError)),
+    subject: String,
+    disk: List(#(String, DiskState)),
+    reply_to: Subject(Result(Expectations, EnsureOpenError)),
   )
   /// Sent to the pool actor when one of its monitored procs exits.
   ProcDown(monitor_ref: process.Monitor, reason: dynamic.Dynamic)
@@ -280,19 +294,66 @@ pub opaque type Msg {
 pub type EnsureOpenError {
   /// No LSP cached for this `(language, workspace, server_id)`.
   NoCachedClient
-  /// `proc.send_notification` returned an error.
+  /// The proc failed to write the sync (its LSP is gone), or died.
   SendFailed
+  /// The proc did not write the sync within `sync_wait_cap_ms` (it is
+  /// busy with a long request). The sync still happens, in order, when
+  /// it is free.
+  AckTimeout
 }
+
+/// `(language, workspace, server_key, uri)`.
+type DocKey =
+  #(String, String, String, String)
+
+/// One document pharos has told an LSP about. `cache_server_id` keys
+/// the diagnostics cache (the registry server id, without the ADR-034
+/// variant); `last_used` orders the open set for the LRU cap.
+type Doc {
+  Doc(
+    state: DocState,
+    language_id: String,
+    cache_server_id: String,
+    last_used: Int,
+  )
+}
+
+/// The pool's answer to `SyncDocuments`: the proc, and the version each
+/// document open on it must reach.
+type Expectations {
+  /// `documents`: each open document and the version it is to be at.
+  /// `closed`: each document this batch closes and its last version.
+  Expectations(
+    proc: Proc,
+    documents: List(#(String, Int)),
+    closed: List(#(String, Int)),
+  )
+}
+
+/// ADR-038: the most documents pharos keeps open per LSP. Each
+/// question re-reads all of them, so this bounds its cost; a closed
+/// document goes back to being read from disk by the server.
+const max_open_documents: Int = 32
+
+/// ADR-038: how long a caller waits for its sync to be written before
+/// sending the question anyway. The question's own timeout starts after
+/// this wait, so it can add up to this much to a call's wall time; past
+/// it, the question still queues behind the sync in the proc's mailbox,
+/// and the diagnostics cache's expectations keep `get_diagnostics`
+/// honest.
+const sync_wait_cap_ms: Int = 2000
 
 type State {
   State(
     cache: Dict(ProcKey, Proc),
     /// Reverse index from monitor ref to cache key.
     monitors: Dict(process.Monitor, ProcKey),
-    /// `(language, workspace, server_id, uri)` — track which
-    /// documents have been opened on which (language, workspace,
-    /// server_id) combo.
-    opened: Set(#(String, String, String, String)),
+    /// `(language, workspace, server_key, uri)` → what was last sent
+    /// for each document the LSP has been told about (ADR-038).
+    /// Cleared for an LSP when it is evicted.
+    docs: Dict(DocKey, Doc),
+    /// Logical clock for `Doc.last_used`.
+    clock: Int,
     /// In-flight spawn waitlists. While a spawner worker is running
     /// for `key`, every additional `Get(key, ...)` appends its
     /// reply Subject to the list. When `SpawnCompleted(key, ...)`
@@ -410,7 +471,8 @@ fn start_internal() -> Result(actor.Started(Subject(Msg)), actor.StartError) {
       actor.initialised(State(
         cache: dict.new(),
         monitors: dict.new(),
-        opened: set.new(),
+        docs: dict.new(),
+        clock: 0,
         inflight: dict.new(),
         lsp_state: dict.new(),
         spawner_monitors: dict.new(),
@@ -567,23 +629,139 @@ pub fn snapshot(pool: Pool) -> PoolSnapshot {
   actor.call(subject, default_call_timeout_ms, fn(reply) { SnapshotReq(reply) })
 }
 
-/// Ensure the cached LSP for
-/// `(language, workspace, server_id)` has been told about this
-/// document via `textDocument/didOpen`. Idempotent.
+/// Make the cached LSP for `(language, workspace, server_id)` hold the
+/// saved text of this document and of every other document pharos
+/// holds open on it (ADR-038): `didOpen` the first time, a re-sync for
+/// each one that changed on disk, `didClose` for one that is gone or
+/// falls out of the LRU cap, nothing for the rest. Returns once the
+/// proc has written the syncs, so a request sent next is answered about
+/// the disk as it is now.
+///
+/// The files are read here, in the caller; the pool only decides and
+/// records; the proc writes and stamps each sync in the diagnostics
+/// cache, and this caller waits for the stamps. So the pool actor never
+/// waits on a proc that is busy with another session's long request.
+/// `server_id` is the pool's server key; `cache_server_id` the registry
+/// id the diagnostics cache is keyed by.
 pub fn ensure_open(
   pool: Pool,
   language: String,
   workspace: String,
   server_id: String,
+  cache_server_id: String,
   uri: String,
   language_id: String,
-  content: String,
 ) -> Result(Nil, EnsureOpenError) {
   let Pool(subject) = pool
-  actor.call(subject, default_call_timeout_ms, fn(reply) {
-    EnsureOpen(language, workspace, server_id, uri, language_id, content, reply)
-  })
+  let open_uris =
+    actor.call(subject, default_call_timeout_ms, fn(reply) {
+      OpenDocuments(language, workspace, server_id, reply)
+    })
+  let others =
+    list.filter_map(open_uris, fn(other) {
+      case other == uri {
+        True -> Error(Nil)
+        False -> Ok(#(other, read_disk(other)))
+      }
+    })
+  // The subject is read the same way: a file that is gone (or is not
+  // text) is closed if open and never opened, as for a file that never
+  // existed.
+  let disk = [#(uri, read_disk(uri)), ..others]
+  let answer =
+    actor.call(subject, default_call_timeout_ms, fn(reply) {
+      SyncDocuments(
+        language,
+        workspace,
+        server_id,
+        cache_server_id,
+        language_id,
+        uri,
+        disk,
+        reply,
+      )
+    })
+  case answer {
+    Error(err) -> Error(err)
+    Ok(Expectations(proc: spawned, documents:, closed:)) ->
+      await_stamps(
+        cache_server_id,
+        proc.pid(spawned),
+        documents,
+        closed,
+        monotonic_ms() + sync_wait_cap_ms,
+        1,
+      )
+  }
 }
+
+fn read_disk(uri: String) -> doc_sync.DiskState {
+  let text =
+    workspace_root.uri_to_path(uri)
+    |> result.replace_error(Nil)
+    |> result.try(fn(path) {
+      workspace_root.read_file(path) |> result.replace_error(Nil)
+    })
+    |> result.try(bit_array.to_string)
+  case text {
+    Ok(t) -> doc_sync.OnDisk(t, doc_sync.content_hash(t))
+    Error(_) -> doc_sync.Gone
+  }
+}
+
+/// Wait until the proc has stamped every document at its expected
+/// version, and every close. The stamp is written by the proc right
+/// after the write, so once it is seen, anything this caller sends the
+/// proc is handled after the sync. Checked at once (an idle proc stamps
+/// within microseconds), then with a doubling back-off up to 50 ms.
+fn await_stamps(
+  cache_server_id: String,
+  pid: process.Pid,
+  documents: List(#(String, Int)),
+  closed: List(#(String, Int)),
+  deadline_ms: Int,
+  backoff_ms: Int,
+) -> Result(Nil, EnsureOpenError) {
+  let statuses =
+    list.append(
+      list.map(documents, fn(doc) {
+        diagnostics_cache.stamp_status(doc.0, cache_server_id, doc.1, pid)
+      }),
+      list.map(closed, fn(doc) {
+        diagnostics_cache.close_status(doc.0, cache_server_id, doc.1, pid)
+      }),
+    )
+  case
+    list.contains(statuses, diagnostics_cache.Failed),
+    list.all(statuses, fn(st) { st == diagnostics_cache.Reached })
+  {
+    True, _ -> Error(SendFailed)
+    False, True -> Ok(Nil)
+    False, False ->
+      case process.is_alive(pid), monotonic_ms() >= deadline_ms {
+        False, _ -> Error(SendFailed)
+        True, True -> Error(AckTimeout)
+        True, False -> {
+          process.sleep(backoff_ms)
+          await_stamps(
+            cache_server_id,
+            pid,
+            documents,
+            closed,
+            deadline_ms,
+            int.min(backoff_ms * 2, 50),
+          )
+        }
+      }
+  }
+}
+
+fn monotonic_ms() -> Int {
+  monotonic_time(atom.create("millisecond"))
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn monotonic_time(unit: atom.Atom) -> Int
 
 fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
@@ -598,15 +776,32 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
     CloseAll -> handle_close_all(state)
 
-    EnsureOpen(language, workspace, server_id, uri, language_id, content, reply) ->
-      handle_ensure_open(
+    OpenDocuments(language, workspace, server_id, reply) -> {
+      process.send(
+        reply,
+        open_documents(state.docs, language, workspace, server_id)
+          |> list.map(fn(entry) { entry.0 }),
+      )
+      actor.continue(state)
+    }
+
+    SyncDocuments(
+      language,
+      workspace,
+      server_id,
+      cache_server_id,
+      language_id,
+      subject,
+      disk,
+      reply,
+    ) ->
+      handle_sync_documents(
         state,
-        language,
-        workspace,
-        server_id,
-        uri,
+        #(language, workspace, server_id),
+        cache_server_id,
         language_id,
-        content,
+        subject,
+        disk,
         reply,
       )
 
@@ -775,6 +970,7 @@ fn handle_kill_lsp(
         list.fold(matching, 0, fn(acc, entry) {
           let #(key, spawned) = entry
           let #(l, w, s) = key
+          forget_proc(spawned)
           proc.close(spawned)
           proc.forget_subject(l, w, s)
           log.fields_at(
@@ -790,8 +986,8 @@ fn handle_kill_lsp(
         list.fold(killed_keys, state.cache, fn(c, k) { dict.delete(c, k) })
       let lsp_state =
         list.fold(killed_keys, state.lsp_state, fn(s, k) { dict.delete(s, k) })
-      let opened =
-        set.filter(state.opened, fn(quad) {
+      let docs =
+        drop_docs(state.docs, fn(quad) {
           let #(l, w, s, _) = quad
           !list.any(killed_keys, fn(k) {
             let #(kl, kw, ks) = k
@@ -800,7 +996,7 @@ fn handle_kill_lsp(
         })
       process.send(reply, Killed(count))
       actor.continue(
-        State(..state, cache: cache, opened: opened, lsp_state: lsp_state),
+        State(..state, cache: cache, docs: docs, lsp_state: lsp_state),
       )
     }
   }
@@ -1070,6 +1266,7 @@ fn spawn_worker(
             // cache a half-warm LSP. Pool's monitor will see the
             // DOWN and (already) clean up; SpawnCompleted with
             // Error short-circuits the inflight waiters first.
+            forget_proc(spawned)
             proc.close(spawned)
             process.send(
               self_subject,
@@ -1438,16 +1635,17 @@ fn evict_key(state: State, key: ProcKey) -> State {
   let #(language, workspace, server_id) = key
   case dict.get(state.cache, key) {
     Ok(spawned) -> {
+      forget_proc(spawned)
       proc.close(spawned)
       proc.forget_subject(language, workspace, server_id)
       let cache = dict.delete(state.cache, key)
       let lsp_state = dict.delete(state.lsp_state, key)
-      let opened =
-        set.filter(state.opened, fn(quad) {
+      let docs =
+        drop_docs(state.docs, fn(quad) {
           let #(l, w, s, _) = quad
           !{ l == language && w == workspace && s == server_id }
         })
-      State(..state, cache: cache, opened: opened, lsp_state: lsp_state)
+      State(..state, cache: cache, docs: docs, lsp_state: lsp_state)
     }
     Error(_) -> state
   }
@@ -1469,6 +1667,7 @@ fn handle_evict_all(
     list.fold(matching, state.cache, fn(c, entry) {
       let #(key, spawned) = entry
       let #(l, w, s) = key
+      forget_proc(spawned)
       proc.close(spawned)
       proc.forget_subject(l, w, s)
       dict.delete(c, key)
@@ -1477,14 +1676,12 @@ fn handle_evict_all(
     list.fold(matching, state.lsp_state, fn(s, entry) {
       dict.delete(s, entry.0)
     })
-  let opened =
-    set.filter(state.opened, fn(quad) {
+  let docs =
+    drop_docs(state.docs, fn(quad) {
       let #(l, w, _, _) = quad
       !{ l == language && w == workspace }
     })
-  actor.continue(
-    State(..state, cache: cache, opened: opened, lsp_state: lsp_state),
-  )
+  actor.continue(State(..state, cache: cache, docs: docs, lsp_state: lsp_state))
 }
 
 fn handle_close_all(state: State) -> actor.Next(State, Msg) {
@@ -1496,7 +1693,7 @@ fn handle_close_all(state: State) -> actor.Next(State, Msg) {
       ..state,
       cache: dict.new(),
       monitors: dict.new(),
-      opened: set.new(),
+      docs: drop_docs(state.docs, fn(_) { False }),
       inflight: dict.new(),
       lsp_state: dict.new(),
     ),
@@ -1554,11 +1751,15 @@ fn handle_lsp_child_down(
       #("server", server_id),
     ],
   )
+  case dict.get(state.cache, key) {
+    Ok(spawned) -> forget_proc(spawned)
+    Error(_) -> Nil
+  }
   let cache = dict.delete(state.cache, key)
   let monitors = dict.delete(state.monitors, monitor_ref)
   let lsp_state = dict.delete(state.lsp_state, key)
-  let opened =
-    set.filter(state.opened, fn(quad) {
+  let docs =
+    drop_docs(state.docs, fn(quad) {
       let #(l, w, s, _) = quad
       !{ l == language && w == workspace && s == server_id }
     })
@@ -1567,7 +1768,7 @@ fn handle_lsp_child_down(
       ..state,
       cache: cache,
       monitors: monitors,
-      opened: opened,
+      docs: docs,
       lsp_state: lsp_state,
     ),
   )
@@ -1640,83 +1841,194 @@ fn describe_dynamic(value: dynamic.Dynamic) -> String {
 @external(erlang, "pharos_runtime_ffi", "iolist_to_binary_safe")
 fn iolist_to_string_safe(io: dynamic.Dynamic) -> String
 
-fn handle_ensure_open(
+fn handle_sync_documents(
   state: State,
-  language: String,
-  workspace: String,
-  server_id: String,
-  uri: String,
+  proc_key: #(String, String, String),
+  cache_server_id: String,
   language_id: String,
-  content: String,
-  reply: Subject(Result(Nil, EnsureOpenError)),
+  subject: String,
+  disk: List(#(String, DiskState)),
+  reply: Subject(Result(Expectations, EnsureOpenError)),
 ) -> actor.Next(State, Msg) {
-  let doc_key = #(language, workspace, server_id, uri)
-  case set.contains(state.opened, doc_key) {
-    True -> {
-      process.send(reply, Ok(Nil))
+  case dict.get(state.cache, proc_key) {
+    Error(_) -> {
+      process.send(reply, Error(NoCachedClient))
       actor.continue(state)
     }
 
-    False ->
-      case dict.get(state.cache, #(language, workspace, server_id)) {
-        Error(_) -> {
-          process.send(reply, Error(NoCachedClient))
-          actor.continue(state)
+    Ok(spawned) -> {
+      let #(language, workspace, server_id) = proc_key
+      let key = fn(uri) { #(language, workspace, server_id, uri) }
+      let clock = state.clock + 1
+      let #(docs, ops) =
+        list.fold(disk, #(state.docs, []), fn(acc, entry) {
+          let #(docs, ops) = acc
+          let #(uri, on_disk) = entry
+          plan_one(
+            docs,
+            ops,
+            key(uri),
+            on_disk,
+            uri == subject,
+            language_id,
+            cache_server_id,
+            clock,
+          )
+        })
+      let victims =
+        open_documents(docs, language, workspace, server_id)
+        |> list.map(fn(entry) { #(entry.0, { entry.1 }.last_used) })
+        |> doc_sync.lru_victims(subject, max_open_documents)
+      let #(docs, ops) =
+        list.fold(victims, #(docs, ops), fn(acc, uri) {
+          #(close_doc(acc.0, key(uri)), [doc_sync.OpClose(uri), ..acc.1])
+        })
+      let ops = list.reverse(ops)
+      let pid = proc.pid(spawned)
+      list.each(ops, fn(op) {
+        case op {
+          doc_sync.OpOpen(uri:, version:, ..)
+          | doc_sync.OpChange(uri:, version:, ..) ->
+            diagnostics_cache.expect(uri, cache_server_id, version, pid)
+          doc_sync.OpClose(uri:) ->
+            diagnostics_cache.expect_closed(uri, cache_server_id, pid)
         }
-
-        Ok(spawned) -> {
-          let body =
-            json.object([
-              #("jsonrpc", json.string("2.0")),
-              #("method", json.string("textDocument/didOpen")),
-              #(
-                "params",
-                json.object([
-                  #(
-                    "textDocument",
-                    json.object([
-                      #("uri", json.string(uri)),
-                      #("languageId", json.string(language_id)),
-                      #("version", json.int(1)),
-                      #("text", json.string(content)),
-                    ]),
-                  ),
-                ]),
-              ),
-            ])
-            |> json.to_string
-            |> bit_array.from_string
-
-          // proc.send_notification does an actor.call with a 5s
-          // timeout backed by gleam_otp's let_assert. A slow or dead
-          // proc actor — common during LSP indexing thrash — raises,
-          // which crashes the pool actor itself (M14 P5+ regression
-          // captured by [pharos-sasl]). safe_call_0 contains the
-          // panic so the pool stays up; the caller gets SendFailed
-          // and retries via the standard transport-error path.
-          let send_result =
-            safe_call_0(fn() { proc.send_notification(spawned, body) })
-          case send_result {
-            Ok(Ok(Nil)) -> {
-              process.send(reply, Ok(Nil))
-              actor.continue(
-                State(..state, opened: set.insert(state.opened, doc_key)),
-              )
-            }
-            Ok(Error(_)) | Error(_) -> {
-              process.send(reply, Error(SendFailed))
-              actor.continue(state)
-            }
-          }
+      })
+      // A send, not a call: the proc may be inside another session's
+      // long request. Every batch goes through here, so one sender
+      // keeps each document's syncs in version order.
+      case ops {
+        [] -> Nil
+        _ -> {
+          diagnostics_cache.expect_batch(pid, clock)
+          proc.sync_batch(spawned, clock, ops)
         }
       }
+      let documents =
+        open_documents(docs, language, workspace, server_id)
+        |> list.map(fn(entry) { #(entry.0, { entry.1 }.state.version) })
+      let closed =
+        list.filter_map(ops, fn(op) {
+          case op {
+            doc_sync.OpClose(uri:) ->
+              dict.get(docs, key(uri))
+              |> result.map(fn(doc) { #(uri, doc.state.version) })
+            doc_sync.OpOpen(..) | doc_sync.OpChange(..) -> Error(Nil)
+          }
+        })
+      process.send(reply, Ok(Expectations(proc: spawned, documents:, closed:)))
+      actor.continue(State(..state, docs:, clock:))
+    }
   }
+}
+
+/// Plan one document of a sync: record its new state and add its op.
+fn plan_one(
+  docs: Dict(DocKey, Doc),
+  ops: List(doc_sync.SyncOp),
+  k: DocKey,
+  on_disk: DiskState,
+  is_subject: Bool,
+  language_id: String,
+  cache_server_id: String,
+  clock: Int,
+) -> #(Dict(DocKey, Doc), List(doc_sync.SyncOp)) {
+  let uri = k.3
+  let existing = dict.get(docs, k)
+  let plan = case is_subject, existing {
+    True, _ ->
+      doc_sync.plan_subject(result.map(existing, fn(d) { d.state }), on_disk)
+    False, Ok(doc) -> doc_sync.plan_open(doc.state, on_disk)
+    False, Error(Nil) -> doc_sync.Unchanged
+  }
+  let last_used = case is_subject, existing {
+    False, Ok(doc) -> doc.last_used
+    _, _ -> clock
+  }
+  let lid = case is_subject, existing {
+    False, Ok(doc) -> doc.language_id
+    _, _ -> language_id
+  }
+  let record = fn(version, hash) {
+    dict.insert(
+      docs,
+      k,
+      Doc(
+        doc_sync.DocState(version:, hash:, open: True),
+        lid,
+        cache_server_id,
+        last_used,
+      ),
+    )
+  }
+  case plan, on_disk {
+    doc_sync.Open(version), doc_sync.OnDisk(text:, hash:) -> #(
+      record(version, hash),
+      [doc_sync.OpOpen(uri, lid, version, text), ..ops],
+    )
+    doc_sync.Change(version), doc_sync.OnDisk(text:, hash:) -> #(
+      record(version, hash),
+      [doc_sync.OpChange(uri, lid, version, text), ..ops],
+    )
+    doc_sync.Close, _ -> #(close_doc(docs, k), [doc_sync.OpClose(uri), ..ops])
+    _, _ ->
+      case existing {
+        Ok(doc) -> #(dict.insert(docs, k, Doc(..doc, last_used:)), ops)
+        Error(_) -> #(docs, ops)
+      }
+  }
+}
+
+/// The documents open on one LSP, as `(uri, doc)`.
+fn open_documents(
+  docs: Dict(DocKey, Doc),
+  language: String,
+  workspace: String,
+  server_id: String,
+) -> List(#(String, Doc)) {
+  dict.fold(docs, [], fn(acc, k, doc) {
+    let #(l, w, s, uri) = k
+    case l == language && w == workspace && s == server_id && doc.state.open {
+      True -> [#(uri, doc), ..acc]
+      False -> acc
+    }
+  })
+}
+
+/// Mark a document closed, keeping its version so a reopen goes out at
+/// the next one.
+fn close_doc(docs: Dict(DocKey, Doc), k: DocKey) -> Dict(DocKey, Doc) {
+  case dict.get(docs, k) {
+    Ok(doc) ->
+      dict.insert(
+        docs,
+        k,
+        Doc(..doc, state: doc_sync.DocState(..doc.state, open: False)),
+      )
+    Error(_) -> docs
+  }
+}
+
+/// Keep the documents for which `keep` holds; forget the rest (their
+/// LSP is gone). The diagnostics cache's rows go with the proc, through
+/// `forget_proc`.
+fn drop_docs(
+  docs: Dict(DocKey, Doc),
+  keep: fn(DocKey) -> Bool,
+) -> Dict(DocKey, Doc) {
+  dict.filter(docs, fn(k, _doc) { keep(k) })
+}
+
+/// A proc is leaving the pool: drop its diagnostics-cache rows.
+fn forget_proc(spawned: Proc) -> Nil {
+  diagnostics_cache.forget_proc(proc.pid(spawned))
 }
 
 fn close_each(procs: List(Proc)) -> Nil {
   case procs {
     [] -> Nil
     [first, ..rest] -> {
+      forget_proc(first)
       proc.close(first)
       close_each(rest)
     }

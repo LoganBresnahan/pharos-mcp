@@ -55,7 +55,11 @@ drifts, the linked code is canonical.
 │    pharos_lsp_proc_subjects        (lang, ws, srv) → lsp_proc Subject            │
 │    pharos_request_workers          session|mcp_id  → dispatcher pid              │
 │    pharos_inflight                 session|mcp_id  → (lsp_proc_subj, lsp_id)     │
-│    pharos_diagnostics_cache        uri             → latest Diagnostic[]         │
+│    pharos_diagnostics_cache        (uri,srv,proc)  → (seq, latest publish)       │
+│    pharos_diagnostics_synced       (uri,srv,proc)  → (seq, version|closed)       │
+│                                    (batch,proc)    → (seq, n, ms) batch started  │
+│    pharos_diagnostics_expected     (uri,srv,proc)  → version|closed recorded     │
+│                                    (batch,proc)    → n of the last batch sent    │
 │    pharos_log_writer_subject       global          → log writer Subject          │
 │    pharos_session_overrides        session→(tool,lang) → bumped timeout_ms       │
 │                                                                                  │
@@ -320,6 +324,8 @@ condition surfaces when it does.
 | 8 | **`pool.get` outer `actor.call`** | `pool.gleam` | `spec.initialize_timeout_ms + 30_000` | derived from #6 | Caller's deadline waiting for `SpawnCompleted` from spawner. Returns `Error(ProcStartFailed("call timed out"))`. |
 | 9 | **`proc.request` outer `actor.call`** | `proc.gleam` | `timeout_ms + 5_000` | derived from #5 | Caller's deadline waiting for the LSP-side reply. Returns `ProcCallTimeout` (distinct from the LSP's own timeout). |
 | 10 | **`proc.{push_configuration,send_notification}` `actor.call`** | `proc.gleam` | 5s | not exposed | Backpressure on the Port write. |
+| 20 | **Document sync wait** | `pool.gleam` (`sync_wait_cap_ms`, `await_stamps`) | 2000ms | not exposed | Before a question, the caller waits for the proc to stamp every open document at the version the pool recorded (ADR-038). Checked at once, then backing off to 50 ms. Runs **before** the request's own timeout (#5/#9), so a call's wall time can exceed its `timeout_ms` by up to this much when the proc is busy. The exception is `get_diagnostics`, whose deadline starts before the sync and covers this wait. On expiry the question is sent anyway (it queues behind the sync). A failed write stops the wait at once. |
+| 21 | **Diagnostics settle window** | `lsp/diagnostics_cache.gleam` (`settle_ms`) | 2000ms from when the proc wrote the last batch of syncs, capped by the call's own deadline | not exposed | A cached push entry that predates the last sync waits out what is left of the window for a fresh publish; a later question doesn't wait again. Past the window, an entry carried over only by other documents' changes counts as fresh; one from before its own document's sync is returned marked `pharos.carried_over` (ADR-038). A missing entry waits until the call's deadline instead. Both wait in the dispatcher, polling the cache; neither holds the proc. |
 | 11 | **`proc.get_client`** | `proc.gleam` | 1s | not exposed | Cheap fetch of the underlying `Client` reference. |
 | 12 | **`sessions.{issue,validate,attach,detach}` `actor.call`** | `sessions.gleam` | 60s (`default_call_timeout_ms`) | not exposed | HTTP session bookkeeping — should never fire in practice. |
 | 13 | **HTTP request timeout** | mist | mist defaults | not exposed | Per-HTTP-request wall-clock. |
@@ -351,7 +357,10 @@ the caller posts and continues.
 | session.with_session_and_retry → **pool.get** | **SYNC actor.call** (#9) | Caller blocks until `SpawnCompleted` from spawner (or cache hit). Pool's HANDLER returns fast since M14; only the caller is blocked. |
 | pool actor → **spawner process** | **async** (`process.spawn_unlinked`) | M14 refactor. Pool actor doesn't block. |
 | spawner → dyn_sup_start_child | sync (Erlang FFI) | Blocking shell-out + handshake + readiness drain runs IN the spawner, not the pool. |
-| pool actor → **proc.send_notification** | **SYNC actor.call (5s)** (#11) | `handle_ensure_open` blocks pool actor up to 5s waiting on LSP port write. Audit follow-up — not the M14 bottleneck. |
+| session → pool `OpenDocuments` / `SyncDocuments` | SYNC actor.call | Bookkeeping only: the caller reads and hashes the files *before* the call; the pool plans, records and replies at once (ADR-038). |
+| pool actor → **proc `SyncBatch`** | **async** (`process.send`) | ADR-038: the pool never waits on a proc. One sender keeps each document's syncs in version order. |
+| session → proc's sync stamps | poll (ETS), ≤ 2s (#20) | The caller waits for the proc's stamps, not on the proc's mailbox, then sends its request. |
+| get_diagnostics → diagnostics cache | poll (ETS), ≤ the call's deadline (#21) | No longer a drain inside the proc actor: the proc caches publishes as they arrive, idle or mid-request. |
 | session → **proc.request** | **SYNC actor.call** (#10) | Caller blocks until LSP responds OR proc-side timeout (#5). Per-LSP serialization is correct: each LSP has its own actor. |
 | proc actor → LSP Port write | sync (Port `command`) | Port write is non-blocking at the OS level; appears sync to the actor. |
 | proc actor → LSP Port read | async (Port message into mailbox) | Decoded inside the actor's handle loop. |
@@ -401,8 +410,12 @@ lsp_proc actor                    LSP child (OS process)
     │                                  │
     │ ━━ ready for tool requests ━━    │
     │                                  │
-    │   write textDocument/didOpen     ─►  (once per (lang, ws, srv, uri);
-    │                                       deduped in pool actor state)
+    │   SyncBatch from the pool (ADR-038), before each question:
+    │   stamp the batch                 │
+    │   write didOpen / didChange       ─►  (every document open on this LSP
+    │        (+ didSave) / didClose          that changed on disk, plus the one
+    │   stamp each document             │    asked about; one full-text change
+    │                                  │    each; at most 32 open, LRU-closed)
     │                                  │
     │   write request (method, params) ─►
     │  ◄── reply / error / notification ─

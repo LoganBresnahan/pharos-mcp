@@ -57,6 +57,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 035 | [Releases without Burrito: a release per target, the shim as launcher, npm and install.sh](035-releases-without-burrito.md) | Accepted; amended by 036 |
 | 036 | [`pharos self`: update, rollback, prune and uninstall from the launcher](036-self-management-commands.md) | Accepted |
 | 037 | [Reap each LSP's process group on every stop; no die-with-parent wrapper](037-lsp-process-group-reaping.md) | Accepted |
+| 038 | [Re-sync open documents from disk on every question](038-document-resync-from-disk.md) | Accepted |
 
 ## Anticipated future ADRs
 

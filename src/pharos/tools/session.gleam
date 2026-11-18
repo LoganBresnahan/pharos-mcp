@@ -7,8 +7,9 @@
 ////      configured root markers.
 ////   3. Fetch a Client from the kept-warm pool (spawn + initialize
 ////      on cache miss, return cached on hit).
-////   4. Send `textDocument/didOpen` so the LSP knows about the file
-////      (idempotent thanks to the pool's didOpen-once tracking).
+////   4. Sync the file from disk so the LSP holds its saved text:
+////      `didOpen` the first time, a re-sync when it changed, nothing
+////      when it did not (ADR-038).
 ////
 //// `prepare/2` does all of that and returns a Client ready for the
 //// tool's specific LSP method to call. Tool implementations
@@ -428,8 +429,8 @@ fn retry_workspace_after_evict(
 /// Prepare a Proc for tools that operate on a single file. Looks
 /// up the language by extension, finds the workspace root, fetches
 /// the cached LSP from the pool (or spawns a fresh one), and asks
-/// the pool to send `didOpen` if it has not already done so this
-/// session for this (language, workspace, uri) triple.
+/// the pool to bring the server's copy of the file up to date with the
+/// disk (ADR-038: `didOpen` the first time, a re-sync when it changed).
 ///
 /// ADR-029: when `uri` uses a custom scheme (e.g. `jdt://`), routes
 /// through `prepare_for_custom_uri` instead — workspace is inferred
@@ -1380,7 +1381,9 @@ fn text_document_capabilities() -> json.Json {
       json.object([
         #("dynamicRegistration", json.bool(False)),
         #("willSave", json.bool(False)),
-        #("didSave", json.bool(False)),
+        // ADR-038: a file that changed on disk was saved, and pharos
+        // re-syncs it with didChange + didSave.
+        #("didSave", json.bool(True)),
       ]),
     ),
     #(
@@ -1458,18 +1461,23 @@ fn text_document_capabilities() -> json.Json {
     ),
     #(
       "publishDiagnostics",
-      json.object([#("versionSupport", json.bool(False))]),
+      // ADR-038: a publish's `version` lets pharos drop one about
+      // text it has since replaced.
+      json.object([#("versionSupport", json.bool(True))]),
     ),
     #("diagnostic", json.object([#("dynamicRegistration", json.bool(False))])),
     #("inlayHint", json.object([#("dynamicRegistration", json.bool(False))])),
   ])
 }
 
-/// Read file content from disk and ask the pool to send didOpen if
-/// it has not already done so for this triple. Best-effort —
-/// failures (file gone, content not utf-8, pool busy) are swallowed
-/// since the subsequent LSP request will surface a real error if
-/// the document state is genuinely missing.
+/// Bring the server's copy of this file, and of every other document
+/// pharos holds open on it, in line with the disk before a question
+/// (ADR-038): the pool reads them, sends what changed, and waits until
+/// the proc has written it. A file that is gone (or is not text) is
+/// closed if open and never opened. Best-effort: a sync that can't be
+/// sent or acknowledged in time is not an error here, since the
+/// question that follows surfaces a real one if the server's state is
+/// wrong.
 fn ensure_doc_opened(
   pool: Pool,
   config: LanguageConfig,
@@ -1502,35 +1510,27 @@ fn ensure_doc_opened_for_server_id(
   server_id: String,
 ) -> Nil {
   // The pool caches under the spec's server key (ADR-034 variant
-  // included), so didOpen must name the same one.
+  // included), so the sync must name the same one. The diagnostics
+  // cache is keyed by the registry id, which is what the proc stamps
+  // syncs under (ADR-038).
+  let cache_server_id = server_id
   let server_id = case list.find(config.servers, fn(s) { s.id == server_id }) {
     Ok(server) -> pool.server_key(build_spawn_spec(workspace, config, server))
     Error(_) -> server_id
   }
-  case workspace_root.uri_to_path(file_uri) {
-    Error(_) -> Nil
-    Ok(path) ->
-      case workspace_root.read_file(path) {
-        Error(_) -> Nil
-        Ok(content_bytes) ->
-          case bit_array.to_string(content_bytes) {
-            Error(_) -> Nil
-            Ok(text) -> {
-              let _ =
-                pool.ensure_open(
-                  pool,
-                  config.id,
-                  workspace,
-                  server_id,
-                  file_uri,
-                  config.id,
-                  text,
-                )
-              Nil
-            }
-          }
-      }
-  }
+  // The pool reads the file, like every other open document: one that
+  // is gone is closed if open and not opened (ADR-038).
+  let _ =
+    pool.ensure_open(
+      pool,
+      config.id,
+      workspace,
+      server_id,
+      cache_server_id,
+      file_uri,
+      config.id,
+    )
+  Nil
 }
 
 @external(erlang, "pharos_daemon_ffi", "os_pid")
