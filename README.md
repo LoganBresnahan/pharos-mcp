@@ -960,6 +960,15 @@ transport children.
 Full prose architecture overview at
 [doc/architecture.md](doc/architecture.md).
 
+pharos is one of three tools built to work together, with
+[geex](https://github.com/LoganBresnahan/geex) (an editor that keeps a record of
+who changed what) and [captAInHook](https://github.com/LoganBresnahan/captAInHook)
+(hooks on an agent's turn). How they connect (the disk as the meeting point,
+MCP as the only protocol between them, one shared pool of language servers) is
+written down in geex's
+[doc/stack.md](https://github.com/LoganBresnahan/geex/blob/main/doc/stack.md).
+Each repo's own decisions stay in its own ADRs.
+
 [↑ top](#pharos)
 
 ## Development

@@ -99,7 +99,7 @@ changing anything that spawns, blocks, or times out — it is written to answer
 
 ```sh
 mix compile --warnings-as-errors   # what CI compiles with
-mix gleam.test                     # the suite (260 at last count)
+mix gleam.test                     # the suite (308 at last count)
 mix start                          # run the stdio server on this shell
 bin/pharos-dev                     # dev wrapper for MCP-client use
 mix release.dev                    # clean rebuild of this machine's release + package
