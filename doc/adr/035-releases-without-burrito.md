@@ -1,6 +1,6 @@
 # 035. Releases without Burrito: a release per target, the shim as launcher, npm and install.sh
 
-**Status:** Accepted; amended 2026-10-19: Windows unsupported, use WSL; §4 and §6 amended by [ADR-036](036-self-management-commands.md) (`pharos self`, `install.sh --prune`; `--purge-cache` becomes `self prune`)
+**Status:** Accepted; amended 2026-10-19: Windows unsupported, use WSL; amended 2026-11-18: darwin-arm64 builds on macos-15 (pharos-mcp#11); §4 and §6 amended by [ADR-036](036-self-management-commands.md) (`pharos self`, `install.sh --prune`; `--purge-cache` becomes `self prune`)
 **Date:** 2026-10-19
 **Supersedes:** [ADR-033](033-burrito-fork-embedded-mode-in-use-lock.md) (the Burrito fork),
 and the Burrito half of [ADR-004](004-distribution-npm-and-releases.md)
@@ -61,7 +61,7 @@ OTP:
 |---|---|---|
 | `@pharos-mcp/linux-x64` | `pharos-<v>-linux-x64.tar.gz` | ubuntu-22.04 (glibc 2.35 floor) |
 | `@pharos-mcp/linux-arm64` | `pharos-<v>-linux-arm64.tar.gz` | ubuntu-22.04-arm |
-| `@pharos-mcp/darwin-arm64` | `pharos-<v>-darwin-arm64.tar.gz` | macos-14 |
+| `@pharos-mcp/darwin-arm64` | `pharos-<v>-darwin-arm64.tar.gz` | macos-14; macos-15 since 2026-11-18 (amended, see Consequences) |
 | `@pharos-mcp/darwin-x64` | `pharos-<v>-darwin-x64.tar.gz` | macos-15-intel (new: geex has not tried it yet, and the result goes back to geex-e1) |
 
 ### 3. The release build
@@ -181,7 +181,7 @@ this change.
     The Trusted Publisher configs (`npm trust list`) allow publish and stage publish on every
     package, so nothing needed approving.
 - **`smoke.yml`** (post-release, fresh runners, from public URLs) runs on ubuntu-22.04/24.04,
-  their -arm variants, macos-14/15 and macos-15-intel:
+  their -arm variants, macos-15 and macos-15-intel (macos-14 too, until 2026-11-18):
   - install twice: `npm i -g pharos-mcp@<v>` in one job, and the `curl … install.sh | sh` one-liner
     in another;
   - MCP `initialize` and `tools/list`;
@@ -206,6 +206,16 @@ this change.
   release notes), and pharos-mcp@0.1.4 stays installable there. A lower floor (a
   manylinux_2_28 container build) and a musl target are on the roadmap, for when someone asks.
 - `PHAROS_INSTALL_DIR`'s change of meaning (§4) goes in the release notes.
+- **Amended 2026-11-18: darwin-arm64 builds on macos-15.** GitHub retired the macos-14
+  runner: a job asking for it is cancelled before its first step with "The configuration
+  'macos-14-arm64-us-default' is not supported" (geex's v0.4.0 on 2026-11-06, captAInHook's CI
+  on 2026-11-18). release.yml builds darwin-arm64 on macos-15, and smoke.yml drops macos-14
+  (macos-15 was already there). No macOS deployment target is pinned, and the runtime comes from
+  the same `rel/build-runtime.sh` as geex's, so a build's minimum macOS follows the runner's SDK.
+  The published 0.2.2 assets show it: darwin-x64 (macos-15-intel) has minos 15.0, darwin-arm64
+  (macos-14) has minos 14.0. So from the next release the Apple silicon build will need macOS 15,
+  as the Intel build already does. That follows
+  geex (251245a), whose maintainer chose it over pinning macOS 14 (pharos-mcp#11).
 - darwin-x64 depends on the macos-15-intel image, which GitHub will retire too. When it goes,
   `@pharos-mcp/darwin-x64` stops getting releases unless we cross-build.
 - npm installs and curl installs differ in one way, the in-place update (§5). Both are documented.

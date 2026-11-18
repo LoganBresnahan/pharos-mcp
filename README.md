@@ -131,7 +131,9 @@ Either way, add pharos to your MCP host's config:
 shared daemon. If a session can't reach the daemon it falls back to
 direct mode on its own, and `pharos --doctor` lists those fallbacks.
 
-pharos 0.2 runs on Linux and macOS; on Windows, install it inside WSL
+pharos 0.2 runs on Linux and macOS. The macOS builds are made on macOS 15 and
+need macOS 15 or later: Intel builds always have, and Apple silicon builds do
+from the release after 0.2.2 (0.2.2 needs macOS 14). On Windows, install it inside WSL
 (`pharos-mcp@0.1.4` was the last native Windows build).
 
 ### 3. Build from source

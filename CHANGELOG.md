@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Apple silicon builds need macOS 15.** GitHub retired the macos-14
+  runner, so the Apple silicon build moves to macos-15, as the Intel build
+  already was on macos-15-intel. With no deployment target pinned, the
+  build's minimum follows the runner's SDK: 0.2.2's Apple silicon build
+  needs macOS 14, and the next one will need 15, as the Intel build
+  already does (ADR-035, amended; #11).
+
 - **The release workflow can finish a release that npm was slow to serve.**
   Each npm publish skips a version npm already has. A manual run with
   `republish: <version>` publishes what's missing from that version's

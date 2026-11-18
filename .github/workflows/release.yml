@@ -61,8 +61,9 @@ jobs:
             runner: ubuntu-22.04
           - target: linux-arm64
             runner: ubuntu-22.04-arm
+          # macos-14 is retired ("The configuration 'macos-14-arm64-us-default' is not supported").
           - target: darwin-arm64
-            runner: macos-14
+            runner: macos-15
           - target: darwin-x64
             runner: macos-15-intel
     if: ${{ !inputs.republish }}
@@ -192,7 +193,7 @@ jobs:
           or \`npm install -g pharos-mcp\`. MCP client configs keep working: the command is still \`pharos\`.
 
           - Linux x64 and arm64 need glibc 2.35+ (Alpine/musl and older distros aren't supported yet; pharos-mcp@0.1.4 still runs there).
-          - macOS on Apple silicon and Intel.
+          - macOS on Apple silicon and Intel: needs macOS 15 or later.
           - Windows: install it inside WSL (pharos-mcp@0.1.4 was the last native Windows build).
           - Installed with install.sh: \`pharos self update\` upgrades, \`pharos self rollback\` goes back, \`pharos self prune\` removes old versions (and what pharos 0.1.x unpacked), \`pharos self uninstall\` removes it. Installed with npm: \`npm install -g pharos-mcp@latest\`.
 

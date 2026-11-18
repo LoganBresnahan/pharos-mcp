@@ -60,7 +60,7 @@ npm view pharos-mcp dist-tags
 
 `release.yml` runs on any `ci/**` branch push and does everything except
 publish: each target builds natively on its own runner (linux on
-ubuntu-22.04 for the glibc 2.35 floor, macOS on macos-14 and macos-15-intel)
+ubuntu-22.04 for the glibc 2.35 floor, macOS on macos-15 and macos-15-intel)
 with `PHAROS_RELEASE=1` and the runtime `rel/build-runtime.sh` builds, so the
 native check is enforced; then the ADR-034 integration suite runs against the
 release, and `rel/smoke.sh` installs the tarball through `install.sh` and
