@@ -7,14 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-18
+
+### Fixed
+
+- **Answers follow the disk.** pharos told a language server about a file
+  once and never again, so after the first question every answer
+  (diagnostics, hover, definitions, references) described the text the
+  file had then, for every session sharing the daemon, until the server
+  stopped. Now every question re-reads the file asked about and every
+  other document pharos holds open on that server, and sends what changed:
+  one full-text `didChange`, plus `didSave` when the server asks for it.
+  At most 32 documents stay open per server. A file asked about that has
+  been deleted is closed, and nothing pharos cached about its old text is
+  served again ([ADR-038](doc/adr/038-document-resync-from-disk.md); #3).
+- **`get_diagnostics` says when it isn't sure.** An answer the server
+  hasn't re-published since the file changed is marked
+  `pharos.carried_over`. When another file changed, the server gets a 2 s
+  settle window from the change to re-publish; after that, its silence
+  counts as "unchanged". A server that reported nothing in time is named
+  under `pharos.not_reported` instead of being counted as clean, and the
+  wait no longer holds other sessions' requests to that server.
+- **Known limit, TypeScript:** right after a change, while tsserver is
+  still re-checking open files, `get_diagnostics` can return the previous
+  text's diagnostics, unmarked, until that re-check publishes: a few
+  hundred milliseconds on a small project, longer on a big one (#13).
+
 ### Changed
 
 - **Apple silicon builds need macOS 15.** GitHub retired the macos-14
   runner, so the Apple silicon build moves to macos-15, as the Intel build
   already was on macos-15-intel. With no deployment target pinned, the
   build's minimum follows the runner's SDK: 0.2.2's Apple silicon build
-  needs macOS 14, and the next one will need 15, as the Intel build
-  already does (ADR-035, amended; #11).
+  needs macOS 14, and 0.3.0's needs 15, as the Intel build already did
+  (ADR-035, amended; #11).
 
 - **The release workflow can finish a release that npm was slow to serve.**
   Each npm publish skips a version npm already has. A manual run with
