@@ -66,11 +66,20 @@ print(json.dumps({"files": out}))
 '''
 
 
+LAST = {"stderr": ""}
+
+
 class Run:
-    def __init__(self):
+    def __init__(self, via_link=False):
         self.tmp = tempfile.mkdtemp(prefix="pharoshook")
-        self.root = os.path.join(self.tmp, "proj")
-        os.makedirs(os.path.join(self.root, "other"))
+        real = os.path.join(self.tmp, "proj")
+        os.makedirs(os.path.join(real, "other"))
+        # The project reached through a symlink, the way macOS's temp dirs
+        # are (/var -> /private/var).
+        self.root = real
+        if via_link:
+            self.root = os.path.join(self.tmp, "link")
+            os.symlink(real, self.root)
         self.fake = os.path.join(self.tmp, "pharos")
         with open(self.fake, "w") as f:
             f.write(FAKE)
@@ -102,6 +111,7 @@ class Run:
                     "event": {"type": etype, "sessionId": "s1", "cwd": self.root, "payload": p}}
         r = subprocess.run(["sh", HOOK, "--root", self.root, "--pharos", self.fake, "--budget-ms", "20000"],
                            input=json.dumps(envelope) + "\n", capture_output=True, text=True, env=env, timeout=60)
+        LAST["stderr"] = r.stderr
         lines = [l for l in r.stdout.splitlines() if l.strip()]
         assert r.returncode == 0 and len(lines) == 1, (r.returncode, r.stdout, r.stderr)
         answer = json.loads(lines[0])
@@ -165,6 +175,21 @@ def t_a_new_file_has_an_empty_baseline():
     r.write("src/new.ts", "ERROR 2551 multi\\nline message\n")
     a, _ = r.event("PostToolUse", "Write", "src/new.ts")
     check(a.get("text") == HEAD_EDIT + "\nsrc/new.ts:1:1 TS2551 multi line message", a)
+    r.done()
+
+
+def t_a_new_file_in_a_new_directory_through_a_linked_root():
+    """macOS CI found it: the root resolves to its real path, so a new file
+    in a directory that doesn't exist yet must resolve the same way, or its
+    baseline lands under another key and its errors are never reported."""
+    r = Run(via_link=True)
+    r.event("UserPromptSubmit")
+    r.event("PreToolUse", "Write", "deep/er/new.ts")
+    r.write("deep/er/new.ts", "ERROR 2304 broken\n")
+    a, _ = r.event("PostToolUse", "Write", "deep/er/new.ts")
+    check(a.get("text") == HEAD_EDIT + "\ndeep/er/new.ts:1:1 TS2304 broken", a)
+    a, _ = r.event("Stop")
+    check(a["effect"] == "decide", a)
     r.done()
 
 
@@ -320,6 +345,7 @@ def main():
         except Exception as e:  # noqa: BLE001
             failed += 1
             print("FAIL", name, "::", e)
+            print("  the hook's stderr on its last event:\n    " + LAST["stderr"].replace("\n", "\n    "))
     print("%d passed, %d failed" % (len(tests) - failed, failed))
     sys.exit(1 if failed else 0)
 

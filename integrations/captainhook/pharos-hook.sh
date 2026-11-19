@@ -162,12 +162,18 @@ get() { if [ -e "$DIR/$1" ]; then cat "$DIR/$1"; else printf '%s\n' "$2"; fi; }
 
 is_writer() { case $WRITERS in *" $TOOL "*) return 0 ;; esac; return 1; }
 
-# The written file's path relative to the root (../ when it's outside).
+# The written file's path relative to the root (../ when it's outside). The
+# root is a real path (pwd -P), so the target is resolved the same way: its
+# deepest directory that exists, then the rest. A write can create
+# directories, and macOS's /var is a link to /private/var.
 rel_target() {
   [ -n "$TARGET" ] || return 0
   d=$(dirname "$TARGET"); b=$(basename "$TARGET")
-  if [ -d "$d" ]; then d=$(cd "$d" && pwd -P); fi
-  to=$d/$b; from=$ROOT; up=""
+  while [ ! -d "$d" ] && [ "$d" != / ] && [ "$d" != . ]; do
+    b=$(basename "$d")/$b; d=$(dirname "$d")
+  done
+  d=$(cd "$d" && pwd -P)
+  to=${d%/}/$b; from=$ROOT; up=""
   while :; do
     case "$to" in "$from"/*) break ;; esac
     [ "$from" = / ] && break
