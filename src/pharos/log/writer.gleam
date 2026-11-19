@@ -311,6 +311,14 @@ pub fn emit(log_entry: LogEntry) -> Nil {
   }
 }
 
+/// Cast an entry to this writer, not the registered one, and without
+/// `emit`'s mailbox-depth guard. For tests that drive a writer they
+/// started: `emit` goes to whichever writer registered last, and any
+/// other process logging meanwhile shares that mailbox (#18).
+pub fn emit_to(writer: Writer, log_entry: LogEntry) -> Nil {
+  process.send(writer.subject, Emit(log_entry))
+}
+
 /// Replace the writer's filter at runtime. Used by
 /// `runtime_log_level` (Part C).
 pub fn set_filter(writer: Writer, new_filter: Filter) -> Nil {
