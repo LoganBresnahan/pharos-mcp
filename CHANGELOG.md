@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostics, not before them under a 2 s cap. tsserver answers in order and the first request
   after an edit or a cold open waits for the program to update, so the cap ran out whenever
   tsserver was busy and a hook read the file as unsure (#7's dry run: 11 checks).
+- The captAInHook payload treats Claude Code 2.1's subagent tool, `Agent`, like `Task`: a call
+  to it makes the next Stop check afresh.
 
 ## [0.3.2] — 2026-11-19
 

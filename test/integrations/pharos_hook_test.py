@@ -307,6 +307,21 @@ def t_stop_reuses_the_last_check_until_a_tool_call():
     r.done()
 
 
+def t_a_subagent_call_moves_the_generation():
+    # Claude Code 2.1 names the subagent tool Agent; older versions, Task.
+    # Either may change files the hook doesn't see, so Stop checks fresh.
+    for tool in ("Agent", "Task"):
+        r = Run()
+        r.write("a.ts", "x\n")
+        r.event("UserPromptSubmit")
+        r.edit("a.ts", "ERROR 2304 broken\n")
+        r.event("PreToolUse", tool, tool_input={"description": "d", "prompt": "p"})
+        before = len(r.calls())
+        r.event("Stop")
+        check(len(r.calls()) == before + 1, "Stop after an %s call must check fresh: %r" % (tool, r.calls()))
+        r.done()
+
+
 def t_a_baseline_never_reuses_a_check_from_a_writers_pretooluse():
     r = Run()
     r.write("a.ts", "x\n")

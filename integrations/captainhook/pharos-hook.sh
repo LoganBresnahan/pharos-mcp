@@ -13,7 +13,8 @@
 #                     the files touched this turn, so there's no turn-start
 #                     snapshot.)
 #   PreToolUse        on a writer tool (Write, Edit, MultiEdit, NotebookEdit),
-#                     Bash or Task: bump the generation (below), lock-free. On a
+#                     Bash or a subagent (Agent; Task in older Claude Code): bump
+#                     the generation (below), lock-free. On a
 #                     writer, the first write to a file this turn then takes
 #                     THAT FILE's baseline, its errors just before the write (a
 #                     file that doesn't exist yet has an empty one), and resets
@@ -46,7 +47,7 @@
 # a key's new occurrences are its last ones in sort order (path bytewise,
 # line, column, code, message).
 #
-# Fresh or reused: each PreToolUse on a writer, Bash or Task call appends to a
+# Fresh or reused: each PreToolUse on a writer, Bash or Agent/Task call appends to a
 # generation file (an atomic append, never under the lock, so a read-only call
 # never waits on a check). A check records the generation it started under,
 # and a baseline or Stop's check reuses the latest result only while the
@@ -247,7 +248,7 @@ run_checker() {
     while read -r f why; do unsure unsure "file=$f why=$why"; done
 }
 
-# The generation: one line per writer/Bash/Task call this turn.
+# The generation: one line per writer/Bash/Agent/Task call this turn.
 gen()  { if [ -e "$DIR/gen" ]; then wc -l < "$DIR/gen" | tr -d ' '; else echo 0; fi; }
 bump() { echo . >> "$DIR/gen"; }
 # reusable <discount> <rel file…>: the latest check still shows the disk, and
@@ -313,8 +314,9 @@ case $EVENT in
     noop; exit 0 ;;
 
   PreToolUse)
-    case $TOOL in Bash|Task) ;; *) is_writer || { noop; exit 0; } ;; esac
-    bump                      # lock-free: a Bash or Task call never waits on a check
+    # A subagent's tool is Agent in Claude Code 2.1 (Task before it).
+    case $TOOL in Bash|Agent|Task) ;; *) is_writer || { noop; exit 0; } ;; esac
+    bump                      # lock-free: a Bash or subagent call never waits on a check
     if [ "$TOOL" = Bash ] && [ "$(jget '.event.payload.tool_input.run_in_background // false')" = true ]; then
       : > "$DIR/bg"
     fi
