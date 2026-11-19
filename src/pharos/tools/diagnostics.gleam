@@ -637,19 +637,23 @@ fn tsserver_result(
   ignored: List(Int),
   deadline_ms: Int,
 ) -> DiagnosticsResult {
-  // projectInfo first, with its own share of the budget (a quarter, at
-  // most 2 s), so the diagnostics can't use it all up. It is cheap once the
-  // project is loaded.
-  let project_deadline =
-    now_ms() + int.min(2000, int.max({ deadline_ms - now_ms() } / 4, 1))
-  let project = tsserver_project(lsp, file_uri, project_deadline)
-  case tsserver_items(lsp, file_uri, ignored, deadline_ms) {
+  // The diagnostics first, then projectInfo with whatever is left. tsserver
+  // answers in order, and the first request after an edit waits for the
+  // program update (seconds, in a large project), so whichever
+  // goes first absorbs it. projectInfo went first under a 2 s cap, ran out
+  // whenever tsserver was busy, and a hook then read every such file as
+  // unsure (#7's dry run: 11 checks). After the diagnostics the program
+  // is current and projectInfo costs milliseconds; a reserve (a quarter, at
+  // most 2 s) keeps the diagnostics from leaving it nothing.
+  let reserve = int.min(2000, int.max({ deadline_ms - now_ms() } / 4, 1))
+  let items = tsserver_items(lsp, file_uri, ignored, deadline_ms - reserve)
+  case items {
     Ok(items_json) ->
       Diagnostics(
         uri: file_uri,
         body_json: with_project(
           publish_envelope(synthesized_params(file_uri, items_json), [], []),
-          project,
+          tsserver_project(lsp, file_uri, deadline_ms),
         ),
       )
     Error(reason) -> {
@@ -702,8 +706,8 @@ fn tsserver_items(
 }
 
 /// The file's project, from tsserver's `projectInfo` (#6: a hook keeps
-/// to the files of one tsconfig's program). Best-effort: no project is
-/// no `pharos.project`, never an error.
+/// to the files of one tsconfig's program). Best-effort: a failure or a
+/// timeout is `pharos.project_unknown`, never an error.
 fn tsserver_project(
   lsp: proc.Proc,
   file_uri: String,

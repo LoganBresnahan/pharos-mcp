@@ -64,7 +64,16 @@ typescript-language-server forwards it:
                               an error response, so pharos falls back to
                               the push cache. "slow": answer as "answer",
                               after STUB_LSP_TSSERVER_DELAY_MS (default
-                              3000), so a short timeout_ms runs out
+                              3000), so a short timeout_ms runs out.
+                              "busy": answer as "answer", in order, the
+                              way tsserver does, the first request after
+                              a didOpen or didChange waiting
+                              STUB_LSP_TSSERVER_DELAY_MS for the program
+                              update and the rest queued behind it
+  STUB_LSP_TSSERVER_PROJECT_DELAY_MS=
+                              any mode but "busy": projectInfo answers
+                              after this long (the other requests as
+                              their mode says)
   STUB_LSP_TSSERVER_PROJECT=  what projectInfo names as the file's
                               project (configFileName); unset: tsserver's
                               "No Project." failure
@@ -84,6 +93,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import sys
 import threading
 import time
@@ -116,6 +126,21 @@ def read_message(stream):
 
 
 WRITE_LOCK = threading.Lock()
+
+# STUB_LSP_TSSERVER=busy: tsserver's requests, answered in order by one
+# worker; PROGRAM_STALE marks a sync the next request has to wait out.
+TSSERVER_QUEUE: "queue.Queue[dict]" = queue.Queue()
+PROGRAM_STALE = threading.Event()
+
+
+def tsserver_worker(stdout):
+    delay = int(os.environ.get("STUB_LSP_TSSERVER_DELAY_MS", "3000")) / 1000.0
+    while True:
+        msg = TSSERVER_QUEUE.get()
+        if PROGRAM_STALE.is_set():
+            PROGRAM_STALE.clear()
+            time.sleep(delay)
+        write_message(stdout, handle_tsserver_request(msg))
 
 
 def write_message(stream, msg):
@@ -359,6 +384,8 @@ def main():
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         with open(grandchild_log, "a") as f:
             f.write(f"{child.pid}\n")
+    if os.environ.get("STUB_LSP_TSSERVER") == "busy":
+        threading.Thread(target=tsserver_worker, args=(stdout,), daemon=True).start()
     while True:
         try:
             msg = read_message(stdin)
@@ -391,6 +418,7 @@ def main():
             p = msg.get("params") or {}
             old = DOCS.get((p.get("textDocument") or {}).get("uri"), {}).get("text")
             uri = apply_sync(method, p)
+            PROGRAM_STALE.set()
             if os.environ.get("STUB_LSP_DIAGNOSTICS") == "push-stale" and uri in DOCS:
                 if method == "textDocument/didChange" and old is not None:
                     publish_stale_then_fresh(stdout, uri, old)
@@ -407,7 +435,16 @@ def main():
             resp = handle_hover(msg)
             write_message(stdout, resp)
         elif method == "workspace/executeCommand":
-            if os.environ.get("STUB_LSP_TSSERVER") == "slow":
+            args = (msg.get("params") or {}).get("arguments") or []
+            project_delay = int(os.environ.get("STUB_LSP_TSSERVER_PROJECT_DELAY_MS", "0")) / 1000.0
+            if os.environ.get("STUB_LSP_TSSERVER") == "busy":
+                TSSERVER_QUEUE.put(msg)
+            elif project_delay and args and args[0] == "projectInfo":
+                late = threading.Timer(project_delay, lambda m=msg: write_message(
+                    stdout, handle_tsserver_request(m)))
+                late.daemon = True    # the stub exits with its stdin, not the timer
+                late.start()
+            elif os.environ.get("STUB_LSP_TSSERVER") == "slow":
                 # Answer from a timer thread, so the stub keeps reading:
                 # a didChange and push-stale's publishes go on meanwhile.
                 delay = int(os.environ.get("STUB_LSP_TSSERVER_DELAY_MS", "3000")) / 1000.0

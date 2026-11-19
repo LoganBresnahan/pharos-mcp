@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `pharos diagnostics` reports a file whose project tsserver couldn't name with the reason
+  `project_unknown` (it was `no_project`, which read like a real absence). The name matches
+  the `pharos.project_unknown` marker, the way `carried_over` and `not_reported` do.
+
+### Fixed
+
+- In the `tsserver` diagnostics mode, `get_diagnostics` asks for the file's project after the
+  diagnostics, not before them under a 2 s cap. tsserver answers in order and the first request
+  after an edit or a cold open waits for the program to update, so the cap ran out whenever
+  tsserver was busy and a hook read the file as unsure (#7's dry run: 11 checks).
+
 ## [0.3.2] — 2026-11-19
 
 ### Added

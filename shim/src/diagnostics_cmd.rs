@@ -334,13 +334,12 @@ pub fn classify(file: &str, path: &Path, uri: &str, reply: &Value) -> FileResult
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let mut unsure: Vec<&str> = ["carried_over", "not_reported"]
+    // The reason names pharos's marker: an answer that may be old, or
+    // whose project tsserver couldn't name in time.
+    let unsure: Vec<&str> = ["carried_over", "not_reported", "project_unknown"]
         .into_iter()
         .filter(|key| notes.and_then(|n| n.get(key)).is_some())
         .collect();
-    if notes.and_then(|n| n.get("project_unknown")).is_some() {
-        unsure.push("no_project");
-    }
     if unsure.is_empty() {
         r.status = "ok";
     } else {
@@ -540,7 +539,7 @@ mod tests {
         );
         assert_eq!(
             (r.status, r.reason.as_deref(), r.project.as_deref()),
-            ("unsure", Some("no_project"), None)
+            ("unsure", Some("project_unknown"), None)
         );
     }
 

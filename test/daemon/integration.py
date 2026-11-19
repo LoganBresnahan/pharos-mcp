@@ -917,8 +917,51 @@ def t_diagnostics_cli_unknown_project(sb):
     out = sb.cli("diagnostics", "--json", f, extra_env=env, timeout=60, cwd=sb.fixture)
     check(out.returncode == 0, "exit %d: %s" % (out.returncode, out.stderr[-400:]))
     entry = json.loads(out.stdout)["files"][0]
-    check(entry["status"] == "unsure" and entry.get("reason") == "no_project" and "project" not in entry,
-          "expected unsure/no_project: %s" % entry)
+    check(entry["status"] == "unsure" and entry.get("reason") == "project_unknown" and "project" not in entry,
+          "expected unsure/project_unknown: %s" % entry)
+
+
+def t_diagnostics_cli_busy_tsserver(sb):
+    """#7's dry run: tsserver answers in order, and the first request after
+    an edit waits for the program update. projectInfo went first under a
+    2 s cap, ran out, and the file read as unsure. Now the diagnostics go
+    first and absorb the wait; the project comes back named."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    env = {"STUB_LSP_DIAGNOSTICS": "push", "STUB_LSP_TSSERVER": "busy",
+           "STUB_LSP_TSSERVER_DELAY_MS": "3000",
+           "STUB_LSP_TSSERVER_PROJECT": os.path.join(sb.fixture, "tsconfig.json")}
+    f = os.path.join(sb.fixture, "busy.stub")
+    with open(f, "w") as fh:
+        fh.write("ERROR one\n")
+    out = sb.cli("diagnostics", "--json", "--timeout-ms", "20000", f, extra_env=env, timeout=60,
+                 cwd=sb.fixture)
+    check(out.returncode == 0, "exit %d: %s" % (out.returncode, out.stderr[-400:]))
+    entry = json.loads(out.stdout)["files"][0]
+    check(entry["status"] == "ok" and entry.get("project") == env["STUB_LSP_TSSERVER_PROJECT"],
+          "a busy tsserver must still name the project: %s" % entry)
+    check([d["code"] for d in entry["diagnostics"]] == [9001], "diagnostics: %s" % entry)
+
+
+def t_diagnostics_cli_project_timeout(sb):
+    """#7: when projectInfo doesn't answer within the call's deadline, the
+    diagnostics still come back, and the file is unsure with the reason
+    project_unknown (not a missing project), within the deadline."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    env = {"STUB_LSP_DIAGNOSTICS": "push", "STUB_LSP_TSSERVER": "answer",
+           "STUB_LSP_TSSERVER_PROJECT_DELAY_MS": "30000",
+           "STUB_LSP_TSSERVER_PROJECT": os.path.join(sb.fixture, "tsconfig.json")}
+    f = os.path.join(sb.fixture, "late.stub")
+    with open(f, "w") as fh:
+        fh.write("ERROR one\n")
+    t0 = time.time()
+    out = sb.cli("diagnostics", "--json", "--timeout-ms", "4000", f, extra_env=env, timeout=60,
+                 cwd=sb.fixture)
+    took = time.time() - t0
+    check(out.returncode == 0, "exit %d: %s" % (out.returncode, out.stderr[-400:]))
+    entry = json.loads(out.stdout)["files"][0]
+    check(entry["status"] == "unsure" and entry.get("reason") == "project_unknown" and "project" not in entry,
+          "expected unsure/project_unknown: %s" % entry)
+    check(took < 15, "the call must end near its deadline, took %.1f s" % took)
 
 
 def t_resync_open_cap(sb):
@@ -969,6 +1012,8 @@ SCENARIOS = [
     ("tsserver_timed_out_fallback_is_marked", t_tsserver_timed_out_fallback_is_marked),
     ("diagnostics_cli", t_diagnostics_cli),
     ("diagnostics_cli_unknown_project", t_diagnostics_cli_unknown_project),
+    ("diagnostics_cli_busy_tsserver", t_diagnostics_cli_busy_tsserver),
+    ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
 ]
 
 

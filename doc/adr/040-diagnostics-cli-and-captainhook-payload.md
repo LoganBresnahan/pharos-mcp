@@ -44,10 +44,15 @@ trial measures wall time.
 
 **The file's project, in the `Tsserver` mode** (amends ADR-039). A `get_diagnostics` answer from
 tsserver also carries `pharos.project`: the `configFileName` of tsserver's `projectInfo` for the
-file, one more `typescript.tsserverRequest`. It runs first, with its own share of the call's
-budget (a quarter, at most 2 s), so the diagnostics can't use it all up. When tsserver can't
-name the project (an error, a timeout), the answer carries `pharos.project_unknown` instead,
-and `pharos diagnostics` reports the file as `unsure` (reason `no_project`). The diagnostics
+file, one more `typescript.tsserverRequest`. It runs after the diagnostics, with what is left
+of the call's budget; the diagnostics leave it a reserve (a quarter, at most 2 s). tsserver
+answers in order and the first request after an edit waits for the program update, so the
+diagnostics absorb that wait and projectInfo, on a current program, costs milliseconds.
+(It first ran *before* them under a 2 s cap, which ran out whenever tsserver was busy: in
+#7's dry run, 11 checks read as unsure.) When tsserver can't name the project in time
+(an error, a timeout), the answer carries `pharos.project_unknown` instead, and
+`pharos diagnostics` reports the file as `unsure` with that reason, `project_unknown` (it
+was `no_project`, which read like a real absence). The diagnostics
 themselves are still current, but a hook keeping to one program can't place the file, so it
 stays silent: scope unknown is never "out of scope". The contract's scope rule uses the
 project. A file is in scope when its project is the trial tsconfig. tsserver
