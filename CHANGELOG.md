@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`pharos diagnostics [--json] [--timeout-ms N] FILE...`**: files'
+  diagnostics through the shared daemon, for hooks and scripts that
+  aren't MCP clients. Each file comes back `ok`, `unsure` (pharos marked
+  the answer) or `failed`; it exits 0 once the daemon answered. It runs in
+  the native shim, so it answers in milliseconds on a warm daemon
+  ([ADR-040](doc/adr/040-diagnostics-cli-and-captainhook-payload.md); #6).
+- **A captAInHook payload, `integrations/captainhook/pharos-hook.sh`**, in
+  every release: after the agent's edits it hands back the new errors in
+  the files it wrote, and at the end of the turn blocks once if new errors
+  remain. TypeScript for now; it is arm 3 of the pharos trial (#7). See
+  [integrations/captainhook/README.md](integrations/captainhook/README.md).
+- **TypeScript answers name the file's tsserver project**
+  (`pharos.project`), which the payload uses to keep to one tsconfig's
+  program.
+
 ## [0.3.1] — 2026-11-18
 
 ### Fixed

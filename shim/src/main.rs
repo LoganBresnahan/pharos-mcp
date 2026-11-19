@@ -10,6 +10,8 @@
 //!
 //! Linux and macOS only. Windows users run pharos inside WSL (ADR-035).
 //! - `daemon status|stop [--all]`: operator requests to running daemons.
+//! - `diagnostics [--json] [--timeout-ms N] FILE...`: the files'
+//!   diagnostics through the daemon, for hooks and scripts (#6).
 //! - `self update|rollback|prune|uninstall`: manage the installed
 //!   pharos (ADR-036), here, without booting the runtime.
 //!   `--purge-cache` is a deprecated alias of `self prune`.
@@ -21,6 +23,7 @@
 compile_error!("pharos runs on Linux and macOS; on Windows, build and run it inside WSL (ADR-035)");
 
 mod client;
+mod diagnostics_cmd;
 mod json;
 mod launch;
 mod paths;
@@ -51,6 +54,7 @@ fn main() -> ExitCode {
         }
         Some("--direct") => direct(&release, &args[1..]),
         Some("daemon") => daemon_command(&release, &args),
+        Some("diagnostics") => diagnostics_cmd::run(&release, &args[1..]),
         Some("self") => self_cmd::run(&release, &args[1..]),
         Some("--purge-cache") if args.len() == 1 => {
             eprintln!("pharos: --purge-cache is deprecated and goes in the next release; it is `pharos self prune` now, which this runs");

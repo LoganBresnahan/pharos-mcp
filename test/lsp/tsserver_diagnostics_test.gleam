@@ -124,3 +124,31 @@ pub fn execute_params_name_the_command_and_file_test() {
     "{\"command\":\"typescript.tsserverRequest\",\"arguments\":[\"semanticDiagnosticsSync\",{\"file\":\"file:///w/a.ts\"}]}",
   )
 }
+
+pub fn project_params_ask_for_project_info_test() {
+  tsserver_diagnostics.project_params("file:///w/a.ts")
+  |> json.to_string
+  |> should.equal(
+    "{\"command\":\"typescript.tsserverRequest\",\"arguments\":[\"projectInfo\",{\"file\":\"file:///w/a.ts\",\"needFileNameList\":false}]}",
+  )
+}
+
+pub fn project_from_response_names_the_tsconfig_test() {
+  tsserver_diagnostics.project_from_response(response(
+    "{\"type\":\"response\",\"success\":true,\"body\":{\"configFileName\":\"/w/tsconfig.json\",\"languageServiceDisabled\":false}}",
+  ))
+  |> should.equal(Ok("/w/tsconfig.json"))
+  tsserver_diagnostics.project_from_response(response(
+    "{\"success\":true,\"body\":{\"configFileName\":\"/dev/null/inferredProject1*\"}}",
+  ))
+  |> should.equal(Ok("/dev/null/inferredProject1*"))
+}
+
+pub fn project_from_response_without_a_project_is_an_error_test() {
+  tsserver_diagnostics.project_from_response(response(
+    "{\"success\":false,\"message\":\"No Project.\"}",
+  ))
+  |> should.be_error
+  tsserver_diagnostics.project_from_response(response("{\"success\":true}"))
+  |> should.be_error
+}

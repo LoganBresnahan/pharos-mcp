@@ -329,6 +329,7 @@ commands.
 | `pharos daemon status [--all]` | This version's shared daemon (or every daemon): its sessions and language servers. |
 | `pharos daemon stop [--all]` | Stop this version's daemon (or all). Sessions on it see their server exit; MCP clients restart it on reconnect. |
 | `pharos --direct` | Run this session in its own process instead of the shared daemon (also `PHAROS_MODE=direct`). |
+| `pharos diagnostics [--json] [--timeout-ms N] FILE...` | The files' diagnostics through the shared daemon, for hooks and scripts. Each file is `ok`, `unsure` (pharos marked the answer: say nothing) or `failed`; exit 0 once the daemon answered, 1 if pharos itself failed. A captAInHook payload built on it ships in every release: [integrations/captainhook/](integrations/captainhook/README.md). |
 | `pharos self update [--version V]` | Install the latest release (or V) with its install.sh. An npm install prints the npm command instead. |
 | `pharos self rollback` | Switch back to the previous version. |
 | `pharos self prune` | Remove the versions install.sh no longer keeps (all but the current and previous, unless running), and what pharos 0.1.x unpacked under `~/.local/share/.burrito/pharos_*` that no running process uses. |

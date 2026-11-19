@@ -45,6 +45,47 @@ pub fn execute_params(request: String, file_uri: String) -> Json {
   ])
 }
 
+/// `workspace/executeCommand` params for tsserver's `projectInfo` about
+/// `file_uri`: which project the file belongs to (#6's scope rule).
+pub fn project_params(file_uri: String) -> Json {
+  json.object([
+    #("command", json.string(command)),
+    #(
+      "arguments",
+      json.preprocessed_array([
+        json.string("projectInfo"),
+        json.object([
+          #("file", json.string(file_uri)),
+          #("needFileNameList", json.bool(False)),
+        ]),
+      ]),
+    ),
+  ])
+}
+
+/// The project a `projectInfo` response names: the tsconfig path of a
+/// configured project, or tsserver's name for an inferred one (it
+/// starts `/dev/null/inferredProject`).
+pub fn project_from_response(result: Dynamic) -> Result(String, String) {
+  let decoder = {
+    use success <- decode.optional_field("success", True, decode.bool)
+    use project <- decode.optional_field(
+      "body",
+      None,
+      decode.optional({
+        use name <- decode.field("configFileName", decode.string)
+        decode.success(name)
+      }),
+    )
+    decode.success(#(success, project))
+  }
+  case decode.run(result, decoder) {
+    Ok(#(True, Some(name))) -> Ok(name)
+    Ok(_) -> Error("projectInfo named no project")
+    Error(_) -> Error("projectInfo response did not decode")
+  }
+}
+
 /// One tsserver diagnostic, as `formatDiag` returns it.
 type TsDiagnostic {
   TsDiagnostic(

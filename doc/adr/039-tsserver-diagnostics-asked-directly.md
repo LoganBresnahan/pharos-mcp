@@ -1,6 +1,6 @@
 # 039. TypeScript diagnostics: ask tsserver directly
 
-**Status:** Accepted (2026-11-18)
+**Status:** Accepted (2026-11-18); amended by [ADR-040](040-diagnostics-cli-and-captainhook-payload.md) (`pharos.project`)
 **Date:** 2026-11-18
 **Issue:** [#13](https://github.com/LoganBresnahan/pharos-mcp/issues/13)
 **Amends:** [ADR-038](038-document-resync-from-disk.md) (its known limit F4)

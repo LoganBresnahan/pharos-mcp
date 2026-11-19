@@ -121,10 +121,10 @@ class Sandbox:
         self.shims.append(s)
         return s
 
-    def cli(self, *args, extra_env=None, timeout=30):
+    def cli(self, *args, extra_env=None, timeout=30, cwd=None):
         env = dict(self.env, **(extra_env or {}))
         return subprocess.run([self.shim, *args], env=env, capture_output=True,
-                              text=True, timeout=timeout)
+                              text=True, timeout=timeout, cwd=cwd)
 
     def status(self):
         out = self.cli("daemon", "status")
@@ -876,6 +876,51 @@ def t_tsserver_timed_out_fallback_is_marked(sb):
     tsserver_fallback_is_marked(sb, "slow", {"STUB_LSP_TSSERVER_DELAY_MS": "4000"}, 1500)
 
 
+def t_diagnostics_cli(sb):
+    """#6: `pharos diagnostics` asks the shared daemon for files'
+    diagnostics without an MCP client: ok with the diagnostics and, in
+    tsserver mode, the file's project; a human form; exit 0 once the daemon
+    answered, 2 on bad usage. (How a marked answer reads as unsure is the
+    shim's unit tests: a second call here would reuse the first's stub.)"""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    env = {"STUB_LSP_DIAGNOSTICS": "push", "STUB_LSP_TSSERVER": "answer",
+           "STUB_LSP_TSSERVER_PROJECT": os.path.join(sb.fixture, "tsconfig.json")}
+    bad = os.path.join(sb.fixture, "bad.stub")
+    good = os.path.join(sb.fixture, "good.stub")
+    with open(bad, "w") as f:
+        f.write("ok\nERROR one\nok\n")
+    with open(good, "w") as f:
+        f.write("fine\n")
+    out = sb.cli("diagnostics", "--json", bad, good, extra_env=env, timeout=60, cwd=sb.fixture)
+    check(out.returncode == 0, "exit %d: %s" % (out.returncode, out.stderr[-400:]))
+    files = json.loads(out.stdout)["files"]
+    check([f["status"] for f in files] == ["ok", "ok"], "statuses: %s" % out.stdout)
+    check(files[0]["project"] == env["STUB_LSP_TSSERVER_PROJECT"], "project: %s" % files[0])
+    check([d["code"] for d in files[0]["diagnostics"]] == [9001] and files[1]["diagnostics"] == [],
+          "diagnostics: %s" % out.stdout)
+    human = sb.cli("diagnostics", bad, extra_env=env, timeout=60, cwd=sb.fixture)
+    check(human.returncode == 0 and human.stdout.strip() == "%s:2:1 error 9001 tsserver error on line 1" % bad,
+          "human form: %r" % human.stdout)
+    usage = sb.cli("diagnostics", extra_env=env, cwd=sb.fixture)
+    check(usage.returncode == 2 and "usage" in usage.stderr, "usage: %r" % usage.stderr)
+
+
+def t_diagnostics_cli_unknown_project(sb):
+    """#6, review finding: when tsserver can't name the file's project,
+    pharos says so (`pharos.project_unknown`) and the CLI reports the file
+    as unsure, never as an ok answer a hook would read as out of scope."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    env = {"STUB_LSP_DIAGNOSTICS": "push", "STUB_LSP_TSSERVER": "answer"}   # no project
+    f = os.path.join(sb.fixture, "a.stub")
+    with open(f, "w") as fh:
+        fh.write("ERROR one\n")
+    out = sb.cli("diagnostics", "--json", f, extra_env=env, timeout=60, cwd=sb.fixture)
+    check(out.returncode == 0, "exit %d: %s" % (out.returncode, out.stderr[-400:]))
+    entry = json.loads(out.stdout)["files"][0]
+    check(entry["status"] == "unsure" and entry.get("reason") == "no_project" and "project" not in entry,
+          "expected unsure/no_project: %s" % entry)
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -922,6 +967,8 @@ SCENARIOS = [
     ("tsserver_falls_back_to_push", t_tsserver_falls_back_to_push),
     ("tsserver_failed_fallback_is_marked", t_tsserver_failed_fallback_is_marked),
     ("tsserver_timed_out_fallback_is_marked", t_tsserver_timed_out_fallback_is_marked),
+    ("diagnostics_cli", t_diagnostics_cli),
+    ("diagnostics_cli_unknown_project", t_diagnostics_cli_unknown_project),
 ]
 
 

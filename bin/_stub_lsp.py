@@ -65,6 +65,9 @@ typescript-language-server forwards it:
                               the push cache. "slow": answer as "answer",
                               after STUB_LSP_TSSERVER_DELAY_MS (default
                               3000), so a short timeout_ms runs out
+  STUB_LSP_TSSERVER_PROJECT=  what projectInfo names as the file's
+                              project (configFileName); unset: tsserver's
+                              "No Project." failure
 
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
@@ -243,6 +246,15 @@ def handle_tsserver_request(req):
         return {"jsonrpc": "2.0", "id": req["id"],
                 "error": {"code": 1, "message": "stub_lsp: tsserver request failed"}}
     request, file_uri = args[0], (args[1] or {}).get("file")
+    if request == "projectInfo":
+        project = os.environ.get("STUB_LSP_TSSERVER_PROJECT", "")
+        if not project:
+            return {"jsonrpc": "2.0", "id": req["id"],
+                    "result": {"type": "response", "command": request, "success": False,
+                               "message": "No Project."}}
+        return {"jsonrpc": "2.0", "id": req["id"],
+                "result": {"type": "response", "command": request, "success": True,
+                           "body": {"configFileName": project, "languageServiceDisabled": False}}}
     body = []
     doc = DOCS.get(file_uri)
     if doc is None:

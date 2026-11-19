@@ -224,6 +224,12 @@ idle exit the daemon unlinks its socket and pid file *before* the
 orderly stop, so a shim arriving meanwhile starts a fresh daemon
 instead of joining one on its way out.
 
+`pharos diagnostics FILE...` (#6, ADR-040) is a second client of the same
+path: it connects (or starts the daemon) and sends the hello exactly as
+the shim does, then speaks MCP itself (`initialize`, one `get_diagnostics`
+per file), prints and exits. Its reads are bounded by each call's
+`timeout_ms` plus 10 s; it never falls back to direct mode.
+
 A crashed connection is unlinked from the acceptor, so it takes only
 its own session down. A crashed acceptor or daemon actor takes the
 listener down; the supervisor rebuilds it, and `listen/1` replaces the
@@ -500,6 +506,7 @@ Tracing the cascade observed in M14 Pass 1 ([doc/m14-test-plan.md](m14-test-plan
 | Daemon listener, registry, idle timer | [src/pharos/daemon.gleam](../src/pharos/daemon.gleam) |
 | Daemon connection (hello, session, drain) | [src/pharos/daemon/conn.gleam](../src/pharos/daemon/conn.gleam) |
 | Shim + launcher (Rust; spawn lock, hello, line relay) | [shim/src/client.rs](../shim/src/client.rs), [shim/src/launch.rs](../shim/src/launch.rs) |
+| `pharos diagnostics` (Rust; an MCP client of the daemon) | [shim/src/diagnostics_cmd.rs](../shim/src/diagnostics_cmd.rs), [shim/src/json.rs](../shim/src/json.rs) |
 | `pharos self …` and the 0.1.x cleanup (Rust) | [shim/src/self_cmd.rs](../shim/src/self_cmd.rs), [install.sh](../install.sh) |
 | Log subtree | [src/pharos/log/](../src/pharos/log/) |
 | Inflight table | [src/pharos/lsp/inflight.gleam](../src/pharos/lsp/inflight.gleam) |

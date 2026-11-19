@@ -43,6 +43,7 @@ import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/string
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/diagnostics_cache
@@ -636,14 +637,19 @@ fn tsserver_result(
   ignored: List(Int),
   deadline_ms: Int,
 ) -> DiagnosticsResult {
+  // projectInfo first, with its own share of the budget (a quarter, at
+  // most 2 s), so the diagnostics can't use it all up. It is cheap once the
+  // project is loaded.
+  let project_deadline =
+    now_ms() + int.min(2000, int.max({ deadline_ms - now_ms() } / 4, 1))
+  let project = tsserver_project(lsp, file_uri, project_deadline)
   case tsserver_items(lsp, file_uri, ignored, deadline_ms) {
     Ok(items_json) ->
       Diagnostics(
         uri: file_uri,
-        body_json: publish_envelope(
-          synthesized_params(file_uri, items_json),
-          [],
-          [],
+        body_json: with_project(
+          publish_envelope(synthesized_params(file_uri, items_json), [], []),
+          project,
         ),
       )
     Error(reason) -> {
@@ -693,6 +699,54 @@ fn tsserver_items(
     }
   })
   |> result_map(fn(found) { json.to_string(json.preprocessed_array(found)) })
+}
+
+/// The file's project, from tsserver's `projectInfo` (#6: a hook keeps
+/// to the files of one tsconfig's program). Best-effort: no project is
+/// no `pharos.project`, never an error.
+fn tsserver_project(
+  lsp: proc.Proc,
+  file_uri: String,
+  deadline_ms: Int,
+) -> Result(String, Nil) {
+  case
+    proc.request(
+      lsp,
+      "workspace/executeCommand",
+      tsserver_diagnostics.project_params(file_uri),
+      int.max(deadline_ms - now_ms(), 1),
+    )
+  {
+    Ok(value) ->
+      tsserver_diagnostics.project_from_response(value)
+      |> result_map_error(fn(_) { Nil })
+    Error(_) -> Error(Nil)
+  }
+}
+
+/// Add `pharos.project` to an envelope built by `publish_envelope`, or,
+/// when tsserver couldn't name it, `pharos.project_unknown`: a hook keeping
+/// to one program can't tell whether the file is in scope, so it must not
+/// treat it as out (ADR-040).
+fn with_project(envelope: String, project: Result(String, Nil)) -> String {
+  let member = case project {
+    Ok(name) -> "\"project\":" <> json.to_string(json.string(name))
+    Error(Nil) -> "\"project_unknown\":true"
+  }
+  let assert True = string.ends_with(envelope, "}")
+  let body = string.drop_end(envelope, 1)
+  case string.contains(envelope, "\"pharos\":{") {
+    // The notes object is last: add the member inside it.
+    True -> string.drop_end(body, 1) <> "," <> member <> "}}"
+    False -> body <> ",\"pharos\":{" <> member <> "}}"
+  }
+}
+
+fn result_map_error(r: Result(a, e), f: fn(e) -> f) -> Result(a, f) {
+  case r {
+    Ok(v) -> Ok(v)
+    Error(e) -> Error(f(e))
+  }
 }
 
 fn log_tsserver_fallback(server_id: String, reason: String) -> Nil {

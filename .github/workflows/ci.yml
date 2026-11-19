@@ -50,6 +50,11 @@ jobs:
           out=$(PHAROS_RELEASE_ROOT="$root" ./target/release/pharos --version)
           echo "$out"
           [ "$out" = "pharos 0.0.0-ci" ]
+      # The captAInHook payload (#6) against its contract, with a fake
+      # `pharos diagnostics`. POSIX sh + jq, on both systems.
+      - name: The captAInHook payload, pharos-hook.sh
+        working-directory: .
+        run: python3 -I test/integrations/pharos_hook_test.py
 
   test:
     runs-on: ubuntu-latest

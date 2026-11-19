@@ -127,7 +127,8 @@ defmodule Mix.Pharos.ReleaseSteps do
 
   @doc """
   Put `install.sh` in the release (`pharos self rollback|prune|uninstall` run the one their
-  version ships, ADR-036), write `BUILD_ID`, pack the release as
+  version ships, ADR-036) and the captAInHook payload under `integrations/captainhook/`
+  (pharos-mcp#6), write `BUILD_ID`, pack the release as
   `_build/package/pharos-<version>-<target>.tar.gz` with a top directory of the same name, and
   put a `SHA256SUMS` and `install.sh` beside it, as the GitHub release has them (so a
   `file://` `PHAROS_DOWNLOAD_URL` works for `self update` too). Then copy the release into its
@@ -135,6 +136,12 @@ defmodule Mix.Pharos.ReleaseSteps do
   """
   def package(%Mix.Release{path: path, version: version} = release) do
     File.cp!("install.sh", Path.join(path, "install.sh"))
+    # The captAInHook payload (pharos-mcp#6), before BUILD_ID so the build's
+    # hash covers it.
+    hook = Path.join([path, "integrations", "captainhook", "pharos-hook.sh"])
+    File.mkdir_p!(Path.dirname(hook))
+    File.cp!("integrations/captainhook/pharos-hook.sh", hook)
+    File.chmod!(hook, 0o755)
     File.write!(Path.join(path, "BUILD_ID"), build_id(path) <> "\n")
 
     out = Path.expand(@package)

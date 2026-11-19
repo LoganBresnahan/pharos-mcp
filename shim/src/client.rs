@@ -43,23 +43,25 @@ const MAX_ACK_BYTES: usize = 64 * 1024;
 const STDIN_EOF_GRACE: Duration = Duration::from_secs(3);
 
 pub fn run(release: &Release) -> Outcome {
+    match connect(release) {
+        Ok((stream, leftover)) => Outcome::Exit(relay(stream, leftover)),
+        Err(reason) => Outcome::Unreachable(reason),
+    }
+}
+
+/// Find or start this build's daemon and introduce a session with the
+/// hello. Returns the stream and any bytes that arrived after the ack.
+/// Shared by the MCP shim and `pharos diagnostics`.
+pub fn connect(release: &Release) -> Result<(UnixStream, Vec<u8>), String> {
     let key = paths::daemon_key(|name| env::var_os(name));
     let paths = DaemonPaths::new(&release.build_id, &key);
-    if let Err(reason) = paths::ensure_private_dir(&paths.dir) {
-        return Outcome::Unreachable(reason);
-    }
+    paths::ensure_private_dir(&paths.dir)?;
     let stream = match UnixStream::connect(&paths.socket) {
         Ok(stream) => stream,
-        Err(_) => match start_or_join(release, &paths, &key) {
-            Ok(stream) => stream,
-            Err(reason) => return Outcome::Unreachable(reason),
-        },
+        Err(_) => start_or_join(release, &paths, &key)?,
     };
-    let leftover = match hello(&stream, release) {
-        Ok(leftover) => leftover,
-        Err(reason) => return Outcome::Unreachable(reason),
-    };
-    Outcome::Exit(relay(stream, leftover))
+    let leftover = hello(&stream, release)?;
+    Ok((stream, leftover))
 }
 
 fn start_timeout() -> Duration {
