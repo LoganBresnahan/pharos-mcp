@@ -243,6 +243,26 @@ def t_an_answer_without_a_project_is_unsure_not_out_of_scope():
     r.done()
 
 
+def t_a_touched_non_typescript_file_is_never_asked_about():
+    """Contract amendment (arm 3's scope is the program's TypeScript files):
+    a touched JSON file means no call to pharos (no cold JSON server) and no
+    log line, at PostToolUse and at Stop."""
+    r = Run()
+    r.write("config/settings.json", "{}\n")
+    r.event("UserPromptSubmit")
+    a, err = r.edit("config/settings.json", '{"ERROR 2304 broken": 1}\n')
+    check(a["effect"] == "noop" and "trial.unsure" not in err, (a, err))
+    a, err = r.event("Stop")
+    check(a["effect"] == "noop" and "trial.unsure" not in err, (a, err))
+    check(r.calls() == [], "pharos was asked about a JSON file: %r" % r.calls())
+    # A TypeScript file in the same turn is still checked.
+    r.write("a.ts", "x\n")
+    a, _ = r.edit("a.ts", "ERROR 2304 broken\n")
+    check(a.get("text") == HEAD_EDIT + "\na.ts:1:1 TS2304 broken", a)
+    check(all(c == "a.ts" for c in r.calls()), r.calls())
+    r.done()
+
+
 def t_out_of_scope_files_are_skipped_silently():
     r = Run()
     r.write("other/b.ts", "x\n")

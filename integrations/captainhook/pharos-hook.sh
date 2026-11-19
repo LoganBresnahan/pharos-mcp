@@ -26,6 +26,7 @@
 #                     is set, the turn ends: at most one block per turn.
 #
 #   args: --root <tsconfig dir> [--project <tsconfig>] [--budget-ms N] [--pharos <path>]
+#         [--extensions "ts tsx mts cts"]
 #   the trial: ["--root", "<proj>", "--budget-ms", "<N>"]
 #
 # The checker is `pharos diagnostics --json` on the touched files, through
@@ -33,7 +34,11 @@
 # variable the runner sets, in the entry's passEnv: captAInHook strips the
 # environment). A file is in scope when pharos names its project as the
 # trial tsconfig (--project, default <root>/tsconfig.json): tsserver puts a
-# file outside the program in an inferred project, and arm 3 skips it.
+# file outside the program in an inferred project, and arm 3 skips it. Only
+# TypeScript files are asked about at all (--extensions; add js jsx when the
+# tsconfig checks JavaScript): a touched JSON or other file is out of scope,
+# silently, with no call to pharos (which would start another language
+# server) and no unsure line.
 # Errors only (LSP severity 1), shown as `<path>:<line>:<col> TS<code> <message>`
 # with the LSP position plus 1. Its KEY is (path, code, message): line and
 # column move with edits, so they're shown, never compared. An occurrence is
@@ -72,6 +77,7 @@ BUDGET_MS=30000
 ROOT=""
 PROJECT=""
 PHAROS=pharos
+EXTENSIONS="ts tsx mts cts"
 WRITERS=" Write Edit MultiEdit NotebookEdit "
 
 while [ $# -gt 0 ]; do
@@ -80,6 +86,7 @@ while [ $# -gt 0 ]; do
     --root)      ROOT=$2; shift 2 ;;
     --project)   PROJECT=$2; shift 2 ;;
     --pharos)    PHAROS=$2; shift 2 ;;
+    --extensions) EXTENSIONS=$2; shift 2 ;;
     --)          shift; break ;;
     *)           break ;;
   esac
@@ -161,6 +168,8 @@ put() { printf '%s\n' "$2" > "$DIR/$1.tmp.$$" && mv -f "$DIR/$1.tmp.$$" "$DIR/$1
 get() { if [ -e "$DIR/$1" ]; then cat "$DIR/$1"; else printf '%s\n' "$2"; fi; }
 
 is_writer() { case $WRITERS in *" $TOOL "*) return 0 ;; esac; return 1; }
+# A file arm 3 asks pharos about: a TypeScript file, by extension.
+is_checked() { for e in $EXTENSIONS; do case $1 in *."$e") return 0 ;; esac; done; return 1; }
 
 # The written file's path relative to the root (../ when it's outside). The
 # root is a real path (pwd -P), so the target is resolved the same way: its
@@ -313,7 +322,8 @@ case $EVENT in
 
     rel=$(rel_target)
     lock || { LOG_EVENT=baseline; unsure failed "timeout-lock"; noop; exit 0; }
-    if [ -n "$rel" ] && [ "$(get touched.json '{}' | jq --arg f "$rel" 'has($f)')" = false ]; then
+    # A file that isn't TypeScript is out of scope: never touched, never asked about.
+    if [ -n "$rel" ] && is_checked "$rel" && [ "$(get touched.json '{}' | jq --arg f "$rel" 'has($f)')" = false ]; then
       LOG_EVENT=baseline
       if [ ! -e "$ROOT/$rel" ]; then b='{"known": true, "errors": []}'      # created this turn
       elif reusable 1 "$rel"; then b=$(jq -c --arg f "$rel" '.files[$f] | {known, errors}' "$DIR/snap.json")
