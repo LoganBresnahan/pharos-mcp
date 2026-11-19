@@ -16,7 +16,7 @@ import gleam/option.{None, Some}
 import gleam/string
 import pharos/lsp/languages.{
   type LanguageConfig, type MethodScope, type ServerConfig, All, Only, Pull,
-  Push,
+  Push, Tsserver,
 }
 
 /// Render every language in the registry as one big TOML string.
@@ -199,6 +199,7 @@ fn render_diagnostics_mode(mode: languages.DiagnosticsMode) -> String {
   case mode {
     Push -> "\"push\""
     Pull -> "\"pull\""
+    Tsserver -> "\"tsserver\""
   }
 }
 

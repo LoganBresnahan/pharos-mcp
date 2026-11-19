@@ -807,6 +807,75 @@ def t_resync_subject_deleted(sb):
     check(len(opens) == 1, "a gone file was opened again: %r" % opens)
 
 
+def t_tsserver_answers_new_text(sb):
+    """ADR-039: with diagnostics_mode = "tsserver", get_diagnostics asks
+    the server for the file's diagnostics instead of reading publishes. The
+    stub plays tsserver's race (ADR-038 F4): after a change it publishes the
+    OLD text's set, without a version, and the right one later. The answer
+    must describe the new text anyway, at once."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push-stale", "STUB_LSP_TSSERVER": "answer",
+                  "STUB_LSP_STALE_DELAY_MS": "1500"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "ok\nERROR one\n")
+    d1 = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    check("tsserver error on line 1" in d1 and '"code":9001' in d1, "first answer: %s" % d1)
+    check('"line":0' in d1 and '"relatedInformation"' in d1 and '"severity":1' in d1,
+          "tsserver's 1-based positions and related info must map to LSP: %s" % d1)
+    stub_file(sb, "main.stub", "fixed\n")
+    t0 = time.time()
+    d2 = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    took = time.time() - t0
+    check("error" not in d2 and "carried_over" not in d2, "answered from the old text: %s" % d2)
+    check(took < 1, "took %.1fs: waited for publishes instead of asking" % took)
+    asks = [l for l in open(os.path.join(sb.fixture, "stub.log")) if "workspace/executeCommand" in l]
+    check(any("semanticDiagnosticsSync main.stub" in l for l in asks)
+          and any("syntacticDiagnosticsSync main.stub" in l for l in asks)
+          and any("suggestionDiagnosticsSync main.stub" in l for l in asks),
+          "expected the three *DiagnosticsSync requests: %r" % asks[-6:])
+
+
+def t_tsserver_falls_back_to_push(sb):
+    """ADR-039: when the tsserver request fails, get_diagnostics answers
+    from the push cache, marked carried over: a publish carries no version,
+    so it may describe the text before a change."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push", "STUB_LSP_TSSERVER": "fail"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "ok\nERROR one\n")
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    check("stub error on line 1" in d and "carried_over" in d, "expected the pushed set, marked: %s" % d)
+
+
+def tsserver_fallback_is_marked(sb, mode, extra, timeout):
+    """ADR-039, review finding: a fallback can serve F4's stale set (the
+    stub publishes the OLD text's diagnostics after a change), so the
+    answer must be marked."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    env = {"STUB_LSP_DIAGNOSTICS": "push-stale", "STUB_LSP_TSSERVER": mode,
+           "STUB_LSP_STALE_DELAY_MS": "5000"}
+    env.update(extra)
+    a = sb.start(env)
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "ok\nERROR one\n")
+    a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": timeout})
+    stub_file(sb, "main.stub", "fixed\n")
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": timeout})
+    check("stub error on line 1" in d and "carried_over" in d,
+          "%s: expected the stale set, marked carried over: %s" % (mode, d))
+
+
+def t_tsserver_failed_fallback_is_marked(sb):
+    """The tsserver request fails: the push-cache answer is marked."""
+    tsserver_fallback_is_marked(sb, "fail", {}, 20000)
+
+
+def t_tsserver_timed_out_fallback_is_marked(sb):
+    """The tsserver request outlasts the call's timeout: the push-cache
+    answer is marked."""
+    tsserver_fallback_is_marked(sb, "slow", {"STUB_LSP_TSSERVER_DELAY_MS": "4000"}, 1500)
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -849,6 +918,10 @@ SCENARIOS = [
     ("resync_open_cap", t_resync_open_cap),
     ("resync_settles_after_window", t_resync_settles_after_window),
     ("resync_subject_deleted", t_resync_subject_deleted),
+    ("tsserver_answers_new_text", t_tsserver_answers_new_text),
+    ("tsserver_falls_back_to_push", t_tsserver_falls_back_to_push),
+    ("tsserver_failed_fallback_is_marked", t_tsserver_failed_fallback_is_marked),
+    ("tsserver_timed_out_fallback_is_marked", t_tsserver_timed_out_fallback_is_marked),
 ]
 
 

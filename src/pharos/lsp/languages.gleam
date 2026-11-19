@@ -27,12 +27,18 @@ import gleam/string
 /// `tools/tier1/diagnostics` uses.
 pub type DiagnosticsMode {
   /// Server pushes `textDocument/publishDiagnostics` notifications
-  /// at its own pace. Client drains the stream watching for the URI
-  /// it cares about. Used by rust-analyzer, gopls, pyright.
+  /// at its own pace; pharos reads the last one it cached (ADR-038).
+  /// Used by rust-analyzer and gopls, and the default.
   Push
-  /// Server only responds to explicit `textDocument/diagnostic`
-  /// requests (LSP 3.17+). Used by typescript-language-server, ruff.
+  /// Server answers explicit `textDocument/diagnostic` requests
+  /// (LSP 3.17+). Used by pyright and ruff.
   Pull
+  /// Ask tsserver directly through typescript-language-server's
+  /// `typescript.tsserverRequest` command (`*DiagnosticsSync`), so the
+  /// answer is about the text the server has now; its publishes carry
+  /// no version and can describe the text before a change (ADR-039).
+  /// Falls back to Push when the command fails.
+  Tsserver
 }
 
 /// Post-discovery root promotion strategy. After
@@ -561,7 +567,8 @@ fn typescript() -> LanguageConfig {
           ]),
         ),
         methods: All,
-        diagnostics_mode: Push,
+        // ADR-039: its publishes carry no version, so ask tsserver.
+        diagnostics_mode: Tsserver,
         readiness_token: None,
         ready_timeout_ms: None,
         initialize_timeout_ms: None,

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **TypeScript diagnostics answer for the text the server has now.**
+  typescript-language-server publishes without a version, so right after
+  a change, while tsserver was re-checking open files, `get_diagnostics`
+  could return the previous text's errors, unmarked (0.3.0's known limit).
+  pharos now asks tsserver for the file's diagnostics directly, through
+  typescript-language-server's `typescript.tsserverRequest`. If that
+  fails or runs out of time, the answer comes from the publishes, marked
+  `pharos.carried_over`. Answers after a change are also faster. The new
+  `diagnostics_mode = "tsserver"` turns this on for a server ([ADR-039](doc/adr/039-tsserver-diagnostics-asked-directly.md); #13).
+
 ## [0.3.0] — 2026-11-18
 
 ### Fixed

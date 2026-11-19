@@ -44,7 +44,7 @@ import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
   type DiagnosticsMode, type LanguageConfig, type LookupError, type MethodScope,
   type ServerConfig, All, LanguageConfig, NoPromotion, Only,
-  ProbeWorkspaceSymbol, Pull, Push, ServerConfig,
+  ProbeWorkspaceSymbol, Pull, Push, ServerConfig, Tsserver,
 }
 
 /// Load the effective registry into `persistent_term`. Call once at
@@ -459,6 +459,7 @@ fn parse_mode(raw: Option(String)) -> DiagnosticsMode {
   case raw {
     Some("pull") | Some("Pull") | Some("PULL") -> Pull
     Some("push") | Some("Push") | Some("PUSH") -> Push
+    Some("tsserver") | Some("Tsserver") | Some("TSSERVER") -> Tsserver
     _ -> Push
   }
 }

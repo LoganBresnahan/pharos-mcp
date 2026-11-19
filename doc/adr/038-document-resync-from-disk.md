@@ -1,6 +1,6 @@
 # 038. Re-sync open documents from disk on every question
 
-**Status:** Accepted (2026-11-18)
+**Status:** Accepted (2026-11-18); known limit F4 addressed by [ADR-039](039-tsserver-diagnostics-asked-directly.md)
 **Date:** 2026-11-16, revised 2026-11-18 after review (deleted files, the settle window, which
 servers watch the disk, and one known limit on TypeScript)
 **Issue:** [#3](https://github.com/LoganBresnahan/pharos-mcp/issues/3)

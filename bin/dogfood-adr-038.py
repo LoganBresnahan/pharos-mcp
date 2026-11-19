@@ -50,6 +50,9 @@ Checks (PASS/FAIL):
     ts      a.ts sees b.ts's new signature (TS2554)
     ts      a deleted file asked about: hover no longer describes it
     ts      a deleted file asked about: no diagnostics from its old text
+    ts      with tsserver re-checking open files (another file just
+            opened), a file saved clean and asked at once is answered
+            clean, every trial (ADR-038 F4, fixed by ADR-039, #13)
     go      after another file is opened, an unchanged file is answered
             unmarked once the settle window has passed, and at once
             after that (review finding F2)
@@ -440,6 +443,38 @@ def ts():
     m3, _ = show("T3 b.ts signature changed", t, dt)
     record("ts: a.ts sees b.ts's new signature (TS2554)",
            bool(m3) and any("argument" in (x[2] or "").lower() for x in m3), str(m3))
+
+    # F4 (#13): ten busy open files, a file with errors, another file
+    # opened (tsserver starts re-checking every open file), then the file
+    # saved clean and asked about at once. Before ADR-039 the old errors
+    # came back unmarked, because the re-check's publish for the old
+    # text arrived after the change.
+    busy = []
+    for k in range(10):
+        bk = fx + "/busy%d.ts" % k
+        write(bk, "".join("export const v%d_%d: number = %d;\n" % (k, i, i) for i in range(300)))
+        s.tool("get_diagnostics", {"uri": "file://" + bk, "timeout_ms": 20000})
+        busy.append(bk)
+    broken = 'export function f(): number {\n  return "not a number";\n}\nundefinedName;\n'
+    clean = "export function f(): number { return 1; }\n"
+    race = fx + "/race.ts"
+    ur = "file://" + race
+    stale = []
+    took = []
+    for t in range(8):
+        write(race, broken + "// trial %d\n" % t)
+        s.tool("get_diagnostics", {"uri": ur, "timeout_ms": 20000})
+        other = fx + "/other%d.ts" % t
+        write(other, "export const o%d = 1;\n" % t)
+        s.tool("get_diagnostics", {"uri": "file://" + other, "timeout_ms": 20000})
+        write(race, clean + "// trial %d\n" % t)
+        txt, dt = s.tool("get_diagnostics", {"uri": ur, "timeout_ms": 20000})
+        took.append(dt)
+        msgs, note = diag_messages(txt)
+        if msgs is None or msgs or note:
+            stale.append((t, msgs, note))
+    record("ts: with a re-check in flight, a file saved clean is answered clean (F4)",
+           not stale, "8 trials, %d stale; slowest %.2fs %s" % (len(stale), max(took), stale[:2]))
 
     # a.ts is deleted: pharos closes it and serves nothing about its old
     # text; tsserver watches the disk, so it drops the file too.

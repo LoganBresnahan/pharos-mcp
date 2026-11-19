@@ -45,7 +45,26 @@ version, applies didOpen / didChange / didClose, and logs what it got:
                               but skip a publish whose diagnostics equal
                               the last ones for the file (rust-analyzer's
                               behaviour). "push-versionless": like push,
-                              without the `version` field
+                              without the `version` field. "push-stale":
+                              tsserver's race (ADR-038 F4): on a change,
+                              publish the OLD text's diagnostics at once,
+                              without a version, and the new ones after
+                              STUB_LSP_STALE_DELAY_MS (default 600)
+
+tsserver asked directly (ADR-039). The stub answers
+`workspace/executeCommand` for `typescript.tsserverRequest` the way
+typescript-language-server forwards it:
+
+  STUB_LSP_TSSERVER=          unset: method not found. "answer":
+                              semanticDiagnosticsSync returns one
+                              tsserver diagnostic (code 9001) per line
+                              of the stub's current text containing
+                              ERROR, and one with relatedInformation;
+                              the other two requests return []. "fail":
+                              an error response, so pharos falls back to
+                              the push cache. "slow": answer as "answer",
+                              after STUB_LSP_TSSERVER_DELAY_MS (default
+                              3000), so a short timeout_ms runs out
 
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
@@ -63,6 +82,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 
 
@@ -92,11 +112,15 @@ def read_message(stream):
     return json.loads(body.decode("utf-8"))
 
 
+WRITE_LOCK = threading.Lock()
+
+
 def write_message(stream, msg):
     body = json.dumps(msg).encode("utf-8")
-    stream.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
-    stream.write(body)
-    stream.flush()
+    with WRITE_LOCK:
+        stream.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
+        stream.write(body)
+        stream.flush()
 
 
 def handle_initialize(req):
@@ -137,6 +161,11 @@ def sha8(text):
 
 
 def sync_log_suffix(method, params):
+    if method == "workspace/executeCommand":
+        args = params.get("arguments") or []
+        if len(args) >= 2 and isinstance(args[1], dict):
+            return " %s %s" % (args[0], os.path.basename(args[1].get("file", "")))
+        return ""
     doc = params.get("textDocument") or {}
     name = os.path.basename(doc.get("uri", ""))
     return (" " + name if name else "") + sync_log_detail(method, params, doc)
@@ -174,12 +203,8 @@ def apply_sync(method, params):
     return uri
 
 
-def maybe_publish(stdout, uri):
-    mode = os.environ.get("STUB_LSP_DIAGNOSTICS", "")
-    if not mode or uri not in DOCS:
-        return
-    doc = DOCS[uri]
-    diagnostics = [
+def stub_diagnostics(text):
+    return [
         {
             "range": {"start": {"line": i, "character": 0},
                       "end": {"line": i, "character": len(line)}},
@@ -187,8 +212,68 @@ def maybe_publish(stdout, uri):
             "source": "stub",
             "message": "stub error on line %d" % i,
         }
-        for i, line in enumerate(doc["text"].split("\n")) if "ERROR" in line
+        for i, line in enumerate(text.split("\n")) if "ERROR" in line
     ]
+
+
+def publish_stale_then_fresh(stdout, uri, old_text):
+    """tsserver's race: the set computed for the old text arrives after
+    the change, without a version; the right one comes later."""
+    write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                           "params": {"uri": uri, "diagnostics": stub_diagnostics(old_text)}})
+    delay = int(os.environ.get("STUB_LSP_STALE_DELAY_MS", "600")) / 1000.0
+
+    def later():
+        doc = DOCS.get(uri)
+        if doc is not None:
+            write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                                   "params": {"uri": uri, "diagnostics": stub_diagnostics(doc["text"])}})
+    threading.Timer(delay, later).start()
+
+
+def handle_tsserver_request(req):
+    """typescript-language-server's `typescript.tsserverRequest`."""
+    mode = os.environ.get("STUB_LSP_TSSERVER", "")
+    params = req.get("params") or {}
+    args = params.get("arguments") or []
+    if not mode or params.get("command") != "typescript.tsserverRequest" or len(args) < 2:
+        return {"jsonrpc": "2.0", "id": req["id"],
+                "error": {"code": -32601, "message": "stub_lsp: no such command"}}
+    if mode == "fail":
+        return {"jsonrpc": "2.0", "id": req["id"],
+                "error": {"code": 1, "message": "stub_lsp: tsserver request failed"}}
+    request, file_uri = args[0], (args[1] or {}).get("file")
+    body = []
+    doc = DOCS.get(file_uri)
+    if doc is None:
+        return {"jsonrpc": "2.0", "id": req["id"],
+                "result": {"type": "response", "command": request, "success": False,
+                           "message": "Could not find file"}}
+    if request == "semanticDiagnosticsSync":
+        lines = doc["text"].split("\n")
+        for i, line in enumerate(lines):
+            if "ERROR" in line:
+                body.append({"start": {"line": i + 1, "offset": 1},
+                             "end": {"line": i + 1, "offset": len(line) + 1},
+                             "text": "tsserver error on line %d" % i, "code": 9001,
+                             "category": "error",
+                             "relatedInformation": [
+                                 {"span": {"start": {"line": 1, "offset": 1},
+                                           "end": {"line": 1, "offset": 2},
+                                           "file": file_uri[len("file://"):]},
+                                  "message": "related here", "category": "message",
+                                  "code": 9002}]})
+    return {"jsonrpc": "2.0", "id": req["id"],
+            "result": {"seq": 0, "type": "response", "command": request,
+                       "request_seq": 0, "success": True, "body": body}}
+
+
+def maybe_publish(stdout, uri):
+    mode = os.environ.get("STUB_LSP_DIAGNOSTICS", "")
+    if not mode or uri not in DOCS or mode == "push-stale":
+        return
+    doc = DOCS[uri]
+    diagnostics = stub_diagnostics(doc["text"])
     if mode == "push-suppress" and LAST_PUBLISHED.get(uri) == diagnostics:
         return
     LAST_PUBLISHED[uri] = diagnostics
@@ -291,7 +376,16 @@ def main():
         elif method == "exit":
             return
         elif method in ("textDocument/didOpen", "textDocument/didChange"):
-            uri = apply_sync(method, msg.get("params") or {})
+            p = msg.get("params") or {}
+            old = DOCS.get((p.get("textDocument") or {}).get("uri"), {}).get("text")
+            uri = apply_sync(method, p)
+            if os.environ.get("STUB_LSP_DIAGNOSTICS") == "push-stale" and uri in DOCS:
+                if method == "textDocument/didChange" and old is not None:
+                    publish_stale_then_fresh(stdout, uri, old)
+                else:
+                    write_message(stdout, {"jsonrpc": "2.0",
+                                           "method": "textDocument/publishDiagnostics",
+                                           "params": {"uri": uri, "diagnostics": stub_diagnostics(DOCS[uri]["text"])}})
             maybe_publish(stdout, uri)
         elif method == "textDocument/didClose":
             apply_sync(method, msg.get("params") or {})
@@ -300,6 +394,15 @@ def main():
         elif method == "textDocument/hover":
             resp = handle_hover(msg)
             write_message(stdout, resp)
+        elif method == "workspace/executeCommand":
+            if os.environ.get("STUB_LSP_TSSERVER") == "slow":
+                # Answer from a timer thread, so the stub keeps reading:
+                # a didChange and push-stale's publishes go on meanwhile.
+                delay = int(os.environ.get("STUB_LSP_TSSERVER_DELAY_MS", "3000")) / 1000.0
+                threading.Timer(delay, lambda m=msg: write_message(
+                    stdout, handle_tsserver_request(m))).start()
+            else:
+                write_message(stdout, handle_tsserver_request(msg))
         elif method == "$/cancelRequest":
             continue
         else:

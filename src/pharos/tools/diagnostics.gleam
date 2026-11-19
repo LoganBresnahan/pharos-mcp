@@ -7,8 +7,10 @@
 ////
 //// - **Single-server.** Use the language's primary server with
 ////   `Push` (read the server's last `textDocument/publishDiagnostics`
-////   from `pharos_diagnostics_cache`, waiting for one if needed) or
-////   `Pull` (`textDocument/diagnostic` request).
+////   from `pharos_diagnostics_cache`, waiting for one if needed),
+////   `Pull` (`textDocument/diagnostic` request), or `Tsserver` (ask
+////   tsserver through `typescript.tsserverRequest`, falling back to
+////   Push; ADR-039).
 ////
 //// - **Multi-server (M10 / ADR-019 Stage 3 follow-up).** Every
 ////   server whose scope COVERS `textDocument/diagnostic` runs its
@@ -44,9 +46,12 @@ import gleam/list
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/diagnostics_cache
-import pharos/lsp/languages.{type LanguageConfig, type ServerConfig, Pull, Push}
+import pharos/lsp/languages.{
+  type LanguageConfig, type ServerConfig, Pull, Push, Tsserver,
+}
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
+import pharos/lsp/tsserver_diagnostics
 import pharos/tools/session
 import pharos/tools/tool_helpers
 
@@ -154,13 +159,21 @@ fn attempt_single(
   case session.prepare(pool, file_uri) {
     Error(err) -> Error(map_session_error(err))
     Ok(lsp) -> {
-      let #(server_id, mode) = case languages.primary_server(config) {
+      let primary = languages.primary_server(config)
+      let #(server_id, mode) = case primary {
         Ok(server) -> #(server.id, server.diagnostics_mode)
         Error(_) -> #("", Push)
       }
       let result = case mode {
         Push -> Ok(push_result(file_uri, server_id, proc.pid(lsp), deadline_ms))
         Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
+        Tsserver -> {
+          let ignored = case primary {
+            Ok(server) -> tsserver_diagnostics.ignored_codes(server)
+            Error(_) -> []
+          }
+          Ok(tsserver_result(lsp, file_uri, server_id, ignored, deadline_ms))
+        }
       }
       case result, retries_left > 0 {
         Error(TransportFailed(_)), True -> {
@@ -278,6 +291,26 @@ fn server_report(
     Pull ->
       pull_items(lsp, file_uri, timeout_ms)
       |> result_map(fn(i) { #(i, False) })
+    Tsserver ->
+      case
+        tsserver_items(
+          lsp,
+          file_uri,
+          tsserver_diagnostics.ignored_codes(server),
+          deadline_ms,
+        )
+      {
+        Ok(items) -> Ok(#(items, False))
+        Error(reason) -> {
+          log_tsserver_fallback(server.id, reason)
+          // A publish carries no version: never fresh in this mode.
+          case resolve_push(file_uri, server.id, proc.pid(lsp), deadline_ms) {
+            FreshEntry(params) | CarriedEntry(params) ->
+              items_from_params(params) |> result_map(fn(i) { #(i, True) })
+            NotReported -> Error("no publishDiagnostics within the timeout")
+          }
+        }
+      }
   }
   case fetched {
     Ok(#(items, carried_over)) -> Reported(items:, carried_over:)
@@ -492,9 +525,10 @@ fn answer_note(
       #(
         "carried_over_note",
         json.string(
-          "No publish since this file, or another file the server has "
-          <> "open, last changed: this is the server's last set from before "
-          <> "the change. It still holds if the change left the diagnostics "
+          "This is the server's last published set, which may describe the "
+          <> "text before a change: it hasn't published since this file, or "
+          <> "another file it has open, last changed, or pharos couldn't ask "
+          <> "it directly. It still holds if the change left the diagnostics "
           <> "as they were; ask again if the server may still be analysing.",
         ),
       ),
@@ -584,6 +618,90 @@ fn string_join(parts: List(String), sep: String) -> String {
     [] -> ""
     [first, ..rest] -> list.fold(rest, first, fn(acc, p) { acc <> sep <> p })
   }
+}
+
+// -- tsserver, asked directly (ADR-039) -----------------------------------
+
+/// The file's diagnostics from tsserver itself, through
+/// typescript-language-server's `typescript.tsserverRequest`. The
+/// session's sync was written before this request, and tsserver
+/// handles requests in order, so the answer is about the text it has
+/// now. If the requests fail or time out, answer from the push cache,
+/// always marked carried over: a publish carries no version, so it may
+/// describe the text before a change (ADR-038 F4).
+fn tsserver_result(
+  lsp: proc.Proc,
+  file_uri: String,
+  server_id: String,
+  ignored: List(Int),
+  deadline_ms: Int,
+) -> DiagnosticsResult {
+  case tsserver_items(lsp, file_uri, ignored, deadline_ms) {
+    Ok(items_json) ->
+      Diagnostics(
+        uri: file_uri,
+        body_json: publish_envelope(
+          synthesized_params(file_uri, items_json),
+          [],
+          [],
+        ),
+      )
+    Error(reason) -> {
+      log_tsserver_fallback(server_id, reason)
+      case resolve_push(file_uri, server_id, proc.pid(lsp), deadline_ms) {
+        FreshEntry(params) | CarriedEntry(params) ->
+          Diagnostics(
+            uri: file_uri,
+            body_json: publish_envelope(
+              tool_helpers.json_encode(params),
+              [server_id],
+              [],
+            ),
+          )
+        NotReported -> NoDiagnosticsObserved(uri: file_uri)
+      }
+    }
+  }
+}
+
+/// syntactic, semantic and suggestion diagnostics, in that order, as a
+/// JSON array.
+fn tsserver_items(
+  lsp: proc.Proc,
+  file_uri: String,
+  ignored: List(Int),
+  deadline_ms: Int,
+) -> Result(String, String) {
+  list.try_fold(tsserver_diagnostics.requests, [], fn(acc, request) {
+    let timeout_ms = int.max(deadline_ms - now_ms(), 1)
+    case
+      session.request_with_content_modified_retry(fn() {
+        proc.request(
+          lsp,
+          "workspace/executeCommand",
+          tsserver_diagnostics.execute_params(request, file_uri),
+          timeout_ms,
+        )
+      })
+    {
+      Error(err) -> Error(tool_helpers.describe_request_error(err))
+      Ok(value) ->
+        case tsserver_diagnostics.diagnostics_from_response(value, ignored) {
+          Ok(found) -> Ok(list.append(acc, found))
+          Error(reason) -> Error(reason)
+        }
+    }
+  })
+  |> result_map(fn(found) { json.to_string(json.preprocessed_array(found)) })
+}
+
+fn log_tsserver_fallback(server_id: String, reason: String) -> Nil {
+  log.fields_at(
+    "pharos/tools/diagnostics",
+    log_entry.Warn,
+    "tsserver diagnostics request failed; answering from the push cache",
+    [#("server", server_id), #("reason", reason)],
+  )
 }
 
 // -- Single-server pull -------------------------------------------------

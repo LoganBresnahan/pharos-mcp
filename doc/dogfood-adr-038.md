@@ -290,3 +290,15 @@ drain runs to its cap. Not investigated further. It is outside #3.
 - [ADR-038](adr/038-document-resync-from-disk.md): the decision this run gates.
 - [ADR-034](adr/034-shared-daemon-and-native-shim.md): the shared daemon the second session joins.
 - `test/daemon/integration.py`, scenarios `resync_*`: the same behaviour against the stub.
+
+## Addendum, 2026-11-18: F4 fixed by asking tsserver (#13, ADR-039)
+
+The driver's ts section gained a hard check of F4's race. Ten busy open files, a file with
+errors, another file opened (tsserver starts re-checking every open file), then the file saved
+clean and asked about at once, eight times. On the #13 branch, with typescript-language-server
+answering through `diagnostics_mode = "tsserver"`, all 8 came back clean, the slowest in 0.01 s
+(load average 1.77). On 0.3.0 the review's run of the same race came back stale 8 of 8. The other
+ts checks passed too, now in 0.01 s where the push path took 0.41 s: the comment-only edit, a.ts
+seeing b.ts's new signature (TS2554, the other-open-document re-sync), and the deleted file.
+Coverage limit (c) above no longer holds for that check.
+

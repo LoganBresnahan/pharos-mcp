@@ -140,7 +140,9 @@
 # args = ["--lsp"]
 # file_extensions = [".hs"]
 # root_markers = ["cabal.project", "stack.yaml"]
-# diagnostics_mode = "push"
+# diagnostics_mode = "push"   # or "pull" (textDocument/diagnostic), or
+#                             # "tsserver" for a server that forwards
+#                             # typescript.tsserverRequest (ADR-039)
 #
 # Where this ecosystem puts dependencies (ADR-032). Both default to
 # empty — set them only when a dependency directory carries one of the
