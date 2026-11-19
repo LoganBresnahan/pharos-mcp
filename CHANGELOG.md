@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-11-19
+
 ### Fixed
 
 - A `.tsx` file reached tsserver as plain TypeScript (and a `.js` or `.jsx` file as
