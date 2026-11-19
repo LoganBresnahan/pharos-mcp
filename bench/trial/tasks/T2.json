@@ -1,0 +1,31 @@
+{
+  "id": "T2",
+  "kind": "cross-file",
+  "start": "50ee087b6096d5eff052c92f82663a67becfe297",
+  "prepare": [],
+  "test_projects": [
+    "app",
+    "shared-node",
+    "shared-jsdom"
+  ],
+  "turns": [
+    {
+      "prompt": "In shared/utils/slugify.ts, change `slugify` so that it takes a second, required parameter `separator: string`: the string placed between words (today it is always \"-\"). Update every caller of this function across the codebase so that the app behaves exactly as it did before.",
+      "acceptance": {
+        "path": "shared/utils/slugify.trial-t2-1.test.ts",
+        "project": "shared-node",
+        "text": "import slugify from \"./slugify\";\n\ndescribe(\"slugify separator (trial T2, turn 1)\", () => {\n  it(\"joins words with the given separator\", () => {\n    expect(slugify(\"Hello World\", \"_\")).toBe(\"hello_world\");\n    expect(slugify(\"Hello World\", \"-\")).toBe(\"hello-world\");\n  });\n\n  it(\"still removes periods\", () => {\n    expect(slugify(\"a.b c\", \"-\")).toBe(\"ab-c\");\n  });\n});\n"
+      }
+    },
+    {
+      "prompt": "Make the `separator` parameter of `slugify` optional, defaulting to \"-\", and remove the explicit \"-\" argument from its callers again, since it is now the default.",
+      "acceptance": {
+        "path": "shared/utils/slugify.trial-t2-2.test.ts",
+        "project": "shared-node",
+        "text": "import slugify from \"./slugify\";\n\ndescribe(\"slugify default separator (trial T2, turn 2)\", () => {\n  it(\"defaults to a hyphen\", () => {\n    expect(slugify(\"Hello World\")).toBe(\"hello-world\");\n  });\n\n  it(\"still takes a separator\", () => {\n    expect(slugify(\"Hello World\", \"_\")).toBe(\"hello_world\");\n  });\n});\n"
+      }
+    }
+  ],
+  "notes": "@shared/utils/slugify has 11 call sites in 10 files (app/models, server/models, server/routes, two server model tests, plugins/discord). Three other files import npm's `slugify` under the same name (server/models/Template.ts, server/commands/teamCreator.ts, shared/editor/lib/headingToSlug.ts) and must not change. The acceptance tests are hidden: the runner writes each after its turn, runs it, and removes it.",
+  "warm_file": "shared/utils/slugify.ts"
+}

@@ -1,0 +1,31 @@
+{
+  "id": "T3",
+  "kind": "cross-file",
+  "start": "50ee087b6096d5eff052c92f82663a67becfe297",
+  "prepare": [],
+  "warm_file": "shared/types.ts",
+  "test_projects": [
+    "app",
+    "shared-node",
+    "shared-jsdom"
+  ],
+  "turns": [
+    {
+      "prompt": "Turn the `DateFilter` type in shared/types.ts from a union of string literals into a string enum named `DateFilter`, with members `Day`, `Week`, `Month` and `Year` keeping the same string values, the way `StatusFilter` is defined. Update the code that uses it across the codebase to use the enum's members.",
+      "acceptance": {
+        "path": "shared/utils/date.trial-t3-1.test.ts",
+        "project": "shared-node",
+        "text": "import { DURATION_BY_DATE_FILTER } from \"../helpers/FilterHelper\";\nimport { DateFilter } from \"../types\";\nimport { subtractDate } from \"./date\";\n\nconst when = new Date(\"2024-05-15T12:00:00Z\");\n\ndescribe(\"DateFilter enum (trial T3, turn 1)\", () => {\n  it(\"is an enum with the same values\", () => {\n    expect(DateFilter.Day).toBe(\"day\");\n    expect(DateFilter.Week).toBe(\"week\");\n    expect(DateFilter.Month).toBe(\"month\");\n    expect(DateFilter.Year).toBe(\"year\");\n  });\n\n  it(\"still works where it is used\", () => {\n    expect(subtractDate(when, DateFilter.Week).toISOString()).toBe(\"2024-05-08T12:00:00.000Z\");\n    expect(DURATION_BY_DATE_FILTER[DateFilter.Year]).toBe(\"-P1Y\");\n  });\n});\n"
+      }
+    },
+    {
+      "prompt": "Add a period between a month and a year to `DateFilter`: `Quarter` (value \"quarter\"), three months. Make it work everywhere a date filter is used, including the date filter menu in search.",
+      "acceptance": {
+        "path": "shared/utils/date.trial-t3-2.test.ts",
+        "project": "shared-node",
+        "text": "import { DURATION_BY_DATE_FILTER } from \"../helpers/FilterHelper\";\nimport { DateFilter } from \"../types\";\nimport { subtractDate } from \"./date\";\n\nconst when = new Date(\"2024-05-15T12:00:00Z\");\n\ndescribe(\"DateFilter.Quarter (trial T3, turn 2)\", () => {\n  it(\"is three months\", () => {\n    expect(DateFilter.Quarter).toBe(\"quarter\");\n    expect(subtractDate(when, DateFilter.Quarter).toISOString()).toBe(\"2024-02-15T12:00:00.000Z\");\n    expect(DURATION_BY_DATE_FILTER[DateFilter.Quarter]).toBe(\"-P3M\");\n  });\n});\n"
+      }
+    }
+  ],
+  "notes": "DateFilter is used in app (Search, Drafts, Trash, the DateFilter menu, DocumentsStore), server (Filters.ts; the documents schema's z.literal union) and shared (FilterHelper, date.ts). Editing shared/types.ts is the widest edit in the set. Turn 2's trap: subtractDate's default returns the date unchanged, so a missing case passes tsc and fails the hidden test."
+}

@@ -1,0 +1,31 @@
+{
+  "id": "T5",
+  "kind": "local",
+  "start": "02f415215bcedc01657af00cd48520f86c51b339",
+  "prepare": [],
+  "warm_file": "app/editor/extensions/deburrWithMap.ts",
+  "test_projects": [
+    "app",
+    "shared-node",
+    "shared-jsdom"
+  ],
+  "turns": [
+    {
+      "prompt": "Find-and-replace highlights the wrong text in documents that mix Korean (or other text whose characters decompose) with emoji: a match that comes after an emoji is highlighted at the wrong position. A failing test in the app's test suite reproduces it. Fix the bug.",
+      "acceptance": {
+        "path": "app/editor/extensions/deburrWithMap.trial-t5-1.test.ts",
+        "project": "app",
+        "text": "import { deburrWithMap } from \"./deburrWithMap\";\n\ndescribe(\"deburrWithMap and emoji (trial T5, turn 1)\", () => {\n  it(\"maps text after emoji back to the right position\", () => {\n    {\n      const text = \"강😀b\";\n      const { deburred, toOriginalIndex } = deburrWithMap(text);\n      const i = deburred.indexOf(\"b\");\n      expect(text.slice(toOriginalIndex(i), toOriginalIndex(i + 1))).toBe(\"b\");\n      expect(toOriginalIndex(deburred.length)).toBe(text.length);\n    }\n    {\n      const text = \"강😀b😀c\";\n      const { deburred, toOriginalIndex } = deburrWithMap(text);\n      const i = deburred.indexOf(\"c\");\n      expect(text.slice(toOriginalIndex(i), toOriginalIndex(i + 1))).toBe(\"c\");\n      expect(toOriginalIndex(deburred.length)).toBe(text.length);\n    }\n    {\n      const text = \"😀강x\";\n      const { deburred, toOriginalIndex } = deburrWithMap(text);\n      const i = deburred.indexOf(\"x\");\n      expect(text.slice(toOriginalIndex(i), toOriginalIndex(i + 1))).toBe(\"x\");\n      expect(toOriginalIndex(deburred.length)).toBe(text.length);\n    }\n  });\n});\n"
+      }
+    },
+    {
+      "prompt": "Make `toOriginalIndex` safe to call with an index outside 0…deburred.length: below 0 it should give 0, and past the end it should give the original text's length, whichever path the function takes.",
+      "acceptance": {
+        "path": "app/editor/extensions/deburrWithMap.trial-t5-2.test.ts",
+        "project": "app",
+        "text": "import { deburrWithMap } from \"./deburrWithMap\";\n\ndescribe(\"toOriginalIndex clamps (trial T5, turn 2)\", () => {\n  it(\"clamps on the fast path\", () => {\n    const { toOriginalIndex } = deburrWithMap(\"abc\");\n    expect(toOriginalIndex(-1)).toBe(0);\n    expect(toOriginalIndex(10)).toBe(3);\n  });\n\n  it(\"clamps on the slow path\", () => {\n    const text = \"강😀b\";\n    const { toOriginalIndex } = deburrWithMap(text);\n    expect(toOriginalIndex(-5)).toBe(0);\n    expect(toOriginalIndex(100)).toBe(text.length);\n  });\n});\n"
+      }
+    }
+  ],
+  "notes": "Start state: the seeded bug (the slow path advances originalIndex by 1, not char.length, so a surrogate pair shifts every later index) and a committed failing test for it, appended to deburrWithMap.test.ts. The existing surrogate test takes the fast path, so it doesn't catch it."
+}

@@ -1,0 +1,31 @@
+{
+  "id": "T4",
+  "kind": "local",
+  "start": "6b026a603b21588ad8003ce25550e72855f312c8",
+  "prepare": [],
+  "warm_file": "shared/utils/duration.ts",
+  "test_projects": [
+    "app",
+    "shared-node",
+    "shared-jsdom"
+  ],
+  "turns": [
+    {
+      "prompt": "Implement `formatDuration` in shared/utils/duration.ts to the spec in its doc comment. Its tests are in shared/utils/duration.test.ts.",
+      "acceptance": {
+        "path": "shared/utils/duration.trial-t4-1.test.ts",
+        "project": "shared-node",
+        "text": "import { formatDuration } from \"./duration\";\n\nconst s = 1000;\nconst m = 60 * s;\nconst h = 60 * m;\nconst d = 24 * h;\n\ndescribe(\"formatDuration\", () => {\n  it(\"formats anything under a second as 0s\", () => {\n    expect(formatDuration(0)).toBe(\"0s\");\n    expect(formatDuration(999)).toBe(\"0s\");\n  });\n\n  it(\"formats seconds\", () => {\n    expect(formatDuration(45 * s)).toBe(\"45s\");\n  });\n\n  it(\"shows the largest unit and the next one down\", () => {\n    expect(formatDuration(3 * m + 20 * s)).toBe(\"3m 20s\");\n    expect(formatDuration(h + 5 * m)).toBe(\"1h 5m\");\n    expect(formatDuration(2 * d + 3 * h)).toBe(\"2d 3h\");\n  });\n\n  it(\"omits the next unit when it is zero\", () => {\n    expect(formatDuration(2 * d)).toBe(\"2d\");\n    expect(formatDuration(h + 30 * s)).toBe(\"1h\");\n  });\n\n  it(\"drops smaller units instead of rounding\", () => {\n    expect(formatDuration(h + 5 * m + 59 * s)).toBe(\"1h 5m\");\n  });\n\n  it(\"rejects negative and non-finite durations\", () => {\n    expect(() => formatDuration(-1)).toThrow(RangeError);\n    expect(() => formatDuration(NaN)).toThrow(RangeError);\n    expect(() => formatDuration(Infinity)).toThrow(RangeError);\n  });\n});\n\ndescribe(\"formatDuration, more cases (trial T4, turn 1)\", () => {\n  it(\"keeps only the two largest units\", () => {\n    expect(formatDuration(d + h + m + s)).toBe(\"1d 1h\");\n  });\n\n  it(\"rounds down to whole seconds\", () => {\n    expect(formatDuration(59 * s + 999)).toBe(\"59s\");\n    expect(formatDuration(m)).toBe(\"1m\");\n  });\n});\n"
+      }
+    },
+    {
+      "prompt": "Give `formatDuration` an optional second parameter, `options`, with one field, `long?: boolean`. When it's true, units are spelled out and pluralized, separated by spaces: \"1 hour 5 minutes\", \"2 days\", \"1 second\", \"0 seconds\". Without it the output stays as it is. Update the doc comment and the tests.",
+      "acceptance": {
+        "path": "shared/utils/duration.trial-t4-2.test.ts",
+        "project": "shared-node",
+        "text": "import { formatDuration } from \"./duration\";\n\nconst s = 1000;\nconst m = 60 * s;\nconst h = 60 * m;\nconst d = 24 * h;\n\ndescribe(\"formatDuration long (trial T4, turn 2)\", () => {\n  it(\"spells units out and pluralizes them\", () => {\n    expect(formatDuration(h + 5 * m, { long: true })).toBe(\"1 hour 5 minutes\");\n    expect(formatDuration(2 * d, { long: true })).toBe(\"2 days\");\n    expect(formatDuration(d + h, { long: true })).toBe(\"1 day 1 hour\");\n    expect(formatDuration(s, { long: true })).toBe(\"1 second\");\n    expect(formatDuration(0, { long: true })).toBe(\"0 seconds\");\n  });\n\n  it(\"keeps the short form by default\", () => {\n    expect(formatDuration(h + 5 * m)).toBe(\"1h 5m\");\n  });\n});\n"
+      }
+    }
+  ],
+  "notes": "Start state: a stub that throws, with its spec as a doc comment, and the tests it ships with (failing at the start). The turn-1 hidden test repeats the shipped cases plus three more, so an edited shipped test can't make it pass."
+}

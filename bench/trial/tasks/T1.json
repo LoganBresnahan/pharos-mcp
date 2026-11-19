@@ -1,0 +1,31 @@
+{
+  "id": "T1",
+  "kind": "cross-file",
+  "start": "50ee087b6096d5eff052c92f82663a67becfe297",
+  "prepare": [],
+  "warm_file": "shared/utils/files.ts",
+  "test_projects": [
+    "app",
+    "shared-node",
+    "shared-jsdom"
+  ],
+  "turns": [
+    {
+      "prompt": "Rename the shared helper `bytesToHumanReadable` to `formatBytes`, and update every use of it across the codebase. Don't keep the old name around as an alias.",
+      "acceptance": {
+        "path": "shared/utils/files.trial-t1-1.test.ts",
+        "project": "shared-node",
+        "text": "import * as files from \"./files\";\n\nlet mockIsMacValue = false;\n\nvi.mock(\"./browser\", () => ({\n  get isMac() {\n    return mockIsMacValue;\n  },\n}));\n\ndescribe(\"formatBytes (trial T1, turn 1)\", () => {\n  it(\"is the helper's new name\", () => {\n    expect(files.formatBytes(500)).toBe(\"500 Bytes\");\n    expect(files.formatBytes(undefined)).toBe(\"0 Bytes\");\n    expect(files.formatBytes(1536)).toBe(\"1.5 KB\");\n  });\n\n  it(\"no longer exports the old name\", () => {\n    expect(\"bytesToHumanReadable\" in files).toBe(false);\n  });\n});\n"
+      }
+    },
+    {
+      "prompt": "Give `formatBytes` an optional second parameter, `decimals`: the most decimal places to show. It defaults to 2, so every existing call keeps its output.",
+      "acceptance": {
+        "path": "shared/utils/files.trial-t1-2.test.ts",
+        "project": "shared-node",
+        "text": "import { formatBytes } from \"./files\";\n\nlet mockIsMacValue = false;\n\nvi.mock(\"./browser\", () => ({\n  get isMac() {\n    return mockIsMacValue;\n  },\n}));\n\ndescribe(\"formatBytes decimals (trial T1, turn 2)\", () => {\n  it(\"defaults to two decimal places\", () => {\n    expect(formatBytes(12345)).toBe(\"12.06 KB\");\n  });\n\n  it(\"takes the number of decimal places\", () => {\n    expect(formatBytes(12345, 1)).toBe(\"12.1 KB\");\n    expect(formatBytes(12345, 0)).toBe(\"12 KB\");\n    expect(formatBytes(500, 0)).toBe(\"500 Bytes\");\n  });\n});\n"
+      }
+    }
+  ],
+  "notes": "bytesToHumanReadable (shared/utils/files.ts) is used in 14 files: app 5, server 6, plugins 1, shared 2 (incl. its test). The hidden tests pin isMac false (base 1024) the way files.test.ts does."
+}

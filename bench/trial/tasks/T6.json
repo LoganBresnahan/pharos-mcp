@@ -1,0 +1,31 @@
+{
+  "id": "T6",
+  "kind": "local",
+  "start": "50ee087b6096d5eff052c92f82663a67becfe297",
+  "prepare": [],
+  "warm_file": "app/components/Sidebar/components/Folder.tsx",
+  "test_projects": [
+    "app",
+    "shared-node",
+    "shared-jsdom"
+  ],
+  "turns": [
+    {
+      "prompt": "The sidebar's expandable sections don't tell screen readers that their child lists are groups. Give the sidebar's `Folder` component a required `label: string` prop, and make it wrap its children in a `<div role=\"group\" aria-label={label}>` when expanded (it still renders nothing when collapsed). Pass a meaningful label everywhere it's used.",
+      "acceptance": {
+        "path": "app/components/Sidebar/components/Folder.trial-t6-1.test.tsx",
+        "project": "app",
+        "text": "import { renderToStaticMarkup } from \"react-dom/server\";\nimport Folder from \"./Folder\";\n\ndescribe(\"Folder (trial T6, turn 1)\", () => {\n  it(\"wraps expanded children in a labelled group\", () => {\n    const html = renderToStaticMarkup(\n      <Folder expanded label=\"Projects\">\n        <span>child</span>\n      </Folder>\n    );\n    expect(html).toContain('role=\"group\"');\n    expect(html).toContain('aria-label=\"Projects\"');\n    expect(html).toContain(\"<span>child</span>\");\n  });\n\n  it(\"renders nothing when collapsed\", () => {\n    const html = renderToStaticMarkup(\n      <Folder expanded={false} label=\"Projects\">\n        <span>child</span>\n      </Folder>\n    );\n    expect(html).toBe(\"\");\n  });\n});\n"
+      }
+    },
+    {
+      "prompt": "Some places don't have a good name to give the group. Make `label` optional: without a label, `Folder` renders its children as it originally did, with no wrapping element.",
+      "acceptance": {
+        "path": "app/components/Sidebar/components/Folder.trial-t6-2.test.tsx",
+        "project": "app",
+        "text": "import { renderToStaticMarkup } from \"react-dom/server\";\nimport Folder from \"./Folder\";\n\ndescribe(\"Folder without a label (trial T6, turn 2)\", () => {\n  it(\"renders children unwrapped\", () => {\n    const html = renderToStaticMarkup(\n      <Folder expanded>\n        <span>child</span>\n      </Folder>\n    );\n    expect(html).toBe(\"<span>child</span>\");\n  });\n\n  it(\"still groups with a label\", () => {\n    const html = renderToStaticMarkup(\n      <Folder expanded label=\"Projects\">\n        <span>child</span>\n      </Folder>\n    );\n    expect(html).toContain('role=\"group\"');\n  });\n});\n"
+      }
+    }
+  ],
+  "notes": "Folder (app/components/Sidebar/components/Folder.tsx) is used 5 times, all in its own directory: CollectionLinkChildren, GroupLink, StarredLink, SharedWithMeLink, DocumentLink."
+}
