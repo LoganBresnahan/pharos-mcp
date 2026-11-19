@@ -1528,7 +1528,7 @@ fn ensure_doc_opened_for_server_id(
       server_id,
       cache_server_id,
       file_uri,
-      config.id,
+      languages.document_language_id(config, file_uri),
     )
   Nil
 }

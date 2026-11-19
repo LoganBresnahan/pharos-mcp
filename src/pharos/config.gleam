@@ -154,6 +154,9 @@ pub type LanguageOverride {
     command: Option(String),
     args: Option(List(String)),
     file_extensions: Option(List(String)),
+    /// #17. `document_language_ids = { ".tsx" = "typescriptreact" }`:
+    /// the LSP languageId per extension. Replaces the bundled list.
+    document_language_ids: Option(List(#(String, String))),
     root_markers: Option(List(String)),
     /// ADR-032 step 4. In-tree dependency directory segments and
     /// out-of-tree dependency-cache suffixes for this language. Both
@@ -826,6 +829,10 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     command: decode_optional_string(value, "command"),
     args: decode_optional_string_list(value, "args"),
     file_extensions: decode_optional_string_list(value, "file_extensions"),
+    document_language_ids: decode_optional_string_table(
+      value,
+      "document_language_ids",
+    ),
     root_markers: decode_optional_string_list(value, "root_markers"),
     vendor_segments: decode_optional_string_list(value, "vendor_segments"),
     dependency_cache_fragments: decode_optional_string_list(
@@ -950,6 +957,22 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
       "workspace_configuration_json",
     ),
   )
+}
+
+/// A TOML table of strings, as (key, value) pairs sorted by key; None
+/// when the key is missing or isn't such a table.
+fn decode_optional_string_table(
+  parent: Dynamic,
+  key: String,
+) -> Option(List(#(String, String))) {
+  case decode_field(parent, key, decode.dict(decode.string, decode.string)) {
+    Ok(table) ->
+      Some(
+        dict.to_list(table)
+        |> list.sort(fn(a, b) { string.compare(a.0, b.0) }),
+      )
+    Error(_) -> None
+  }
 }
 
 fn decode_optional_string(parent: Dynamic, key: String) -> Option(String) {

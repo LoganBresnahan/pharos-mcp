@@ -201,7 +201,7 @@ def sync_log_suffix(method, params):
 
 def sync_log_detail(method, params, doc):
     if method == "textDocument/didOpen":
-        return " v=%s sha=%s" % (doc.get("version"), sha8(doc.get("text", "")))
+        return " v=%s sha=%s lang=%s" % (doc.get("version"), sha8(doc.get("text", "")), doc.get("languageId"))
     if method == "textDocument/didChange":
         changes = params.get("contentChanges") or []
         ranged = any("range" in c or "rangeLength" in c for c in changes)

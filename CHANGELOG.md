@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A `.tsx` file reached tsserver as plain TypeScript (and a `.js` or `.jsx` file as
+  TypeScript) whenever tsserver took the file's kind from pharos, which is whenever the file
+  wasn't already loaded with its project: the first file asked about in a fresh daemon, a new
+  file, a file outside every tsconfig. pharos sent the language's id, `typescript`, as every
+  document's `languageId`. Now each opens as `typescriptreact`, `javascript` or
+  `javascriptreact` by its extension (#17, ADR-041).
+
+### Added
+
+- `document_language_ids` in a language's `pharos.toml` table: the `languageId` per file
+  extension, for a language whose server parses its dialects differently (ADR-041).
+
 ## [0.3.3] — 2026-11-19
 
 ### Changed

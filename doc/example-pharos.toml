@@ -165,6 +165,14 @@
 # [languages.typescript]
 # vendor_segments = ["/node_modules/"]
 #
+# The languageId a document opens with, per extension (ADR-041), for a
+# language whose server parses its dialects differently. An extension
+# not listed gets the language's id. Replaces the bundled list; the
+# bundled typescript entry already sets this:
+#
+# [languages.typescript]
+# document_language_ids = { ".tsx" = "typescriptreact", ".js" = "javascript", ".mjs" = "javascript", ".cjs" = "javascript", ".jsx" = "javascriptreact" }
+#
 # Environment variables that change an LSP's answers (ADR-034). When
 # several MCP sessions share one pharos daemon, two sessions on the
 # same root share one LSP only if they agree on these, resolve the

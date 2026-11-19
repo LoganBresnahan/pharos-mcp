@@ -709,7 +709,14 @@ args = []
 | `[[languages.<id>.servers]]` (≥1) | At least one server with a `command` resolvable on PATH |
 
 `id` (optional) is the `languageId` pharos sends in `textDocument/didOpen`;
-it defaults to the table's name (`fennel` above). Per-server `methods`
+it defaults to the table's name (`fennel` above). When one language covers
+dialects its server parses differently, `document_language_ids` gives the
+languageId per extension, and an extension it doesn't list gets `id`
+([ADR-041](doc/adr/041-document-language-id-per-extension.md)). The bundled
+`typescript` entry sets `document_language_ids = { ".tsx" = "typescriptreact",
+".js" = "javascript", ".mjs" = "javascript", ".cjs" = "javascript",
+".jsx" = "javascriptreact" }`; like the other list keys, setting it replaces the
+bundled list. Per-server `methods`
 takes a list of LSP methods and only matters when a language has
 several servers (see [Multi-server languages](#multi-server-languages-adr-019)).
 

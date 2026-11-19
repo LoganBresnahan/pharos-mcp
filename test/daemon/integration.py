@@ -964,6 +964,28 @@ def t_diagnostics_cli_project_timeout(sb):
     check(took < 15, "the call must end near its deadline, took %.1f s" % took)
 
 
+def t_document_language_id(sb):
+    """#17: one language entry can cover dialects its server parses
+    differently, and didOpen's languageId follows the file's extension
+    (`document_language_ids`), the language's id otherwise. Sent as the
+    language's id, a .tsx file reached tsserver as plain TypeScript."""
+    with open(os.path.join(sb.fixture, ".pharos.toml"), "w") as f:
+        f.write('[languages.stub]\nfile_extensions = [".stub", ".stubx"]\n'
+                'document_language_ids = { ".stubx" = "stubreact" }\n'
+                'root_markers = ["stub.root"]\ncommand = "%s"\n' % STUB)
+    env = {"STUB_LSP_DIAGNOSTICS": "push"}
+    for name in ("plain.stub", "dialect.stubx"):
+        with open(os.path.join(sb.fixture, name), "w") as fh:
+            fh.write("fine\n")
+    out = sb.cli("diagnostics", "--json", os.path.join(sb.fixture, "plain.stub"),
+                 os.path.join(sb.fixture, "dialect.stubx"), extra_env=env, timeout=60, cwd=sb.fixture)
+    check(out.returncode == 0, "exit %d: %s" % (out.returncode, out.stderr[-400:]))
+    opens = sync_lines(sb, "textDocument/didOpen")
+    langs = {l.split()[1]: l.rsplit("lang=", 1)[-1] for l in opens}
+    check(langs.get("plain.stub") == "stub" and langs.get("dialect.stubx") == "stubreact",
+          "didOpen languageIds: %r" % opens)
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1014,6 +1036,7 @@ SCENARIOS = [
     ("diagnostics_cli_unknown_project", t_diagnostics_cli_unknown_project),
     ("diagnostics_cli_busy_tsserver", t_diagnostics_cli_busy_tsserver),
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
+    ("document_language_id", t_document_language_id),
 ]
 
 

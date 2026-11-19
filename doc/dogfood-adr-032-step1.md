@@ -205,3 +205,14 @@ node probe.mjs --lang rust --root fx-rs --anchor src/main.rs \
 Before believing any `FAILS`, check `hover` at the same position resolves a real
 type, and run the first-party control for that language. Go failed both on the
 first attempt and the verdict was wrong.
+
+---
+
+**Addendum, 2026-11-19: the JSX finding, confirmed and fixed (#17, ADR-041).** The pharos trial
+(#7) reproduced it on a real tsserver. On outline at `9839ad8`, `Folder.tsx` asked first in a
+fresh daemon gave `TS1110 Type expected.` and `TS1161 Unterminated regular expression literal.`,
+where tsc reports nothing. Asked after a `.ts` file had loaded the project, it was clean: tsserver
+takes the script kind from the client only for a file it hasn't already loaded with a project,
+which is likely why the isolated harness above saw nothing. The fix is the per-extension
+languageId this report called for: `document_language_ids`, which maps the TypeScript entry's
+`.tsx` to `typescriptreact` (and `.js`/`.jsx` to `javascript`/`javascriptreact`).

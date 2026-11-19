@@ -38,6 +38,18 @@ pub fn render_language(config: LanguageConfig) -> String {
   let extensions =
     "file_extensions = " <> render_string_list(config.file_extensions)
   let markers = "root_markers = " <> render_string_list(config.root_markers)
+  // #17. Emitted even when empty, so the key shows up to be set.
+  let document_ids =
+    "document_language_ids = { "
+    <> string.join(
+      list.map(config.document_language_ids, fn(pair) {
+        json.to_string(json.string(pair.0))
+        <> " = "
+        <> json.to_string(json.string(pair.1))
+      }),
+      ", ",
+    )
+    <> " }"
   // ADR-032 step 4. Emitted even when empty — an empty list is a
   // meaningful default here ("this ecosystem has no dependency
   // directory that shadows a root marker"), and printing it is what
@@ -62,6 +74,7 @@ pub fn render_language(config: LanguageConfig) -> String {
     [
       header,
       extensions,
+      document_ids,
       markers,
       vendors,
       caches,

@@ -303,6 +303,13 @@ pub type LanguageConfig {
     /// to dispatch the per-scheme LSP method. User-overridable from
     /// toml is post-v1.0 — defaults baked here for now.
     custom_uri_schemes: Dict(String, CustomUriScheme),
+    /// #17. The LSP `languageId` for documents with a given extension,
+    /// where one language entry covers dialects its server parses
+    /// differently (typescript-language-server picks tsserver's script
+    /// kind from it: `typescriptreact` parses JSX, `typescript` doesn't).
+    /// Pairs of (extension incl. leading dot, languageId); an extension
+    /// not listed gets the language's `id`.
+    document_language_ids: List(#(String, String)),
     /// ADR-034. Environment variables that change this language's
     /// LSP answers. Their values join the spawn fingerprint, so two
     /// sessions sharing a root share an LSP only when they agree on
@@ -488,6 +495,7 @@ fn rust() -> LanguageConfig {
     ],
     env_keys: ["RUSTUP_TOOLCHAIN", "CARGO_HOME", "CARGO_TARGET_DIR"],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -522,6 +530,7 @@ fn go() -> LanguageConfig {
     ],
     env_keys: ["GOFLAGS", "GOWORK", "GOPATH", "GOROOT"],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -585,6 +594,16 @@ fn typescript() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    // #17: one entry, four dialects. Sent as "typescript", a .tsx file
+    // was parsed without JSX (bogus syntax errors, real errors masked)
+    // and a .js file as TypeScript.
+    document_language_ids: [
+      #(".tsx", "typescriptreact"),
+      #(".js", "javascript"),
+      #(".mjs", "javascript"),
+      #(".cjs", "javascript"),
+      #(".jsx", "javascriptreact"),
+    ],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -659,6 +678,7 @@ fn elixir() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -693,6 +713,7 @@ fn ruby() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -724,6 +745,7 @@ fn zig() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -762,6 +784,7 @@ fn cpp() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -810,6 +833,7 @@ fn scala() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: Some(7200),
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -844,6 +868,7 @@ fn clojure() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -879,6 +904,7 @@ fn haskell() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: Some(7200),
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -916,6 +942,7 @@ fn perl() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -950,6 +977,7 @@ fn html() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -981,6 +1009,7 @@ fn css() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1014,6 +1043,7 @@ fn json_lang() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1045,6 +1075,7 @@ fn yaml() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1076,6 +1107,7 @@ fn markdown() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1109,6 +1141,7 @@ fn terraform() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1151,6 +1184,7 @@ fn erlang() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1215,6 +1249,7 @@ fn java() -> LanguageConfig {
     // find_references, goto_definition).
     env_keys: ["JAVA_HOME"],
     idle_stop_secs: Some(7200),
+    document_language_ids: [],
     custom_uri_schemes: dict.from_list([
       #(
         "jdt",
@@ -1264,6 +1299,7 @@ fn gleam() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1300,6 +1336,7 @@ fn lua() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1337,6 +1374,7 @@ fn bash() -> LanguageConfig {
     ],
     env_keys: [],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
 }
@@ -1399,6 +1437,21 @@ fn python() -> LanguageConfig {
     ],
     env_keys: ["VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH"],
     idle_stop_secs: None,
+    document_language_ids: [],
     custom_uri_schemes: dict.new(),
   )
+}
+
+/// #17. The `languageId` to send in `textDocument/didOpen` for the
+/// document at `uri` (a URI or a path): the one `document_language_ids`
+/// names for its extension, else the language's `id`.
+pub fn document_language_id(config: LanguageConfig, uri: String) -> String {
+  case
+    list.find(config.document_language_ids, fn(pair) {
+      string.ends_with(string.lowercase(uri), string.lowercase(pair.0))
+    })
+  {
+    Ok(#(_, language_id)) -> language_id
+    Error(Nil) -> config.id
+  }
 }

@@ -192,6 +192,7 @@ fn partial_to_full(key: String, override: LanguageOverride) -> LanguageConfig {
     // ADR-029: user-defined language entries get no custom URI
     // schemes by default. Adding them via toml is deferred post-v1.0.
     custom_uri_schemes: dict.new(),
+    document_language_ids: option.unwrap(override.document_language_ids, []),
     env_keys: option.unwrap(override.env_keys, []),
     idle_stop_secs: override.idle_stop_secs,
   )
@@ -243,6 +244,10 @@ fn merge_one(
     file_extensions: case override.file_extensions {
       Some(xs) -> xs
       None -> default.file_extensions
+    },
+    document_language_ids: case override.document_language_ids {
+      Some(xs) -> xs
+      None -> default.document_language_ids
     },
     root_markers: case override.root_markers {
       Some(xs) -> xs
