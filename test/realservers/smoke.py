@@ -13,8 +13,9 @@ own runtime, state and HOME-independent dirs) it checks:
 - hover on the helper's use answers, and goto_definition lands in the
   helper's file;
 - find_symbol on a cold session finds the helper (#21), within 20 s (#12);
-- after the error is fixed on disk, get_diagnostics comes back without it
-  (ADR-038's re-sync).
+- fixing and re-breaking the file on disk, 4 times, each answer matches
+  the disk: the error gone after a fix, back after a break (ADR-038's
+  re-sync, #30's stale check).
 
 Needs the servers on PATH: typescript-language-server (with typescript),
 gopls, pyright-langserver, rust-analyzer (and cargo). A missing server is
@@ -177,16 +178,24 @@ def check_lang(key, args, results):
         record("hover", not err and len(text) > 10 and "null" != text.strip(), text[:100].replace("\n", " "))
         text, err = s.tool("goto_definition", {"uri": main_uri, "line": line, "character": char + 1})
         record("definition", not err and os.path.basename(spec["util"]) in text, text[:120])
-        with open(main_path, "w") as f:
-            f.write(spec["fixed"])
+        # Fix and break the file a few times, asking after each write: one
+        # cycle caught a stale answer (#30's) only about half the time.
+        bad = []
         t0 = time.time()
-        text, err = s.tool("get_diagnostics", {"uri": main_uri, "timeout_ms": args.budget_ms})
-        record("diagnostics fixed", not err and spec["expect"] not in text,
-               "%.1fs %s" % (time.time() - t0, text[:140].replace("\n", " ")))
-        if args.verbose:
-            print("   full answer after the fix: " + text[-400:].replace("\n", " "), flush=True)
-        with open(main_path, "w") as f:
-            f.write(main_text)
+        for cycle in range(args.cycles):
+            for text_on_disk, want_error in ((spec["fixed"], False), (main_text, True)):
+                with open(main_path, "w") as f:
+                    f.write(text_on_disk)
+                text, err = s.tool("get_diagnostics", {"uri": main_uri, "timeout_ms": args.budget_ms})
+                has_error = spec["expect"] in text
+                if err or has_error != want_error or (not want_error and "carried_over" in text):
+                    bad.append("cycle %d %s: %s" % (cycle + 1, "broken" if want_error else "fixed",
+                                                   text[:100].replace("\n", " ")))
+                if args.verbose:
+                    print("   cycle %d %s: %s" % (cycle + 1, "broken" if want_error else "fixed",
+                                                  text[-300:].replace("\n", " ")), flush=True)
+        record("diagnostics fixed", not bad,
+               "%d cycles, %.1fs; %s" % (args.cycles, time.time() - t0, bad[0] if bad else "each answer matched the disk"))
     except Exception as e:  # noqa: BLE001
         record("session", False, repr(e))
     finally:
@@ -212,6 +221,8 @@ def main():
     # A cold find_symbol answers in 1-5 s once readiness ends on the
     # server's own progress (#12); before that, ~58 s.
     ap.add_argument("--find-budget-ms", type=int, default=20000)
+    ap.add_argument("--cycles", type=int, default=4,
+                    help="fix/break cycles for the after-a-fix check")
     ap.add_argument("--skip-missing", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
