@@ -1357,6 +1357,22 @@ def t_cli_no_reply_is_unsure(sb):
     check(took < 18, "took %.1fs" % took)
 
 
+def t_frames_after_a_reply_are_handled(sb):
+    """#25: a publish that reaches pharos in the same read as a reply (zls
+    often sends them together) was left in the buffer until the server sent
+    something else; a quiet server doesn't, so get_diagnostics waited out
+    its timeout. Frames left after a reply are handled at once."""
+    a = sb.start({"STUB_LSP_PUBLISH_WITH_REPLY": "1", "STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "one\n")
+    hover_line(a, uri, 10)
+    t0 = time.time()
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    took = time.time() - t0
+    check("published with the reply" in d, "the publish read with the reply was lost: %s" % d[-300:])
+    check(took < 3, "took %.1fs" % took)
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1408,6 +1424,7 @@ SCENARIOS = [
     ("diagnostics_cli_busy_tsserver", t_diagnostics_cli_busy_tsserver),
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
+    ("frames_after_a_reply_are_handled", t_frames_after_a_reply_are_handled),
     ("pull_capability_follows_mode", t_pull_capability_follows_mode),
     ("readiness_without_progress", t_readiness_without_progress),
     ("readiness_any_token", t_readiness_any_token),

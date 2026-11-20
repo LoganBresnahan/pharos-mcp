@@ -177,6 +177,10 @@ pub fn start(
               Ok(c) -> c
               Error(_) -> c
             }
+            // Frames the handshake or the readiness wait read but didn't
+            // reach are handled here, not left until the port next wakes
+            // (#25).
+            let c = drain_client(c)
             // Custom selector accepts both:
             //   - Subject(Msg) messages (Request/RequestRaw/etc.)
             //   - Anything else (Port data + exit_status) wrapped as
@@ -751,15 +755,16 @@ fn decode_port_data_bytes(payload: Dynamic) -> Result(BitArray, Nil) {
 fn int_to_string(n: Int) -> String
 
 fn drain_buffered_frames(state: State) -> State {
-  // Pull frames out of the Client until none remain, classifying
-  // and dispatching each. Stops cleanly when the buffer holds only
-  // a partial frame.
-  case client.drain_one_frame(state.client) {
-    Error(_) -> state
-    Ok(#(updated, body)) -> {
-      let new_client = process_frame(updated, body)
-      drain_buffered_frames(State(..state, client: new_client))
-    }
+  State(..state, client: drain_client(state.client))
+}
+
+/// Pull frames out of the Client until none remain, classifying and
+/// dispatching each. Stops cleanly when the buffer holds only a
+/// partial frame.
+fn drain_client(c: client.Client) -> client.Client {
+  case client.drain_one_frame(c) {
+    Error(_) -> c
+    Ok(#(updated, body)) -> drain_client(process_frame(updated, body))
   }
 }
 
@@ -787,7 +792,13 @@ fn handle_request(
     Ok(#(updated_client, result_value)) -> {
       untrack_inflight(cid)
       process.send(reply_to, Ok(result_value))
-      actor.continue(State(..state, client: updated_client))
+      // Frames read along with the response (a publishDiagnostics in the
+      // same read) are still buffered: handle them now. A quiet server
+      // sends nothing more to wake the port, and the publish sat unparsed
+      // while get_diagnostics waited out its timeout (#25).
+      actor.continue(drain_buffered_frames(
+        State(..state, client: updated_client),
+      ))
     }
     Error(err) -> {
       untrack_inflight(cid)
@@ -819,7 +830,13 @@ fn handle_request_raw(
     Ok(#(updated_client, result_value)) -> {
       untrack_inflight(cid)
       process.send(reply_to, Ok(result_value))
-      actor.continue(State(..state, client: updated_client))
+      // Frames read along with the response (a publishDiagnostics in the
+      // same read) are still buffered: handle them now. A quiet server
+      // sends nothing more to wake the port, and the publish sat unparsed
+      // while get_diagnostics waited out its timeout (#25).
+      actor.continue(drain_buffered_frames(
+        State(..state, client: updated_client),
+      ))
     }
     Error(err) -> {
       untrack_inflight(cid)

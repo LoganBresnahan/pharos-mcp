@@ -118,6 +118,13 @@ Readiness (#12):
                               ("early publish") for that file, before any
                               didOpen: cargo check's publish lands that way
 
+Frames in one read (#25):
+
+  STUB_LSP_PUBLISH_WITH_REPLY=1  write each hover reply and a
+                              publishDiagnostics for that file ("published
+                              with the reply") in ONE write, so they reach
+                              pharos in one read, as zls's often do
+
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
 range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
@@ -586,6 +593,18 @@ def main():
             write_message(stdout, handle_workspace_symbol(msg))
         elif method == "textDocument/documentSymbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
             write_message(stdout, handle_document_symbol(msg))
+        elif method == "textDocument/hover" and os.environ.get("STUB_LSP_PUBLISH_WITH_REPLY"):
+            resp = handle_hover(msg)
+            uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
+            publish = {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                       "params": {"uri": uri, "diagnostics": [{
+                           "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                           "severity": 1, "source": "stub", "message": "published with the reply"}]}}
+            frames = b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+                              for b in (json.dumps(resp).encode(), json.dumps(publish).encode()))
+            with WRITE_LOCK:
+                stdout.write(frames)
+                stdout.flush()
         elif method == "textDocument/hover":
             resp = handle_hover(msg)
             write_message(stdout, resp)
