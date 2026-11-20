@@ -16,6 +16,7 @@
 //// frames is consumed one frame per call.
 
 import gleam/bit_array
+import gleam/erlang/atom
 import gleam/erlang/process.{type Pid}
 import pharos/lsp/framing
 import pharos/lsp/instance_track
@@ -144,40 +145,72 @@ pub fn next_message(
   client: Client,
   timeout_ms: Int,
 ) -> Result(#(BitArray, Client), Error) {
-  case client.queue {
-    [first, ..rest] -> Ok(#(first, Client(..client, queue: rest)))
+  let #(client, outcome) = next_message_keeping(client, timeout_ms)
+  case outcome {
+    Ok(body) -> Ok(#(body, client))
+    Error(err) -> Error(err)
+  }
+}
 
-    [] -> read_until_message(client, timeout_ms)
+/// `next_message`, returning the client whatever the outcome, within one
+/// deadline: each chunk read gets only what's left of `timeout_ms`, so a
+/// server trickling bytes can't hold it past the timeout. On a timeout
+/// the client keeps the part of a frame read so far; dropping it left the
+/// frame's tail to arrive alone, unparseable, in front of every later
+/// reply, so the next request on a healthy server timed out too and the
+/// server was restarted (#33).
+pub fn next_message_keeping(
+  client: Client,
+  timeout_ms: Int,
+) -> #(Client, Result(BitArray, Error)) {
+  case client.queue {
+    [first, ..rest] -> #(Client(..client, queue: rest), Ok(first))
+    [] -> read_until_message(client, monotonic_ms() + timeout_ms)
   }
 }
 
 fn read_until_message(
   client: Client,
-  timeout_ms: Int,
-) -> Result(#(BitArray, Client), Error) {
-  case port.receive_data(client.port, timeout_ms) {
-    Error(receive_err) -> Error(PortReceiveError(receive_err))
+  deadline: Int,
+) -> #(Client, Result(BitArray, Error)) {
+  let left = int_max(deadline - monotonic_ms(), 0)
+  case port.receive_data(client.port, left) {
+    Error(receive_err) -> #(client, Error(PortReceiveError(receive_err)))
 
     Ok(bytes) -> {
       trace.incoming(bytes)
       let new_buffer = bit_array.append(client.buffer, bytes)
       case framing.parse(new_buffer) {
-        Error(framing_err) -> Error(FramingError(framing_err))
+        Error(framing_err) -> #(client, Error(FramingError(framing_err)))
 
-        Ok(framing.Parsed(messages: [], buffer: leftover)) -> {
+        Ok(framing.Parsed(messages: [], buffer: leftover)) ->
           // Got bytes but no complete frame yet. Keep buffering and
           // recurse — port may have more bytes ready, or this read
-          // will time out and propagate the error up.
-          let updated = Client(..client, buffer: leftover)
-          read_until_message(updated, timeout_ms)
-        }
+          // will time out, keeping what it has.
+          read_until_message(Client(..client, buffer: leftover), deadline)
 
-        Ok(framing.Parsed(messages: [first, ..rest], buffer: leftover)) ->
-          Ok(#(first, Client(..client, buffer: leftover, queue: rest)))
+        Ok(framing.Parsed(messages: [first, ..rest], buffer: leftover)) -> #(
+          Client(..client, buffer: leftover, queue: rest),
+          Ok(first),
+        )
       }
     }
   }
 }
+
+fn int_max(a: Int, b: Int) -> Int {
+  case a > b {
+    True -> a
+    False -> b
+  }
+}
+
+fn monotonic_ms() -> Int {
+  erlang_monotonic_time(atom.create("millisecond"))
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn erlang_monotonic_time(unit: atom.Atom) -> Int
 
 /// Append externally-received bytes to the framing buffer without
 /// blocking on a port read. Used by the proc actor when raw Port

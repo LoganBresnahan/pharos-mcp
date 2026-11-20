@@ -125,6 +125,11 @@ Readiness (#12):
   STUB_LSP_EARLY_PUBLISH=path after `initialized`, publish one diagnostic
                               ("early publish") for that file, before any
                               didOpen: cargo check's publish lands that way
+  STUB_LSP_EARLY_PUBLISH_SPLIT=path:ms
+                              the same publish ("early split publish") in
+                              two writes `ms` apart, so its frame straddles
+                              pharos's 200 ms readiness read windows (#33;
+                              verifier's scenario)
 
 Frames in one read (#25):
 
@@ -158,6 +163,13 @@ An error reply with frames behind it (#31):
                               write; with ":split", the publish's last 20
                               bytes come 0.3 s later. Later hovers answer
                               normally
+
+A reply split across a timeout (#33):
+
+  STUB_LSP_SPLIT_FIRST_REPLY=ms
+                              write the FIRST hover reply's first half at
+                              once and the rest `ms` later (past a short
+                              hover timeout_ms); later hovers answer whole
 
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
@@ -235,6 +247,7 @@ def write_message(stream, msg):
 
 CLIENT_PROGRESS = threading.Event()
 ERRORED_ONCE: list = []
+SPLIT_ONCE: list = []
 
 
 LAST_CHECKED: dict[str, list] = {}
@@ -288,6 +301,26 @@ def after_initialized(stdout):
                                "params": {"uri": "file://" + early, "diagnostics": [{
                                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
                                    "severity": 1, "source": "stub", "message": "early publish"}]}})
+    split = os.environ.get("STUB_LSP_EARLY_PUBLISH_SPLIT", "")
+    if split:
+        path, _, ms = split.rpartition(":")
+        body = json.dumps({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                           "params": {"uri": "file://" + path, "diagnostics": [{
+                               "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                               "severity": 1, "source": "stub", "message": "early split publish"}]}}).encode()
+        frame = b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
+        half = len(frame) // 2
+        with WRITE_LOCK:
+            stdout.write(frame[:half])
+            stdout.flush()
+
+        def rest():
+            with WRITE_LOCK:
+                stdout.write(frame[half:])
+                stdout.flush()
+        late = threading.Timer(int(ms) / 1000.0, rest)
+        late.daemon = True
+        late.start()
 
 
 def handle_initialize(req):
@@ -743,6 +776,22 @@ def main():
                         stdout.write(t)
                         stdout.flush()
                 threading.Timer(0.3, rest).start()
+        elif method == "textDocument/hover" and os.environ.get("STUB_LSP_SPLIT_FIRST_REPLY") and not SPLIT_ONCE:
+            SPLIT_ONCE.append(True)
+            body = json.dumps(handle_hover(msg)).encode()
+            frame = b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
+            half = len(frame) // 2
+            with WRITE_LOCK:
+                stdout.write(frame[:half])
+                stdout.flush()
+
+            def rest(t=frame[half:]):
+                with WRITE_LOCK:
+                    stdout.write(t)
+                    stdout.flush()
+            late = threading.Timer(int(os.environ["STUB_LSP_SPLIT_FIRST_REPLY"]) / 1000.0, rest)
+            late.daemon = True
+            late.start()
         elif method == "textDocument/hover" and os.environ.get("STUB_LSP_PUBLISH_WITH_REPLY"):
             resp = handle_hover(msg)
             uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")

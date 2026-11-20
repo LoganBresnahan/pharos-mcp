@@ -118,7 +118,8 @@ pub fn request_keeping_client(
 ) -> #(Client, Result(Dynamic, RequestError)) {
   case send_method_request(client, method, params, request_id) {
     Error(err) -> #(client, Error(err))
-    Ok(Nil) -> wait_for_response_keeping(client, request_id, timeout_ms)
+    Ok(Nil) ->
+      wait_for_response_keeping(client, request_id, monotonic_ms() + timeout_ms)
   }
 }
 
@@ -236,17 +237,19 @@ fn drain_until_ready(
   case now >= r.deadline || quiet_enough(r, now) {
     True -> Ok(client)
     False ->
-      case client.next_message(client, read_window_ms) {
-        Error(client.PortReceiveError(port.Timeout)) ->
+      // The client comes back with a timeout too: a frame split across
+      // read windows keeps its first part (#33).
+      case client.next_message_keeping(client, read_window_ms) {
+        #(client, Error(client.PortReceiveError(port.Timeout))) ->
           drain_until_ready(client, r)
 
-        Error(other) ->
+        #(_, Error(other)) ->
           // Port closed or some other fatal transport error. Surface
           // it so the caller can give up cleanly instead of looping
           // through the whole timeout budget.
           Error(ClientFailure(other))
 
-        Ok(#(body, client)) ->
+        #(client, Ok(body)) ->
           case classify(body) {
             Notification(method: method, params: params)
               if method == "$/progress"
@@ -440,7 +443,8 @@ pub fn request_raw_params_keeping_client(
 ) -> #(Client, Result(Dynamic, RequestError)) {
   case send_raw_method_request(client, method, params_json, request_id) {
     Error(err) -> #(client, Error(err))
-    Ok(Nil) -> wait_for_response_keeping(client, request_id, timeout_ms)
+    Ok(Nil) ->
+      wait_for_response_keeping(client, request_id, monotonic_ms() + timeout_ms)
   }
 }
 
@@ -536,24 +540,25 @@ fn wait_for_response(
   timeout_ms: Int,
 ) -> Result(#(Client, Dynamic), RequestError) {
   let #(client, outcome) =
-    wait_for_response_keeping(client, expected_id, timeout_ms)
+    wait_for_response_keeping(client, expected_id, monotonic_ms() + timeout_ms)
   result.map(outcome, fn(value) { #(client, value) })
 }
 
-/// `wait_for_response`, returning the client with an error reply too: the
-/// frames read behind the error (a publish, half a frame) live in that
-/// client's buffer. Continuing with the client from before the request
-/// dropped them, losing publishes and, with a split frame, desyncing the
-/// stream (#31). A port timeout or transport failure returns the client
-/// as it was, since nothing was read into it.
+/// `wait_for_response`, returning the client whatever the outcome: the
+/// frames read behind an error reply (a publish, half a frame) live in
+/// that client's buffer, and continuing with the client from before the
+/// request dropped them (#31); so does half a frame read before a timeout
+/// (#33). One `deadline` bounds the whole wait, so a server sending other
+/// messages meanwhile can't extend it.
 fn wait_for_response_keeping(
   client: Client,
   expected_id: Int,
-  timeout_ms: Int,
+  deadline: Int,
 ) -> #(Client, Result(Dynamic, RequestError)) {
-  case client.next_message(client, timeout_ms) {
-    Error(err) -> #(client, Error(ClientFailure(err)))
-    Ok(#(body, client)) ->
+  let left = int.max(deadline - monotonic_ms(), 0)
+  case client.next_message_keeping(client, left) {
+    #(client, Error(err)) -> #(client, Error(ClientFailure(err)))
+    #(client, Ok(body)) ->
       case classify(body) {
         ResponseOk(id: id, result: result_value) if id == expected_id -> #(
           client,
@@ -565,13 +570,14 @@ fn wait_for_response_keeping(
         -> #(client, Error(ServerError(code, message)))
 
         ResponseOk(..) | ResponseErr(..) ->
-          // Wrong id — almost certainly a stale or out-of-order response.
-          // Keep looping; the matching one should arrive.
-          wait_for_response_keeping(client, expected_id, timeout_ms)
+          // Wrong id — almost certainly a stale or out-of-order response
+          // (the late reply to a request that timed out). Keep looping;
+          // the matching one should arrive.
+          wait_for_response_keeping(client, expected_id, deadline)
 
         ServerRequest(id: id, method: method, params: params) -> {
           let _ = dispatch_server_request(client, id, method, params)
-          wait_for_response_keeping(client, expected_id, timeout_ms)
+          wait_for_response_keeping(client, expected_id, deadline)
         }
 
         Notification(method: method, params: params) -> {
@@ -579,7 +585,7 @@ fn wait_for_response_keeping(
           // get_diagnostics calls can return immediately even when the
           // server does not re-emit (ADR-038).
           cache_publish_diagnostics(client, method, params)
-          wait_for_response_keeping(client, expected_id, timeout_ms)
+          wait_for_response_keeping(client, expected_id, deadline)
         }
 
         DecodeFailure(reason) -> #(client, Error(ResponseDecodeError(reason)))

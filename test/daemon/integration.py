@@ -1298,6 +1298,24 @@ def readiness_toml(sb):
     sb.write_toml('readiness_token = "stub/index"\nready_timeout_ms = 30000\n')
 
 
+def t_readiness_split_publish_is_kept(sb):
+    """#33 (verifier's scenario): during the readiness wait pharos reads in
+    200 ms windows, and one that timed out dropped the part of a frame read
+    so far. A startup publish split across windows was lost. It's kept
+    now, and the stream stays aligned."""
+    readiness_toml(sb)
+    path = os.path.join(sb.fixture, "c.stub")
+    with open(path, "w") as f:
+        f.write("three\n")
+    a = sb.start({"STUB_LSP_EARLY_PUBLISH_SPLIT": path + ":500", "STUB_LSP_PROGRESS": "stub/index:1500",
+                  "STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    d = a.tool(10, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+    check("early split publish" in d, "the split startup publish was lost: %s" % d[-300:])
+    h = hover_line(a, stub_file(sb, "a.stub", "one\n"), 11)
+    check("line 0: one" in h, "the stream desynced after the split publish: %s" % h[-300:])
+
+
 def t_readiness_without_progress(sb):
     """#12: a server that reports no progress is ready after a short grace.
     The old wait read its remaining budget to decide the grace was over, so
@@ -1586,6 +1604,25 @@ def t_find_symbol_warm_miss_is_prompt(sb):
     took = time.time() - t0
     check('"status":"not_found"' in out, "warm miss: %s" % out[-200:])
     check(took < 2, "a warm miss took %.1fs: it was retried" % took)
+def t_reply_split_across_a_timeout(sb):
+    """#33: a request timed out with half its reply read. The bytes read
+    were dropped, so the reply's tail arrived alone and sat, unparseable,
+    in front of every later frame: the next request on the healthy server
+    timed out too, and the server was restarted. The half is kept now, the
+    tail completes the late reply, and the next request answers."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_SPLIT_FIRST_REPLY": "2000"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "zero\n")
+    a.tool(10, "hover", {"uri": uri, "line": 0, "character": 0, "timeout_ms": 1000})
+    time.sleep(3)  # every half reply's tail has landed
+    pids_before = {l.split()[0] for l in open(os.path.join(sb.fixture, "stub.log")) if l.strip()}
+    t0 = time.time()
+    h = a.tool(11, "hover", {"uri": uri, "line": 0, "character": 0, "timeout_ms": 5000})
+    took = time.time() - t0
+    check("line 0: zero" in h, "the request after the split reply failed: %s" % h[-300:])
+    pids_after = {l.split()[0] for l in open(os.path.join(sb.fixture, "stub.log")) if l.strip()}
+    check(pids_after == pids_before, "the healthy server was restarted: %r -> %r" % (pids_before, pids_after))
+    check(took < 2, "took %.1fs" % took)
 
 
 def t_progress_without_save_check_answers_at_once(sb):
@@ -1657,6 +1694,8 @@ SCENARIOS = [
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
     ("frames_after_an_error_reply_are_kept", t_frames_after_an_error_reply_are_kept),
+    ("reply_split_across_a_timeout", t_reply_split_across_a_timeout),
+    ("readiness_split_publish_is_kept", t_readiness_split_publish_is_kept),
     ("split_frame_after_an_error_keeps_the_stream", t_split_frame_after_an_error_keeps_the_stream),
     ("frames_after_a_reply_are_handled", t_frames_after_a_reply_are_handled),
     ("check_on_save_answers_the_new_text", t_check_on_save_answers_the_new_text),
