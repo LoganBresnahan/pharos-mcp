@@ -595,6 +595,29 @@ fn items_from_params(params: Dynamic) -> Result(String, String) {
   }
 }
 
+/// ADR-043: `notes` (the watched-files scan's, when the server may not
+/// know about every file changed on disk) added to an envelope's `pharos`
+/// member as `files_unchecked`, the member created if the envelope has none.
+/// With no notes the envelope is returned as it was.
+pub fn with_notes(envelope: String, notes: List(String)) -> String {
+  case notes {
+    [] -> envelope
+    _ -> {
+      let field =
+        "\"files_unchecked\":"
+        <> json.to_string(json.string(string.join(notes, " ")))
+      let marker = "\"pharos\":{"
+      case string.split_once(envelope, marker) {
+        // publish_envelope writes the member last; a message containing
+        // the marker would have its quotes escaped.
+        Ok(#(before, after)) -> before <> marker <> field <> "," <> after
+        Error(_) ->
+          string.drop_end(envelope, 1) <> ",\"pharos\":{" <> field <> "}}"
+      }
+    }
+  }
+}
+
 /// A `textDocument/publishDiagnostics` envelope around `params_json`,
 /// plus a `pharos` member when the answer needs a note.
 fn publish_envelope(

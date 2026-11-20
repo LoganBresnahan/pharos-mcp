@@ -11,9 +11,10 @@
 //! Each file's answer has a status:
 //! - `ok`: diagnostics about the file's current text (ADR-038);
 //! - `unsure`: pharos says the answer may be old or incomplete
-//!   (`pharos.carried_over`, `pharos.not_reported`, or no publish in
-//!   time), or couldn't name the file's project
-//!   (`pharos.project_unknown`). A hook should stay silent;
+//!   (`pharos.carried_over`, `pharos.not_reported`,
+//!   `pharos.files_unchecked`, or no publish in time), or couldn't name
+//!   the file's project (`pharos.project_unknown`). A hook should stay
+//!   silent;
 //! - `failed`: the tool call failed for that file.
 //!
 //! Exit 0 once the daemon answered, whatever the statuses; 1 when pharos
@@ -414,12 +415,18 @@ pub fn classify(file: &str, path: &Path, uri: &str, reply: &Value) -> FileResult
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    // The reason names pharos's marker: an answer that may be old, or
-    // whose project tsserver couldn't name in time.
-    let unsure: Vec<&str> = ["carried_over", "not_reported", "project_unknown"]
-        .into_iter()
-        .filter(|key| notes.and_then(|n| n.get(key)).is_some())
-        .collect();
+    // The reason names pharos's marker: an answer that may be old, whose
+    // project tsserver couldn't name in time, or given while pharos was
+    // still scanning for files changed on disk (ADR-043).
+    let unsure: Vec<&str> = [
+        "carried_over",
+        "not_reported",
+        "project_unknown",
+        "files_unchecked",
+    ]
+    .into_iter()
+    .filter(|key| notes.and_then(|n| n.get(key)).is_some())
+    .collect();
     if unsure.is_empty() {
         r.status = "ok";
     } else {
@@ -586,6 +593,24 @@ mod tests {
         assert_eq!(
             human_lines(&[r]),
             vec!["a.ts:2:10 error 2322 Type 'string' is not assignable."]
+        );
+    }
+
+    #[test]
+    fn an_answer_given_mid_scan_is_unsure() {
+        let text = format!(
+            "{},\"pharos\":{{\"files_unchecked\":\"Files changed on disk …\"}}}}",
+            ENVELOPE
+        );
+        let r = classify(
+            "a.ts",
+            Path::new("/w/a.ts"),
+            "file:///w/a.ts",
+            &reply(&text, false),
+        );
+        assert_eq!(
+            (r.status, r.reason.as_deref()),
+            ("unsure", Some("files_unchecked"))
         );
     }
 

@@ -204,7 +204,7 @@ model string is per-session). Commit only when asked; branch first if on `main`.
   `PHAROS_BUILD_ID`, `PHAROS_SKIP_POSTINSTALL`, and install.sh's
   `PHAROS_INSTALL_DIR` / `PHAROS_BIN_DIR` / `PHAROS_DOWNLOAD_URL`), and
   behaviour (`PHAROS_CONFIG_FILE`, `PHAROS_TOOLS`, `PHAROS_WARM_LANGS`,
-  `PHAROS_MEMORY_ROOT`, `PHAROS_USER_MEMORY_ROOT`).
+  `PHAROS_MEMORY_ROOT`, `PHAROS_USER_MEMORY_ROOT`, `PHAROS_WATCH_BUDGET_MS`).
 - runtime state: `~/.local/share/pharos/instances/<pharos-pid>/` for per-instance
   LSP child tracking (a dead instance's dir is reaped at the next daemon or
   server start, [ADR-037](doc/adr/037-lsp-process-group-reaping.md)); installs in

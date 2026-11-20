@@ -55,6 +55,7 @@ import pharos/lsp/languages.{
 import pharos/lsp/lifecycle
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/server_request_handlers
+import pharos/lsp/watchers
 import pharos/runtime
 import pharos/workspace_root
 
@@ -247,6 +248,9 @@ pub opaque type Msg {
     disk: List(#(String, DiskState)),
     /// #38: the server takes changes as a ranged whole-document replace.
     full_change_as_range: Bool,
+    /// ADR-043: encoded notifications sent first in the batch (files
+    /// changed on disk), so the batch's freshness rule covers them.
+    notifications: List(String),
     reply_to: Subject(Result(Expectations, EnsureOpenError)),
   )
   /// Sent to the pool actor when one of its monitored procs exits.
@@ -325,10 +329,12 @@ type Doc {
 type Expectations {
   /// `documents`: each open document and the version it is to be at.
   /// `closed`: each document this batch closes and its last version.
+  /// `batch`: the batch's number, when one was sent.
   Expectations(
     proc: Proc,
     documents: List(#(String, Int)),
     closed: List(#(String, Int)),
+    batch: option.Option(Int),
   )
 }
 
@@ -645,6 +651,19 @@ pub fn snapshot(pool: Pool) -> PoolSnapshot {
 /// waits on a proc that is busy with another session's long request.
 /// `server_id` is the pool's server key; `cache_server_id` the registry
 /// id the diagnostics cache is keyed by.
+/// ADR-038/043: the URIs of the documents pharos holds open on one LSP.
+pub fn open_document_uris(
+  pool: Pool,
+  language: String,
+  workspace: String,
+  server_id: String,
+) -> List(String) {
+  let Pool(subject) = pool
+  actor.call(subject, default_call_timeout_ms, fn(reply) {
+    OpenDocuments(language, workspace, server_id, reply)
+  })
+}
+
 pub fn ensure_open(
   pool: Pool,
   language: String,
@@ -654,6 +673,7 @@ pub fn ensure_open(
   uri: String,
   language_id: String,
   full_change_as_range: Bool,
+  notifications: List(String),
 ) -> Result(Nil, EnsureOpenError) {
   let Pool(subject) = pool
   let open_uris =
@@ -682,17 +702,61 @@ pub fn ensure_open(
         uri,
         disk,
         full_change_as_range,
+        notifications,
         reply,
       )
     })
+  await_expectations(answer, cache_server_id)
+}
+
+/// ADR-043: sends the proc for `(language, workspace, server_id)` these
+/// encoded notifications as a batch of their own, for a question with
+/// no document (a workspace-wide one), and waits until it is written.
+/// Answers cached before it are carried over, as after any batch.
+pub fn notify(
+  pool: Pool,
+  language: String,
+  workspace: String,
+  server_id: String,
+  cache_server_id: String,
+  notifications: List(String),
+) -> Result(Nil, EnsureOpenError) {
+  case notifications {
+    [] -> Ok(Nil)
+    _ -> {
+      let Pool(subject) = pool
+      actor.call(subject, default_call_timeout_ms, fn(reply) {
+        SyncDocuments(
+          language,
+          workspace,
+          server_id,
+          cache_server_id,
+          "",
+          "",
+          [],
+          False,
+          notifications,
+          reply,
+        )
+      })
+      |> await_expectations(cache_server_id)
+    }
+  }
+}
+
+fn await_expectations(
+  answer: Result(Expectations, EnsureOpenError),
+  cache_server_id: String,
+) -> Result(Nil, EnsureOpenError) {
   case answer {
     Error(err) -> Error(err)
-    Ok(Expectations(proc: spawned, documents:, closed:)) ->
+    Ok(Expectations(proc: spawned, documents:, closed:, batch:)) ->
       await_stamps(
         cache_server_id,
         proc.pid(spawned),
         documents,
         closed,
+        batch,
         monotonic_ms() + sync_wait_cap_ms,
         1,
       )
@@ -714,7 +778,7 @@ fn read_disk(uri: String) -> doc_sync.DiskState {
 }
 
 /// Wait until the proc has stamped every document at its expected
-/// version, and every close. The stamp is written by the proc right
+/// version, every close, and the batch. The stamp is written by the proc right
 /// after the write, so once it is seen, anything this caller sends the
 /// proc is handled after the sync. Checked at once (an idle proc stamps
 /// within microseconds), then with a doubling back-off up to 50 ms.
@@ -723,18 +787,23 @@ fn await_stamps(
   pid: process.Pid,
   documents: List(#(String, Int)),
   closed: List(#(String, Int)),
+  batch: option.Option(Int),
   deadline_ms: Int,
   backoff_ms: Int,
 ) -> Result(Nil, EnsureOpenError) {
   let statuses =
-    list.append(
+    list.flatten([
       list.map(documents, fn(doc) {
         diagnostics_cache.stamp_status(doc.0, cache_server_id, doc.1, pid)
       }),
       list.map(closed, fn(doc) {
         diagnostics_cache.close_status(doc.0, cache_server_id, doc.1, pid)
       }),
-    )
+      case batch {
+        option.Some(n) -> [diagnostics_cache.batch_status(pid, n)]
+        option.None -> []
+      },
+    ])
   case
     list.contains(statuses, diagnostics_cache.Failed),
     list.all(statuses, fn(st) { st == diagnostics_cache.Reached })
@@ -752,6 +821,7 @@ fn await_stamps(
             pid,
             documents,
             closed,
+            batch,
             deadline_ms,
             int.min(backoff_ms * 2, 50),
           )
@@ -798,6 +868,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       subject,
       disk,
       full_change_as_range,
+      notifications,
       reply,
     ) ->
       handle_sync_documents(
@@ -808,6 +879,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
         language_id,
         subject,
         disk,
+        notifications,
         reply,
       )
 
@@ -1858,6 +1930,7 @@ fn handle_sync_documents(
   language_id: String,
   subject: String,
   disk: List(#(String, DiskState)),
+  notifications: List(String),
   reply: Subject(Result(Expectations, EnsureOpenError)),
 ) -> actor.Next(State, Msg) {
   case dict.get(state.cache, proc_key) {
@@ -1894,7 +1967,13 @@ fn handle_sync_documents(
         list.fold(victims, #(docs, ops), fn(acc, uri) {
           #(close_doc(acc.0, key(uri)), [doc_sync.OpClose(uri), ..acc.1])
         })
-      let ops = list.reverse(ops)
+      // ADR-043: the files changed on disk go first, so the documents'
+      // syncs and the question come after the server has heard of them.
+      let ops =
+        list.append(
+          list.map(notifications, doc_sync.OpNotify),
+          list.reverse(ops),
+        )
       let pid = proc.pid(spawned)
       list.each(ops, fn(op) {
         case op {
@@ -1903,16 +1982,18 @@ fn handle_sync_documents(
             diagnostics_cache.expect(uri, cache_server_id, version, pid)
           doc_sync.OpClose(uri:) ->
             diagnostics_cache.expect_closed(uri, cache_server_id, pid)
+          doc_sync.OpNotify(..) -> Nil
         }
       })
       // A send, not a call: the proc may be inside another session's
       // long request. Every batch goes through here, so one sender
       // keeps each document's syncs in version order.
-      case ops {
-        [] -> Nil
+      let batch = case ops {
+        [] -> option.None
         _ -> {
           diagnostics_cache.expect_batch(pid, clock)
           proc.sync_batch(spawned, clock, ops)
+          option.Some(clock)
         }
       }
       let documents =
@@ -1924,10 +2005,15 @@ fn handle_sync_documents(
             doc_sync.OpClose(uri:) ->
               dict.get(docs, key(uri))
               |> result.map(fn(doc) { #(uri, doc.state.version) })
-            doc_sync.OpOpen(..) | doc_sync.OpChange(..) -> Error(Nil)
+            doc_sync.OpOpen(..)
+            | doc_sync.OpChange(..)
+            | doc_sync.OpNotify(..) -> Error(Nil)
           }
         })
-      process.send(reply, Ok(Expectations(proc: spawned, documents:, closed:)))
+      process.send(
+        reply,
+        Ok(Expectations(proc: spawned, documents:, closed:, batch:)),
+      )
       actor.continue(State(..state, docs:, clock:))
     }
   }
@@ -2049,6 +2135,9 @@ fn drop_docs(
 /// A proc is leaving the pool: drop its diagnostics-cache rows.
 fn forget_proc(spawned: Proc) -> Nil {
   diagnostics_cache.forget_proc(proc.pid(spawned))
+  // ADR-043: its registered watchers and spawn time, which a scanner
+  // would drop as it stops, but not every proc ever starts one.
+  watchers.forget(proc.pid(spawned))
 }
 
 fn close_each(procs: List(Proc)) -> Nil {

@@ -215,6 +215,7 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     save_check_grace_ms: option.unwrap(override.save_check_grace_ms, 0),
     full_change_as_range: option.unwrap(override.full_change_as_range, False),
     pull_after_change_ms: option.unwrap(override.pull_after_change_ms, 0),
+    watch_files: watch_mode(override.watch_files, languages.WatchIfRegistered),
   )
 }
 
@@ -397,6 +398,7 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.pull_after_change_ms,
       default.pull_after_change_ms,
     ),
+    watch_files: watch_mode(ovr.watch_files, default.watch_files),
   )
 }
 
@@ -425,6 +427,7 @@ fn server_from_override(
     save_check_grace_ms: option.unwrap(ovr.save_check_grace_ms, 0),
     full_change_as_range: option.unwrap(ovr.full_change_as_range, False),
     pull_after_change_ms: option.unwrap(ovr.pull_after_change_ms, 0),
+    watch_files: watch_mode(ovr.watch_files, languages.WatchIfRegistered),
   )
 }
 
@@ -497,7 +500,20 @@ fn merge_primary(
       override.pull_after_change_ms,
       primary.pull_after_change_ms,
     ),
+    watch_files: watch_mode(override.watch_files, primary.watch_files),
   )
+}
+
+/// ADR-043: `watch_files = true | false` over the bundled mode.
+fn watch_mode(
+  setting: Option(Bool),
+  default: languages.WatchFiles,
+) -> languages.WatchFiles {
+  case setting {
+    Some(True) -> languages.WatchAlways
+    Some(False) -> languages.WatchNever
+    None -> default
+  }
 }
 
 fn parse_mode(raw: Option(String)) -> DiagnosticsMode {

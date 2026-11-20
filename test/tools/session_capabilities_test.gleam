@@ -9,8 +9,10 @@
 //// regression that drops one of the must-have keys gets caught at
 //// CI time instead of in dogfood.
 
+import gleam/dict
 import gleam/dynamic/decode
 import gleam/json
+import gleam/list
 import gleeunit/should
 import pharos/lsp/languages
 import pharos/tools/session
@@ -153,4 +155,41 @@ fn nested_field(json_value: Json, path: List(String)) -> Bool {
     Ok(b) -> b
     Error(_) -> False
   }
+}
+
+// -- ADR-043: watcher registration is offered per server ---------------
+
+pub fn watched_files_registration_is_offered_test() {
+  let Json(dyn) =
+    serialize(session.build_client_capabilities_with(languages.Push, True))
+  let assert Ok(True) =
+    decode.run(
+      dyn,
+      decode.at(
+        ["workspace", "didChangeWatchedFiles", "dynamicRegistration"],
+        decode.bool,
+      ),
+    )
+}
+
+pub fn watched_files_off_is_not_offered_test() {
+  let Json(dyn) =
+    serialize(session.build_client_capabilities_with(languages.Push, False))
+  decode.run(
+    dyn,
+    decode.at(["workspace", "didChangeWatchedFiles"], decode.dynamic),
+  )
+  |> should.be_error
+}
+
+pub fn rust_analyzer_keeps_its_own_watcher_test() {
+  let assert Ok(rust) = dict.get(languages.default_registry(), "rust")
+  let assert Ok(ra) = list.find(rust.servers, fn(s) { s.id == "rust-analyzer" })
+  ra.watch_files |> should.equal(languages.WatchNever)
+}
+
+pub fn haskell_language_server_keeps_its_own_watcher_test() {
+  let assert Ok(haskell) = dict.get(languages.default_registry(), "haskell")
+  let assert Ok(hls) = list.find(haskell.servers, fn(s) { s.id == "hls" })
+  hls.watch_files |> should.equal(languages.WatchNever)
 }

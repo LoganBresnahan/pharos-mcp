@@ -321,6 +321,28 @@
 # full_change_as_range = true
 # pull_after_change_ms = 50
 
+# 4e) Files changed on disk (ADR-043, #10).
+#
+# Before a question, pharos scans the workspace for files changed on
+# disk that it hasn't opened (a checkout, a build, another editor) and
+# tells the server, through workspace/didChangeWatchedFiles, about the
+# ones its registered watchers match. Only servers that rely on their
+# client for this register watchers (gopls, pyright, jdtls and others);
+# those that watch by themselves don't, and nothing is scanned for them.
+# A small tree is scanned whole before every question; a large one at
+# most every 2 s, 200 ms at a time (PHAROS_WATCH_BUDGET_MS), and answers
+# say so while the scan hasn't covered it.
+#
+# `watch_files = false` turns it off for a server (it isn't offered
+# watcher registration at all, and keeps any watching of its own);
+# `true` scans for it even if it registers no watchers, matching the
+# language's file extensions. Bundled: rust-analyzer and
+# haskell-language-server false (they watch by themselves, and stop
+# when offered registration), others unset.
+#
+# [languages.go]
+# watch_files = false
+
 # 5) Per-tool default_timeout_ms (M13 polish, ADR 021).
 #
 # Every LSP-bound MCP tool accepts an optional `timeout_ms` arg, and

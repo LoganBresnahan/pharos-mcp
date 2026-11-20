@@ -141,6 +141,9 @@ pub fn start(
   // transfer that, in dogfood, raced with gopls's unsolicited
   // post-initialize messages and starved its inbound queue.
   let initialise = fn(self) {
+    // ADR-043: the second the server is spawned, for the watched-files
+    // scan's first pass (files changed since then are reported).
+    note_spawned()
     case client.start_with_env(command, args, workspace, server_id, env) {
       Error(e) -> Error("client.start failed: " <> describe_client_error(e))
       Ok(c) ->
@@ -623,6 +626,14 @@ pub fn age_ms(proc: Proc) -> Int {
 @external(erlang, "pharos_runtime_ffi", "lsp_age_ms")
 fn lsp_age_ms(pid: Pid) -> Int
 
+@external(erlang, "pharos_watch_ffi", "spawned_store")
+fn note_spawned() -> Nil
+
+/// ADR-043: the POSIX second the server behind `proc` was spawned, or 0
+/// when unknown (every file is then taken as possibly changed).
+@external(erlang, "pharos_watch_ffi", "spawned_second")
+pub fn spawned_second(proc_pid: Pid) -> Int
+
 @external(erlang, "pharos_runtime_ffi", "lsp_capabilities_store")
 fn lsp_capabilities_store(pid: Pid, capabilities: Dynamic) -> Nil
 
@@ -927,7 +938,10 @@ fn handle_sync_batch(
       // retries. Stopping here instead would restart the proc under
       // the dyn_sup, against a restart limit every LSP shares.
       list.each(unwritten, fn(op) {
-        diagnostics_cache.mark_failed(op_uri(op), server_id)
+        case op_uri(op) {
+          Ok(uri) -> diagnostics_cache.mark_failed(uri, server_id)
+          Error(Nil) -> Nil
+        }
       })
       log.fields_at(
         "pharos/lsp/proc",
@@ -968,6 +982,8 @@ fn write_ops(
               diagnostics_cache.mark_synced(uri, server_id, version)
             doc_sync.OpClose(uri:) ->
               diagnostics_cache.mark_closed(uri, server_id)
+            // No document to stamp: the batch's own stamp covers it.
+            doc_sync.OpNotify(..) -> Nil
           }
           write_ops(state, server_id, rest)
         }
@@ -976,10 +992,11 @@ fn write_ops(
   }
 }
 
-fn op_uri(op: SyncOp) -> String {
+fn op_uri(op: SyncOp) -> Result(String, Nil) {
   case op {
-    doc_sync.OpOpen(uri:, ..) | doc_sync.OpChange(uri:, ..) -> uri
-    doc_sync.OpClose(uri:) -> uri
+    doc_sync.OpOpen(uri:, ..) | doc_sync.OpChange(uri:, ..) -> Ok(uri)
+    doc_sync.OpClose(uri:) -> Ok(uri)
+    doc_sync.OpNotify(..) -> Error(Nil)
   }
 }
 

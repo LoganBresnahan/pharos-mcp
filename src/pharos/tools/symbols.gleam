@@ -1699,34 +1699,49 @@ pub fn referencing_symbols_to_json(owners: List(SymbolMatch)) -> json.Json {
   }
 }
 
+/// `resolution_to_json` plus ADR-043's `files_unchecked` when the scan for
+/// files changed on disk hadn't finished for the question.
+pub fn resolution_to_json_noted(
+  res: Resolution,
+  notes: List(String),
+) -> json.Json {
+  case notes {
+    [] -> resolution_to_json(res)
+    _ ->
+      json.object(
+        list.append(resolution_fields(res), [
+          #("files_unchecked", json.string(string.join(notes, " "))),
+        ]),
+      )
+  }
+}
+
 pub fn resolution_to_json(res: Resolution) -> json.Json {
+  json.object(resolution_fields(res))
+}
+
+fn resolution_fields(res: Resolution) -> List(#(String, json.Json)) {
   case res {
-    Single(m) ->
-      json.object([
-        #("status", json.string("single")),
-        #("match", symbol_match_to_json(m)),
-      ])
-    Multiple(ms) ->
-      json.object([
-        #("status", json.string("multiple")),
-        #("count", json.int(list.length(ms))),
-        #(
-          "matches",
-          json.preprocessed_array(list.map(ms, symbol_match_to_json)),
-        ),
-      ])
-    NotFound(near_misses, note) ->
-      json.object([
-        #("status", json.string("not_found")),
-        #(
-          "near_misses",
-          json.preprocessed_array(list.map(near_misses, json.string)),
-        ),
-        ..case note {
-          Some(text) -> [#("note", json.string(text))]
-          None -> []
-        }
-      ])
+    Single(m) -> [
+      #("status", json.string("single")),
+      #("match", symbol_match_to_json(m)),
+    ]
+    Multiple(ms) -> [
+      #("status", json.string("multiple")),
+      #("count", json.int(list.length(ms))),
+      #("matches", json.preprocessed_array(list.map(ms, symbol_match_to_json))),
+    ]
+    NotFound(near_misses, note) -> [
+      #("status", json.string("not_found")),
+      #(
+        "near_misses",
+        json.preprocessed_array(list.map(near_misses, json.string)),
+      ),
+      ..case note {
+        Some(text) -> [#("note", json.string(text))]
+        None -> []
+      }
+    ]
   }
 }
 

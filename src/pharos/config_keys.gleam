@@ -240,6 +240,7 @@ fn server_keys() -> List(#(String, Shape)) {
     #("save_check_grace_ms", off),
     #("full_change_as_range", Boolean),
     #("pull_after_change_ms", off),
+    #("watch_files", Boolean),
     #("initialization_options_json", Str),
     #("workspace_configuration_json", Str),
   ]

@@ -352,6 +352,7 @@ commands.
 | `PHAROS_SHUTDOWN_DRAIN_MS` | How long to wait for in-flight requests before initiating LSP shutdown on SIGTERM/stdin-EOF. | `2000` |
 | `PHAROS_DAEMON_IDLE_SECS` | How long the shared daemon stays up after its last session ends. | `1800` |
 | `PHAROS_LSP_IDLE_SECS` | Stop a language server after this many seconds with no request routed to it; it restarts on the next call. Overrides every language's `idle_stop_secs`. `0` never stops. | `1800` (java, scala, haskell: `7200`) |
+| `PHAROS_WATCH_BUDGET_MS` | How long one scan for files changed on disk may walk before a question (ADR-043). Never more than what's left of the question's timeout. A tree scanned whole within half of it is scanned before every question; a larger one at most every 2 s, resuming where it stopped, with answers marked until it has covered the tree. | `200` |
 
 [↑ top](#pharos)
 
@@ -657,7 +658,7 @@ benchmarked five — follow each LSP's own install instructions.
 |----------|-----------|-------|
 | C / C++ | [clangd](https://clangd.llvm.org/) | Needs `compile_commands.json` for non-trivial projects |
 | Elixir | [next-ls](https://github.com/elixir-tools/next-ls) (default) — alts: [elixir-ls](https://github.com/elixir-lsp/elixir-ls), [start_expert](https://github.com/elixir-lang/expert) | |
-| Erlang | [elp](https://github.com/WhatsApp/erlang-language-platform) — alt: [erlang_ls](https://github.com/erlang-ls/erlang_ls) | |
+| Erlang | [elp](https://github.com/WhatsApp/erlang-language-platform) — alt: [erlang_ls](https://github.com/erlang-ls/erlang_ls) | A module created on disk stays unknown to elp until it is opened: elp acts on no file-change event for source files (ADR-043) |
 | Gleam | [gleam lsp](https://github.com/gleam-lang/gleam) (built into compiler) | Pharos dogfoods its own gleam tree against this |
 | Scala | [metals](https://github.com/scalameta/metals) | First-run bootstraps Bloop (~2-3 min); pharos timeout config covers it |
 | Clojure | [clojure-lsp](https://github.com/clojure-lsp/clojure-lsp) | Native binary, no JVM cold-start |

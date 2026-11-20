@@ -129,6 +129,10 @@ pub type ServerOverride {
     full_change_as_range: Option(Bool),
     /// #38. Wait this long after a change before a pull request.
     pull_after_change_ms: Option(Int),
+    /// ADR-043. true: always scan for files changed on disk for this
+    /// server; false: never. Unset: scan when the server registers file
+    /// watchers.
+    watch_files: Option(Bool),
     /// Whole-blob replace of the server's `initialization_options`
     /// JSON sent at `initialize`. Stored as a TOML string containing
     /// JSON text (LSP-server upstream docs publish init options in
@@ -215,6 +219,10 @@ pub type LanguageOverride {
     full_change_as_range: Option(Bool),
     /// #38. Wait this long after a change before a pull request.
     pull_after_change_ms: Option(Int),
+    /// ADR-043. true: always scan for files changed on disk for this
+    /// server; false: never. Unset: scan when the server registers file
+    /// watchers.
+    watch_files: Option(Bool),
     /// ADR-029. User-defined custom URI schemes for this language.
     /// Each entry merges into the bundled defaults by scheme key:
     /// user-supplied schemes that already exist replace the default
@@ -1175,6 +1183,7 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     pull_after_change_ms: decode_optional_int(value, "pull_after_change_ms"),
+    watch_files: decode_optional_bool(value, "watch_files"),
     custom_uri_schemes: decode_optional_custom_uri_schemes(value),
   )
 }
@@ -1320,6 +1329,7 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
     save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     pull_after_change_ms: decode_optional_int(value, "pull_after_change_ms"),
+    watch_files: decode_optional_bool(value, "watch_files"),
     initialization_options_json: decode_optional_string(
       value,
       "initialization_options_json",

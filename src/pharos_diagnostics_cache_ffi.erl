@@ -50,7 +50,7 @@
 -module(pharos_diagnostics_cache_ffi).
 -export([init/0, put/3, put_publish/4, get/2, get_all_for_uri/1, drop/2,
          drop_uri/1, mark_synced/3, mark_failed/2, mark_closed/2,
-         mark_batch/1, stamp_status/4, close_status/4, expect/4,
+         mark_batch/1, batch_status/2, stamp_status/4, close_status/4, expect/4,
          expect_closed/3, expect_batch/2, forget_proc/1, lookup/4,
          settle_left/2, progress/2, progress_quiet/5,
          progress_active/2, sync_age_ms/3]).
@@ -148,6 +148,15 @@ mark_synced(Uri0, ServerId, Version)
 mark_batch(N) when is_integer(N) ->
     true = ets:insert(?SYNCED, {{batch, self()}, seq(), N, now_ms()}),
     nil.
+
+%% reached | pending: has `Pid` started writing batch `N` (or a later
+%% one)? The proc writes a whole batch in one handler, so anything sent
+%% to it after this reads reached is handled after the batch.
+batch_status(Pid, N) when is_integer(N) ->
+    case ets:lookup(?SYNCED, {batch, Pid}) of
+        [{_, _, M, _}] when M >= N -> reached;
+        _ -> pending
+    end.
 
 %% Called by the pool when it sends proc `Pid` batch `N`.
 expect_batch(Pid, N) when is_integer(N) ->

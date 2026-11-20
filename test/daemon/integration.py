@@ -1330,6 +1330,188 @@ def t_project_config_names(sb):
                "the nearer pharos.toml loaded")
 
 
+def watched_events(sb):
+    log = os.path.join(sb.fixture, "stub.log")
+    if not os.path.exists(log):
+        return []
+    return [l.split(" ", 2)[2] for l in open(log).read().splitlines()
+            if " workspace/didChangeWatchedFiles " in l]
+
+
+def t_watched_files_reach_the_server(sb):
+    """ADR-043 (#10): a file pharos never opened, created, changed or
+    deleted on disk, reaches a server that registered watchers for it as
+    workspace/didChangeWatchedFiles before the next question. Paths its
+    globs don't match, and documents pharos holds open, aren't sent. The
+    tree is small, so it's scanned whole each question: no note."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_WATCH": "**/*.stub"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    # Let the registration land, then a question records the baseline.
+    time.sleep(0.5)
+    hover_line(a, sb.uri, 11)
+    check(watched_events(sb) == [], "events before any change: %s" % watched_events(sb))
+
+    other = os.path.join(sb.fixture, "lib", "other.stub")
+    os.makedirs(os.path.dirname(other))
+    with open(other, "w") as f:
+        f.write("one\n")
+    with open(os.path.join(sb.fixture, "notes.txt"), "w") as f:
+        f.write("not watched\n")
+    with open(sb.uri[len("file://"):], "w") as f:
+        f.write("hello again\n")    # open: travels as didChange (ADR-038)
+    r = a.call(12, "tools/call", {"name": "hover", "arguments": {"uri": sb.uri, "line": 0, "character": 0}})
+    check(len(r["result"]["content"]) == 1,
+          "a complete answer has one content block: %s" % r["result"]["content"])
+    check(watched_events(sb) == ["other.stub:1"], "created: %s" % watched_events(sb))
+
+    time.sleep(1.1)    # a new second, so the change is in the stamps
+    with open(other, "w") as f:
+        f.write("one two\n")
+    hover_line(a, sb.uri, 13)
+    check(watched_events(sb)[-1:] == ["other.stub:2"], "changed: %s" % watched_events(sb))
+
+    os.remove(other)
+    hover_line(a, sb.uri, 14)
+    check(watched_events(sb)[-1:] == ["other.stub:3"], "deleted: %s" % watched_events(sb))
+    check(len(watched_events(sb)) == 3, "nothing else sent: %s" % watched_events(sb))
+
+
+def t_watched_files_off_is_not_offered(sb):
+    """ADR-043: watch_files = false: the server isn't offered watcher
+    registration (it keeps watching on its own, as before #10), and
+    nothing is scanned or sent."""
+    sb.write_toml("watch_files = false\n")
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_WATCH": "**/*.stub"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    log = open(os.path.join(sb.fixture, "stub.log")).read()
+    check("initialize processId=" in log and " watch=False" in log, "offered anyway: %s" % log[:300])
+    with open(os.path.join(sb.fixture, "other.stub"), "w") as f:
+        f.write("x\n")
+    hover_line(a, sb.uri, 11)
+    check(watched_events(sb) == [], "sent anyway: %s" % watched_events(sb))
+
+
+def t_watched_files_unregistered_are_not_scanned(sb):
+    """ADR-043: a server offered registration that registers no watchers
+    (it watches by itself, like typescript-language-server) gets no
+    events, and its answers no note."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    check(" watch=True" in open(os.path.join(sb.fixture, "stub.log")).read(), "not offered")
+    with open(os.path.join(sb.fixture, "other.stub"), "w") as f:
+        f.write("x\n")
+    r = a.call(11, "tools/call", {"name": "hover", "arguments": {"uri": sb.uri, "line": 0, "character": 0}})
+    check(len(r["result"]["content"]) == 1, "a note on an unwatched server: %s" % r["result"]["content"])
+    check(watched_events(sb) == [], "sent anyway: %s" % watched_events(sb))
+
+
+def t_watched_files_unfinished_scan_says_so(sb):
+    """ADR-043: while the scan hasn't covered the tree for a question (here
+    a zero budget, so it never does), the answer says so in one sentence
+    naming the workspace: a second content block on a passthrough tool,
+    `pharos.files_unchecked` in get_diagnostics, and `unsure` from the
+    CLI. Never fresh."""
+    env = {"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_WATCH": "**/*.stub",
+           "STUB_LSP_DIAGNOSTICS": "push", "PHAROS_WATCH_BUDGET_MS": "0"}
+    a = sb.start(env)
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    time.sleep(0.5)
+    r = a.call(11, "tools/call", {"name": "hover", "arguments": {"uri": sb.uri, "line": 0, "character": 0}})
+    blocks = r["result"]["content"]
+    check(len(blocks) == 2, "expected the answer and a note: %s" % blocks)
+    note = blocks[1]["text"]
+    check(sb.fixture in note and "may not have reached the server" in note, "note: %s" % note)
+    check("line 0" in blocks[0]["text"], "the answer moved: %s" % blocks[0])
+    d = a.tool(12, "get_diagnostics", {"uri": sb.uri, "timeout_ms": 5000})
+    check('"files_unchecked":' in d, "get_diagnostics without the note: %s" % d[-300:])
+    out = sb.cli("diagnostics", "--json", sb.uri[len("file://"):],
+                 extra_env={"STUB_LSP_WATCH": "**/*.stub", "STUB_LSP_DIAGNOSTICS": "push",
+                            "PHAROS_WATCH_BUDGET_MS": "0"},
+                 cwd=sb.fixture)
+    check('"files_unchecked"' in out.stdout and '"unsure"' in out.stdout,
+          "CLI: %s %s" % (out.stdout[-300:], out.stderr[-200:]))
+
+
+def t_watched_file_change_isnt_answered_from_cache(sb):
+    """ADR-043 (#10): a dependency changed on disk reaches the server as a
+    watched-file event, and the server republishes the open document's
+    diagnostics (gopls, jdtls, clojure-lsp). get_diagnostics right after
+    must not answer the set cached before the event as fresh: the event
+    goes in the question's sync batch, so the old set is carried over
+    until the server republishes. Over MCP and the CLI."""
+    dep = os.path.join(sb.fixture, "lib", "dep.stub")
+    os.makedirs(os.path.dirname(dep))
+    with open(dep, "w") as f:
+        f.write("v1\n")
+    env = {"STUB_LSP_WATCH": "**/*.stub", "STUB_LSP_DIAGNOSTICS": "push",
+           "STUB_LSP_DEP": dep, "STUB_LSP_DEP_DELAY_MS": "300"}
+    a = sb.start(env)
+    a.initialize()
+    d = a.tool(10, "get_diagnostics", {"uri": sb.uri, "timeout_ms": 5000})
+    check("dep: v1" in d, "first answer: %s" % d[-300:])
+    # Let the registration land, then a question records the baseline.
+    time.sleep(0.5)
+    a.tool(11, "get_diagnostics", {"uri": sb.uri, "timeout_ms": 5000})
+
+    with open(dep, "w") as f:
+        f.write("v2\n")
+    d = a.tool(12, "get_diagnostics", {"uri": sb.uri, "timeout_ms": 5000})
+    check(watched_events(sb)[-1:] == ["dep.stub:2"], "event: %s" % watched_events(sb))
+    check("dep: v2" in d and "dep: v1" not in d, "answered from before the event: %s" % d[-300:])
+
+    with open(dep, "w") as f:
+        f.write("v3\n")
+    out = sb.cli("diagnostics", "--json", sb.uri[len("file://"):], extra_env=env, cwd=sb.fixture)
+    check("dep: v3" in out.stdout and "dep: v2" not in out.stdout,
+          "CLI answered from before the event: %s %s" % (out.stdout[-300:], out.stderr[-200:]))
+
+
+def t_watched_files_tiny_timeout_still_answers(sb):
+    """ADR-043, the #10 revision: a question whose timeout is nearly spent
+    still answers (the scan gets at most half the time left, and a scanner
+    reply that comes too late is given up on, not raised), and a change
+    found meanwhile still reaches the server on a later question."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_WATCH": "**/*.stub",
+                  "PHAROS_LOG": "info,pharos/lsp/watch=debug"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    time.sleep(0.5)
+    hover_line(a, sb.uri, 11)
+    other = os.path.join(sb.fixture, "other.stub")
+    with open(other, "w") as f:
+        f.write("x\n")
+    for i in range(5):
+        r = a.call(20 + i, "tools/call", {"name": "hover", "arguments": {
+            "uri": sb.uri, "line": 0, "character": 0, "timeout_ms": 1}}, 15)
+        check("result" in r or "error" in r, "no reply: %r" % r)
+
+    def scans():
+        logdir = os.path.join(sb.state, "pharos", "log")
+        if not os.path.isdir(logdir):
+            return []
+        return [l for f in os.listdir(logdir) if f.startswith("daemon-")
+                for l in open(os.path.join(logdir, f), errors="replace").read().splitlines()
+                if "watched-files scan" in l]
+
+    r = a.call(30, "tools/call", {"name": "hover", "arguments": {"uri": sb.uri, "line": 0, "character": 0}})
+    blocks = r["result"]["content"]
+    if "other.stub:1" not in watched_events(sb):
+        # A tree whose first pass took over half the budget (a loaded
+        # machine) is scanned at most every 2 s: this question may skip
+        # the scan, but then it must say so, and the change must come by
+        # the next scan.
+        check(len(blocks) == 2, "no event and no note: %s\nscans: %s" % (blocks, scans()[-12:]))
+        time.sleep(2.1)
+        hover_line(a, sb.uri, 31)
+    check("other.stub:1" in watched_events(sb),
+          "the change never reached the server: %s\nnotes: %s\nscans: %s"
+          % (watched_events(sb), blocks[1:], scans()[-12:]))
+
+
 def t_config_warnings_without_lsp_tools(sb):
     """#32 F4: a daemon whose sessions call only non-LSP tools still has
     its config warnings in the daemon log (where runtime_log_tail reads),
@@ -1413,7 +1595,7 @@ def t_pull_capability_follows_mode(sb):
     hover_line(a, stub_file(sb, "a.stub", "one\n"), 10)
     hover_line(a, stub_file(sb, "b.stubpull", "two\n"), 11)
     inits = [l for l in open(os.path.join(sb.fixture, "stub.log")) if " initialize " in l]
-    pulls = sorted(l.rsplit("pull=", 1)[-1].strip() for l in inits)
+    pulls = sorted(l.split("pull=", 1)[1].split()[0] for l in inits)
     check(pulls == ["False", "True"], "expected one Push (pull=False) and one Pull (pull=True) initialize: %r" % inits)
 def readiness_toml(sb):
     sb.write_toml('readiness_token = "stub/index"\nready_timeout_ms = 30000\n')
@@ -2011,6 +2193,12 @@ SCENARIOS = [
     ("find_symbol_bad_scope", t_find_symbol_bad_scope),
     ("config_key_warnings", t_config_key_warnings),
     ("config_warnings_without_lsp_tools", t_config_warnings_without_lsp_tools),
+    ("watched_files_reach_the_server", t_watched_files_reach_the_server),
+    ("watched_files_off_is_not_offered", t_watched_files_off_is_not_offered),
+    ("watched_files_unregistered_are_not_scanned", t_watched_files_unregistered_are_not_scanned),
+    ("watched_files_unfinished_scan_says_so", t_watched_files_unfinished_scan_says_so),
+    ("watched_file_change_isnt_answered_from_cache", t_watched_file_change_isnt_answered_from_cache),
+    ("watched_files_tiny_timeout_still_answers", t_watched_files_tiny_timeout_still_answers),
     ("project_config_names", t_project_config_names),
 ]
 

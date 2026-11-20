@@ -104,6 +104,12 @@ pub fn mark_batch(n: Int) -> Nil
 @external(erlang, "pharos_diagnostics_cache_ffi", "expect_batch")
 pub fn expect_batch(pid: Pid, n: Int) -> Nil
 
+/// ADR-043: has the proc `pid` started writing batch `n`, or a later
+/// one? It writes a batch whole, so a request sent after this reads
+/// Reached reaches the server after the batch.
+@external(erlang, "pharos_diagnostics_cache_ffi", "batch_status")
+pub fn batch_status(pid: Pid, n: Int) -> StampStatus
+
 /// The calling proc failed to write the document's sync.
 @external(erlang, "pharos_diagnostics_cache_ffi", "mark_failed")
 pub fn mark_failed(uri: String, server_id: String) -> Nil

@@ -26,6 +26,7 @@ import gleam/list
 import gleam/option
 import gleam/result
 import gleam/string
+import pharos/answer_notes
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/lsp/languages.{
@@ -36,6 +37,7 @@ import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/registry
+import pharos/lsp/watch
 import pharos/session_ctx
 import pharos/version
 import pharos/workspace_root
@@ -481,7 +483,99 @@ fn prepare_workspace_from_file_uri(
     workspace_uri_hint,
     config,
   ))
-  get_lsp(pool, config, workspace)
+  use lsp <- result.try(get_lsp(pool, config, workspace))
+  // ADR-043: a workspace-wide question has no file to start from, and no
+  // document sync to carry the changes found: they go as a batch of their
+  // own, so answers cached before them aren't taken as fresh.
+  case languages.primary_server(config) {
+    Ok(server) -> {
+      let key = pool.server_key(build_spawn_spec(workspace, config, server))
+      let #(notifications, ack) =
+        watch_before_question(pool, config, workspace, server, key, option.None)
+      case
+        pool.notify(pool, config.id, workspace, key, server.id, notifications)
+      {
+        Ok(Nil) -> ack()
+        Error(_) -> Nil
+      }
+    }
+    Error(_) -> Nil
+  }
+  Ok(lsp)
+}
+
+/// ADR-043: how long one watched-files scan may walk:
+/// `PHAROS_WATCH_BUDGET_MS` (from the session's env) when it's a
+/// non-negative integer, else 200 ms.
+fn watch_budget_ms() -> Int {
+  case session_ctx.getenv("PHAROS_WATCH_BUDGET_MS") {
+    option.Some(raw) ->
+      case int.parse(string.trim(raw)) {
+        Ok(n) if n >= 0 -> n
+        _ -> watch.scan_budget_ms
+      }
+    option.None -> watch.scan_budget_ms
+  }
+}
+
+/// ADR-043: scan `workspace` for files changed on disk before the
+/// question; returns the notification for what the server watches, for
+/// the caller to send in the question's sync batch, with the call that
+/// tells the scanner once that batch is written, and adds a note for
+/// the answer when the scan's picture isn't complete. Best-effort, like
+/// the sync: nothing here fails the question.
+fn watch_before_question(
+  pool: Pool,
+  config: LanguageConfig,
+  workspace: String,
+  server: languages.ServerConfig,
+  server_key: String,
+  asked_uri: option.Option(String),
+) -> #(List(String), fn() -> Nil) {
+  case server.watch_files {
+    languages.WatchNever -> #([], fn() { Nil })
+    mode ->
+      case get_lsp_for_server(pool, config, workspace, server) {
+        Error(_) -> #([], fn() { Nil })
+        Ok(lsp) -> {
+          let open = fn() {
+            pool.open_document_uris(pool, config.id, workspace, server_key)
+            |> list.filter_map(workspace_root.uri_to_path)
+          }
+          let asked =
+            option.then(asked_uri, fn(uri) {
+              option.from_result(workspace_root.uri_to_path(uri))
+            })
+          let target =
+            watch.Server(
+              proc_pid: proc.pid(lsp),
+              mode: case mode {
+                languages.WatchAlways -> watch.Always
+                _ -> watch.IfRegistered
+              },
+              root: workspace,
+              // `/vendor/bundle/` is skipped as the path `vendor/bundle`.
+              skip: list.filter_map(config.vendor_segments, fn(segment) {
+                case
+                  string.split(segment, "/") |> list.filter(fn(s) { s != "" })
+                {
+                  [] -> Error(Nil)
+                  parts -> Ok(string.join(parts, "/"))
+                }
+              }),
+              extensions: config.file_extensions,
+              budget_ms: watch_budget_ms(),
+              time_left_ms: answer_notes.time_left_ms(),
+            )
+          let found = watch.before_question(target, asked, open)
+          case found.note {
+            option.Some(note) -> answer_notes.add(note)
+            option.None -> Nil
+          }
+          #(found.notifications, found.ack)
+        }
+      }
+  }
 }
 
 /// Like `prepare_workspace/2` but the language id is supplied
@@ -1324,7 +1418,13 @@ fn build_initialize_params(
     #("processId", json.int(vm_os_pid())),
     #("rootUri", json.string(root_uri)),
     #("rootPath", json.string(workspace_path)),
-    #("capabilities", build_client_capabilities_for(server.diagnostics_mode)),
+    #(
+      "capabilities",
+      build_client_capabilities_with(
+        server.diagnostics_mode,
+        server.watch_files != languages.WatchNever,
+      ),
+    ),
     #(
       "clientInfo",
       json.object([
@@ -1363,8 +1463,20 @@ pub fn build_client_capabilities() -> json.Json {
 pub fn build_client_capabilities_for(
   mode: languages.DiagnosticsMode,
 ) -> json.Json {
+  build_client_capabilities_with(mode, True)
+}
+
+/// ADR-043: `watch_files` advertises
+/// `workspace.didChangeWatchedFiles.dynamicRegistration`, so a server
+/// that relies on its client to watch files registers its globs. A
+/// server bundled or configured `watch_files = false` isn't offered it,
+/// and keeps whatever watching it does on its own, as before.
+pub fn build_client_capabilities_with(
+  mode: languages.DiagnosticsMode,
+  watch_files: Bool,
+) -> json.Json {
   json.object([
-    #("workspace", workspace_capabilities()),
+    #("workspace", workspace_capabilities(watch_files)),
     #("textDocument", text_document_capabilities(mode == languages.Pull)),
     // Servers report progress (indexing, loading packages) only to a
     // client that says it can show it. Without this, the readiness wait
@@ -1373,7 +1485,19 @@ pub fn build_client_capabilities_for(
   ])
 }
 
-fn workspace_capabilities() -> json.Json {
+fn workspace_capabilities(watch_files: Bool) -> json.Json {
+  let watched = case watch_files {
+    True -> [
+      #(
+        "didChangeWatchedFiles",
+        json.object([
+          #("dynamicRegistration", json.bool(True)),
+          #("relativePatternSupport", json.bool(True)),
+        ]),
+      ),
+    ]
+    False -> []
+  }
   json.object([
     #("applyEdit", json.bool(True)),
     #(
@@ -1397,6 +1521,7 @@ fn workspace_capabilities() -> json.Json {
     ),
     #("configuration", json.bool(True)),
     #("symbol", json.object([#("dynamicRegistration", json.bool(False))])),
+    ..watched
   ])
 }
 
@@ -1546,18 +1671,30 @@ fn ensure_doc_opened_for_server_id(
   // cache is keyed by the registry id, which is what the proc stamps
   // syncs under (ADR-038).
   let cache_server_id = server_id
-  let #(server_id, full_change_as_range) = case
+  let #(server_id, full_change_as_range, #(notifications, ack)) = case
     list.find(config.servers, fn(s) { s.id == server_id })
   {
-    Ok(server) -> #(
-      pool.server_key(build_spawn_spec(workspace, config, server)),
-      server.full_change_as_range,
-    )
-    Error(_) -> #(server_id, False)
+    Ok(server) -> {
+      let key = pool.server_key(build_spawn_spec(workspace, config, server))
+      // ADR-043: files changed on disk reach the server first in the
+      // question's own sync batch.
+      let found =
+        watch_before_question(
+          pool,
+          config,
+          workspace,
+          server,
+          key,
+          option.Some(file_uri),
+        )
+      #(key, server.full_change_as_range, found)
+    }
+    Error(_) -> #(server_id, False, #([], fn() { Nil }))
   }
   // The pool reads the file, like every other open document: one that
-  // is gone is closed if open and not opened (ADR-038).
-  let _ =
+  // is gone is closed if open and not opened (ADR-038). The scanner keeps
+  // the events until the batch carrying them is written.
+  let synced =
     pool.ensure_open(
       pool,
       config.id,
@@ -1567,8 +1704,12 @@ fn ensure_doc_opened_for_server_id(
       file_uri,
       languages.document_language_id(config, file_uri),
       full_change_as_range,
+      notifications,
     )
-  Nil
+  case synced {
+    Ok(Nil) -> ack()
+    Error(_) -> Nil
+  }
 }
 
 @external(erlang, "pharos_daemon_ffi", "os_pid")

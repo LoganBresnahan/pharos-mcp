@@ -46,6 +46,8 @@ import pharos/lsp/languages
 import pharos/lsp/pool
 import pharos/lsp/registry
 import pharos/lsp/registry_toml
+import pharos/lsp/watch
+import pharos/lsp/watchers
 import pharos/mcp/request_workers
 import pharos/supervisor as root_supervisor
 import pharos/tools/session
@@ -155,6 +157,9 @@ fn do_boot() -> Result(Pid, String) {
   daemon.init_registry()
   dyn_sup.init_subjects_bridge()
   capabilities.init()
+  // ADR-043: registered file watchers, and the scanner per LSP proc.
+  watchers.init()
+  watch.init()
   // ADR-030 S3: create `~/.local/share/pharos/instances/<our-pid>/`
   // so client.start can write tracking files for each LSP it
   // spawns. Idempotent. No-op on platforms where $HOME is unset

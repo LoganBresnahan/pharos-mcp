@@ -33,6 +33,7 @@ import gleam/dynamic/decode
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import pharos/lsp/watchers
 
 /// JSON-RPC 2.0 allows the `id` field to be either a JSON number or
 /// a JSON string. Pharos's own outbound requests always use integer
@@ -89,8 +90,9 @@ pub fn new() -> Registry {
 ///
 ///   - `workspace/configuration` → array of nulls, one per requested
 ///     item. Stage 0C overrides per-language to return real config.
-///   - `client/registerCapability` → accept-noop (null result).
-///   - `client/unregisterCapability` → accept-noop.
+///   - `client/registerCapability` → null result; records file
+///     watchers (ADR-043).
+///   - `client/unregisterCapability` → null result; forgets them.
 ///   - `window/showMessageRequest` → null (no user available to ask).
 ///   - `window/workDoneProgress/create` → accept-noop. The actual
 ///     progress notifications still flow through the Notification
@@ -102,8 +104,8 @@ pub fn new() -> Registry {
 pub fn defaults() -> Registry {
   new()
   |> insert("workspace/configuration", default_workspace_configuration)
-  |> insert("client/registerCapability", default_accept_noop)
-  |> insert("client/unregisterCapability", default_accept_noop)
+  |> insert("client/registerCapability", default_register)
+  |> insert("client/unregisterCapability", default_unregister)
   |> insert("window/showMessageRequest", default_accept_noop)
   |> insert("window/workDoneProgress/create", default_accept_noop)
   |> insert("workspace/applyEdit", default_decline_apply_edit)
@@ -125,6 +127,19 @@ pub fn lookup(registry: Registry, method: String) -> Option(Handler) {
 }
 
 // -- Default handlers ----------------------------------------------------
+
+/// `client/registerCapability`: acknowledged, and ADR-043's
+/// `workspace/didChangeWatchedFiles` watchers are recorded for the
+/// calling proc.
+fn default_register(_id: LspId, params: Dynamic) -> HandlerResult {
+  watchers.record_registrations(params)
+  Reply(json.null())
+}
+
+fn default_unregister(_id: LspId, params: Dynamic) -> HandlerResult {
+  watchers.record_unregistrations(params)
+  Reply(json.null())
+}
 
 /// `client/registerCapability`, `client/unregisterCapability`,
 /// `window/showMessageRequest`, `window/workDoneProgress/create` all

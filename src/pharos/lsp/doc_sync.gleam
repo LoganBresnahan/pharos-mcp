@@ -70,6 +70,10 @@ pub type SyncOp {
     previous_end: Option(#(Int, Int)),
   )
   OpClose(uri: String)
+  /// ADR-043: a notification about no open document (the files changed
+  /// on disk), already encoded. Sent first in its batch, so the batch's
+  /// freshness rule covers what it tells the server.
+  OpNotify(body: String)
 }
 
 /// #38: the LSP position just past the end of `text`, as (line,
@@ -239,6 +243,7 @@ pub fn notifications(caps: SyncCaps, op: SyncOp) -> List(String) {
       did_open(uri, language_id, version, text),
     ]
     OpClose(uri:), _ -> [did_close(uri)]
+    OpNotify(body:), _ -> [body]
     OpChange(uri:, language_id:, version:, text:, ..), 0 -> [
       did_close(uri),
       did_open(uri, language_id, version, text),

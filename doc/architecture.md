@@ -35,6 +35,10 @@ drifts, the linked code is canonical.
 │  │  │       lsp_proc(...)                           │                            │
 │  │  └────────────────────┘                          │                            │
 │  │                                                  │                            │
+│  │  watch_scanner(lsp_proc) — not supervised: one   │  pharos/lsp/watch.gleam    │
+│  │   per proc whose server takes watched-file       │  ADR-043; started by the   │
+│  │   events; monitors its proc, stops with it       │  first question needing it │
+│  │                                                  │                            │
 │  │  ┌─ HTTP subtree (only if transport ∈ {Http,     │                            │
 │  │  │   Both})                                      │                            │
 │  │  │  sessions_actor    │ permanent  GenServer     │  pharos/mcp/sessions.gleam │
@@ -62,6 +66,9 @@ drifts, the linked code is canonical.
 │                                    (batch,proc)    → n of the last batch sent    │
 │    pharos_log_writer_subject       global          → log writer Subject          │
 │    pharos_session_overrides        session→(tool,lang) → bumped timeout_ms       │
+│    pharos_lsp_watchers             (proc,reg id)  → registered file watchers     │
+│                                    (spawned,proc) → second the server spawned    │
+│    pharos_watch_scanners           proc            → watch_scanner Subject       │
 │                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -344,6 +351,7 @@ condition surfaces when it does.
 | 23 | **find_symbol: project load before workspace/symbol** | `tools/symbols.gleam` (`project_load_timeout_ms`) | `min(timeout_ms, 5000)` | via #5 (lowers it only) | A Tsserver-mode server is slow to answer projectInfo for `scope_uri`; the result is ignored and workspace/symbol is asked anyway, so it may see only the opened file (#21). |
 | 24 | **Push diagnostics: server still working** | `tools/diagnostics.gleam` (`progress_stuck_ms`); `save_check_grace_ms` per server | waits while a progress that began after the document's sync runs; after the sync, the server's `save_check_grace_ms` for a check's begin (rust-analyzer 500 ms, others 0); a progress over 30 s is ignored | via #5 (never passes it); `save_check_grace_ms` in `pharos.toml` | The deadline comes while the server still works (cargo check): the cached entry is answered marked carried over, never as fresh (#30, ADR-038 amendment). |
 | 25 | **find_symbol: cold index retry** | `tools/symbols.gleam` (`cold_retry_cap_ms`, `cold_retry_step_ms`, `indexing_stuck_ms`); `lazy_workspace_index_ms` per server | an empty, null or -32603 workspace/symbol answer is asked again every 1 s while the session is younger than the server's `lazy_workspace_index_ms` (clangd 2 s, HLS, lua-ls and perlnavigator 3 s, bash-ls and next-ls 20 s, others 0) or while it has a progress running (under 30 s old); all within `min(timeout_ms, 15000)`, each retry getting only what's left | via #5 (lowers it only); `lazy_workspace_index_ms` in `pharos.toml` | The server still indexes past the window or the cap: the empty answer stands (not_found). Tsserver mode never retries: projectInfo loaded the project (#21, #27). |
+| 26 | **Watched-files scan before a question** | `lsp/watch.gleam` (`scan_budget_ms`, `scan_interval_ms`); the call to the scanner | the scan walks at most 200 ms, and never past the question's deadline; a tree whose whole pass took under half that is scanned before every question (and stays so while a pass fits in 200 ms), any other at most every 2 s; the scan gets at most half the time left before the question's deadline; the caller waits for the scanner at most the budget + 1 s, never past its deadline (a bounded receive; a late reply's events are resent with the next) | `PHAROS_WATCH_BUDGET_MS` (session env); `watch_files` in `pharos.toml` | The walk runs out of budget, the scan is skipped by the interval, or the scanner doesn't answer: the question goes on, and its answer carries a note that files changed on disk may not have reached the server, never fresh (ADR-043). |
 | 14 | **Harness wall-clock** | `bin/dogfood-23lang.py` | `timeout_ms / 1000 + 45s` | `PER_LANG_TIMEOUT_MS` const + per-target override | Harness gives up + sends `notifications/cancelled`. M14 dogfood-only. |
 
 Resolution stack at request time (ADR-021): #5 wins → #4 → #3 → #2

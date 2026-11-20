@@ -257,7 +257,21 @@ pub type ServerConfig {
     /// right behind a change about the text before it (20 in 200 at once,
     /// none with a 20 ms gap). 0: no wait.
     pull_after_change_ms: Int,
+    /// ADR-043. Whether pharos scans the workspace for files changed on
+    /// disk and sends this server `workspace/didChangeWatchedFiles`.
+    watch_files: WatchFiles,
   )
+}
+
+/// ADR-043: when the watched-files scan runs for a server.
+pub type WatchFiles {
+  /// When the server registers file watchers (it relies on its client).
+  WatchIfRegistered
+  /// Always, matching the language's file extensions when the server
+  /// registered no watchers.
+  WatchAlways
+  /// Never: the server watches files itself, or the user turned it off.
+  WatchNever
 }
 
 /// Used when a `ServerConfig.ready_timeout_ms` is `None`. Per
@@ -524,6 +538,12 @@ fn rust() -> LanguageConfig {
         save_check_grace_ms: 500,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        // ADR-043: rust-analyzer watches the disk itself (its own
+        // notify watcher) when its client doesn't offer watcher
+        // registration, and stops when offered: measured 2026-11-20, a
+        // file created on disk was seen before, missed after. pharos
+        // doesn't offer it, so it keeps its own watcher.
+        watch_files: WatchNever,
       ),
     ],
     env_keys: ["RUSTUP_TOOLCHAIN", "CARGO_HOME", "CARGO_TARGET_DIR"],
@@ -563,6 +583,7 @@ fn go() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: ["GOFLAGS", "GOWORK", "GOPATH", "GOROOT"],
@@ -631,6 +652,7 @@ fn typescript() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -719,6 +741,7 @@ fn elixir() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -761,6 +784,7 @@ fn ruby() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: True,
         pull_after_change_ms: 50,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -797,6 +821,7 @@ fn zig() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -840,6 +865,7 @@ fn cpp() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -893,6 +919,7 @@ fn scala() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -932,6 +959,7 @@ fn clojure() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -972,6 +1000,11 @@ fn haskell() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        // ADR-043: like rust-analyzer, haskell-language-server watches
+        // the disk itself unless offered watcher registration, then
+        // relies on the client: measured 2026-11-20, a new module was
+        // seen before, missed after. Not offered: it keeps its own.
+        watch_files: WatchNever,
       ),
     ],
     env_keys: [],
@@ -1014,6 +1047,7 @@ fn perl() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1053,6 +1087,7 @@ fn html() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1102,6 +1137,7 @@ fn css() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1140,6 +1176,7 @@ fn json_lang() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1176,6 +1213,7 @@ fn yaml() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1212,6 +1250,7 @@ fn markdown() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1250,6 +1289,7 @@ fn terraform() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1297,6 +1337,7 @@ fn erlang() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1377,6 +1418,7 @@ fn java() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     // ADR-029. jdtls returns `jdt://contents/...` URIs for class files
@@ -1439,6 +1481,7 @@ fn gleam() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1480,6 +1523,7 @@ fn lua() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1522,6 +1566,7 @@ fn bash() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: [],
@@ -1572,6 +1617,7 @@ fn python() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
       ServerConfig(
         id: "ruff",
@@ -1593,6 +1639,7 @@ fn python() -> LanguageConfig {
         save_check_grace_ms: 0,
         full_change_as_range: False,
         pull_after_change_ms: 0,
+        watch_files: WatchIfRegistered,
       ),
     ],
     env_keys: ["VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH"],

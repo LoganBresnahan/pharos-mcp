@@ -62,6 +62,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 040 | [`pharos diagnostics` and the captAInHook payload](040-diagnostics-cli-and-captainhook-payload.md) | Accepted |
 | 041 | [A document's languageId follows its extension](041-document-language-id-per-extension.md) | Accepted |
 | 042 | [One canonical spelling for `file://` URIs](042-one-canonical-spelling-for-file-uris.md) | Accepted |
+| 043 | [Tell servers about files changed on disk](043-files-changed-on-disk.md) | Accepted |
 
 ## Anticipated future ADRs
 

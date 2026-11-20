@@ -14,6 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- Files changed on disk that pharos never opened reach the servers that rely on their client to
+  watch files (gopls, pyright, jdtls and others). Before, a file a checkout or a build created,
+  changed or deleted stayed unknown to them: an import of a new package stayed broken. pharos
+  now offers servers file-watcher registration, scans the workspace before a question for
+  changes, and sends each server, as `workspace/didChangeWatchedFiles`, the ones its watchers
+  match, in the question's sync, so get_diagnostics doesn't answer diagnostics cached before
+  the change as fresh. A small tree is scanned whole before every question. A large one is
+  scanned at most every 2 s, 200 ms at a time (`PHAROS_WATCH_BUDGET_MS`, and never past the
+  question's timeout), starting next to the file asked about, and an answer given before the
+  scan has covered the tree says so: a second text block, `pharos.files_unchecked` in
+  get_diagnostics, `unsure` from `pharos diagnostics`.
+  rust-analyzer and haskell-language-server aren't offered registration and keep their own
+  watchers. `watch_files = false`
+  turns it off for a server, `true` forces it (#10, ADR-043).
 - pharos.toml values that used to do harm are ignored, with a warning, and the default stays
   (#32):
   - an unknown `diagnostics_mode` keeps the bundled mode (it was read as push, which left a

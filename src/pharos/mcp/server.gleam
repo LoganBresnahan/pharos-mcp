@@ -20,6 +20,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import pharos/answer_notes
 import pharos/config
 import pharos/log
 import pharos/log/entry as log_entry
@@ -130,7 +131,11 @@ fn dispatch(pool: Pool, message: Message) -> DispatchResult {
       let result = case method {
         "initialize" -> Reply(initialize_response(id))
         "tools/list" -> Reply(tools_list_response(id))
-        "tools/call" -> Reply(handle_tool_call(pool, id, params))
+        "tools/call" -> {
+          // ADR-043: no note left over from another request.
+          let _ = answer_notes.take()
+          Reply(handle_tool_call(pool, id, params))
+        }
         other ->
           Reply(error_response(Some(id), -32_601, "Method not found: " <> other))
       }
@@ -961,7 +966,14 @@ fn handle_get_diagnostics(
     Ok(#(uri, timeout_ms)) ->
       case diagnostics.handle(pool, uri, timeout_ms) {
         Ok(diagnostics.Diagnostics(uri: _, body_json: body)) ->
-          success_response(id, fn() { tool_text_result(body, False) })
+          success_response(id, fn() {
+            // ADR-043: the scan's note goes in the `pharos` member, beside
+            // carried_over, not a block of its own.
+            tool_text_result(
+              diagnostics.with_notes(body, answer_notes.take()),
+              False,
+            )
+          })
 
         Ok(diagnostics.NoDiagnosticsObserved(uri: u)) ->
           success_response(id, fn() {
@@ -1052,10 +1064,13 @@ fn finalize_timeout(
   uri: String,
   user_arg: Option(Int),
 ) -> Int {
-  case user_arg {
+  let timeout = case user_arg {
     Some(n) -> n
     None -> resolve_tool_timeout(tool_name, lang_from_uri(uri), default)
   }
+  // ADR-043: the scan before the question stays inside its timeout.
+  answer_notes.set_timeout(timeout)
+  timeout
 }
 
 /// Same as `finalize_timeout` but without a URI in scope (chained
@@ -1065,10 +1080,12 @@ fn finalize_timeout_no_lang(
   default: Int,
   user_arg: Option(Int),
 ) -> Int {
-  case user_arg {
+  let timeout = case user_arg {
     Some(n) -> n
     None -> resolve_tool_timeout(tool_name, None, default)
   }
+  answer_notes.set_timeout(timeout)
+  timeout
 }
 
 // -- Tier-1 LSP-backed tool handlers ------------------------------------
@@ -3038,8 +3055,24 @@ fn tool_text_result(message: String, is_error: Bool) -> Json {
   }
 
   let block = content_block.to_json(content_block.text(message))
+  // ADR-043: a successful answer the server may not have the whole
+  // picture for carries a note, as a block of its own; a complete one is
+  // exactly as before.
+  let notes = case is_error {
+    True -> {
+      let _ = answer_notes.take()
+      []
+    }
+    False -> answer_notes.take()
+  }
+  let blocks = [
+    block,
+    ..list.map(notes, fn(note) {
+      content_block.to_json(content_block.text(note))
+    })
+  ]
   json.object([
-    #("content", json.array([block], of: fn(b) { b })),
+    #("content", json.array(blocks, of: fn(b) { b })),
     #("isError", json.bool(is_error)),
   ])
 }
@@ -3059,6 +3092,9 @@ fn tool_text_result_with_note(message: String, note: Option(String)) -> Json {
       let blocks = [
         content_block.to_json(content_block.text(message)),
         content_block.to_json(content_block.text(text)),
+        ..list.map(answer_notes.take(), fn(note) {
+          content_block.to_json(content_block.text(note))
+        })
       ]
       json.object([
         #("content", json.array(blocks, of: fn(b) { b })),
@@ -3399,8 +3435,12 @@ fn handle_find_symbol(
           case symbols.find_symbol(pool, scope_uri, name_path, policy) {
             Ok(resolution) ->
               success_response(id, fn() {
+                // ADR-043: the scan's note in the answer, not a block.
                 tool_text_result(
-                  json.to_string(symbols.resolution_to_json(resolution)),
+                  json.to_string(symbols.resolution_to_json_noted(
+                    resolution,
+                    answer_notes.take(),
+                  )),
                   False,
                 )
               })

@@ -192,6 +192,23 @@ A reply split across a timeout (#33):
                               once and the rest `ms` later (past a short
                               hover timeout_ms); later hovers answer whole
 
+Watched files (ADR-043):
+
+  STUB_LSP_WATCH=glob[;glob]  when the client offers
+                              workspace.didChangeWatchedFiles registration,
+                              register these globs for it after
+                              `initialized`. Each didChangeWatchedFiles is
+                              logged as "<pid> workspace/didChangeWatchedFiles
+                              a.stub:1,b.stub:3" (basename:FileChangeType),
+                              and the initialize line says watch=True|False
+  STUB_LSP_DEP=/abs/path      with STUB_LSP_DIAGNOSTICS=push: every publish
+                              also carries a diagnostic "dep: <first line of
+                              that file>", read from disk (a dependency the
+                              server never gets as a document), and each
+                              didChangeWatchedFiles republishes every open
+                              document after STUB_LSP_DEP_DELAY_MS (default
+                              300), at its current version (gopls's way)
+
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
 range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
@@ -269,6 +286,8 @@ def write_message(stream, msg):
 
 
 CLIENT_PROGRESS = threading.Event()
+# ADR-043: the client offered workspace.didChangeWatchedFiles registration.
+CLIENT_WATCH = threading.Event()
 ERRORED_ONCE: list = []
 SPLIT_ONCE: list = []
 PULL_PREV: dict = {}
@@ -360,6 +379,8 @@ def handle_initialize(req):
     caps = (req.get("params") or {}).get("capabilities") or {}
     if (caps.get("window") or {}).get("workDoneProgress"):
         CLIENT_PROGRESS.set()
+    if ((caps.get("workspace") or {}).get("didChangeWatchedFiles") or {}).get("dynamicRegistration"):
+        CLIENT_WATCH.set()
     capabilities = {
         "hoverProvider": True,
         "documentSymbolProvider": True,
@@ -411,6 +432,9 @@ def sha8(text):
 
 
 def sync_log_suffix(method, params):
+    if method == "workspace/didChangeWatchedFiles":
+        return " " + ",".join("%s:%s" % (os.path.basename(c.get("uri", "")), c.get("type"))
+                              for c in params.get("changes") or [])
     if method == "workspace/executeCommand":
         args = params.get("arguments") or []
         if len(args) >= 2 and isinstance(args[1], dict):
@@ -512,6 +536,20 @@ def stub_diagnostics(text):
     ]
 
 
+def dep_diagnostics():
+    """STUB_LSP_DEP: one diagnostic naming the dependency's first line."""
+    path = os.environ.get("STUB_LSP_DEP")
+    if not path:
+        return []
+    try:
+        with open(path) as f:
+            first = f.read().split("\n")[0]
+    except OSError:
+        first = "(missing)"
+    return [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+             "severity": 2, "source": "stub", "message": "dep: " + first}]
+
+
 def publish_stale_then_fresh(stdout, uri, old_text):
     """tsserver's race: the set computed for the old text arrives after
     the change, without a version; the right one comes later."""
@@ -585,7 +623,7 @@ def maybe_publish(stdout, uri):
     if not mode or uri not in DOCS or mode == "push-stale":
         return
     doc = DOCS[uri]
-    diagnostics = stub_diagnostics(doc["text"])
+    diagnostics = stub_diagnostics(doc["text"]) + dep_diagnostics()
     if mode == "push-suppress" and LAST_PUBLISHED.get(uri) == diagnostics:
         return
     LAST_PUBLISHED[uri] = diagnostics
@@ -791,7 +829,9 @@ def main():
                     init = msg.get("params") or {}
                     pid_param = init.get("processId")
                     td = (init.get("capabilities") or {}).get("textDocument") or {}
-                    log.write(f"{os.getpid()} {method} processId={pid_param} pull={'diagnostic' in td}\n")
+                    ws = (init.get("capabilities") or {}).get("workspace") or {}
+                    log.write(f"{os.getpid()} {method} processId={pid_param} pull={'diagnostic' in td}"
+                              f" watch={'didChangeWatchedFiles' in ws}\n")
                 else:
                     suffix = sync_log_suffix(method, msg.get("params") or {})
                     log.write(f"{os.getpid()} {method}{suffix}\n")
@@ -801,6 +841,13 @@ def main():
                 write_message(stdout, resp)
         elif method == "initialized":
             # notification, no reply
+            watch = os.environ.get("STUB_LSP_WATCH")
+            if watch and CLIENT_WATCH.is_set():
+                write_message(stdout, {"jsonrpc": "2.0", "id": "watch-1",
+                                       "method": "client/registerCapability", "params": {"registrations": [{
+                                           "id": "stub-watch", "method": "workspace/didChangeWatchedFiles",
+                                           "registerOptions": {"watchers": [
+                                               {"globPattern": g} for g in watch.split(";")]}}]}})
             after_initialized(stdout)
             INITIALIZED_AT[0] = time.time()
             continue
@@ -808,6 +855,15 @@ def main():
             write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"], "result": None})
         elif method == "exit":
             return
+        elif method == "workspace/didChangeWatchedFiles":
+            if os.environ.get("STUB_LSP_DEP"):
+                delay = int(os.environ.get("STUB_LSP_DEP_DELAY_MS", "300")) / 1000.0
+
+                def republish():
+                    for open_uri in list(DOCS):
+                        maybe_publish(stdout, open_uri)
+                threading.Timer(delay, republish).start()
+            continue
         elif method in ("textDocument/didOpen", "textDocument/didChange"):
             if method == "textDocument/didChange":
                 cu = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")

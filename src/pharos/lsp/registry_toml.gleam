@@ -160,6 +160,12 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "save_check_grace_ms = " <> int.to_string(server.save_check_grace_ms),
     "full_change_as_range = " <> bool_text(server.full_change_as_range),
     "pull_after_change_ms = " <> int.to_string(server.pull_after_change_ms),
+    case server.watch_files {
+      languages.WatchIfRegistered ->
+        "# watch_files unset: scanned for changed files only if the server registers watchers (ADR-043)"
+      languages.WatchAlways -> "watch_files = true"
+      languages.WatchNever -> "watch_files = false"
+    },
     render_init_options(server.initialization_options),
     render_workspace_config(server.workspace_configuration),
   ]
