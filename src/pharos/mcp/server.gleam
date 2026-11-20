@@ -1577,8 +1577,12 @@ fn handle_apply_workspace_edit(id: Id, arguments: Option(Dynamic)) -> String {
       )
     Ok(#(edit, dry_run)) ->
       case apply_workspace_edit.handle(edit, dry_run) {
-        Ok(rendered) ->
-          success_response(id, fn() { tool_text_result(rendered, False) })
+        // Any failed file makes the result an error: files are written
+        // one by one, so the edit may be only partly applied (#22).
+        Ok(summary) ->
+          success_response(id, fn() {
+            tool_text_result(summary.text, summary.failed > 0)
+          })
         Error(apply_workspace_edit.DecodeFailed(reason)) ->
           success_response(id, fn() {
             tool_text_result("decode failed: " <> reason, True)
@@ -2285,7 +2289,10 @@ fn apply_workspace_edit_tool_definition() -> Json {
         "Apply an LSP WorkspaceEdit to disk. `dry_run=true` "
         <> "(default) validates + reports per-file byte delta but "
         <> "writes nothing; `dry_run=false` commits via per-file "
-        <> "atomic rename. Overlapping edits abort the run. "
+        <> "atomic rename. A file that fails (overlapping edits, "
+        <> "unreadable, unwritable) is not written and marks the "
+        <> "result an error; the others are still written. A dry "
+        <> "run checks reads and edits, not write permission. "
         <> "Characters are UTF-16 LSP units approximated as "
         <> "Unicode codepoints (BMP-exact, off-by-one on "
         <> "surrogate-pair chars).",

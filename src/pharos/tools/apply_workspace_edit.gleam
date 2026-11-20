@@ -55,6 +55,12 @@ pub type ApplyError {
   InvalidUris(reason: String)
 }
 
+/// What `handle` did: the rendered text, and how many files it applied
+/// and failed. The caller marks the result an error when any failed (#22).
+pub type Summary {
+  Summary(text: String, applied: Int, failed: Int)
+}
+
 pub type ApplyOutcome {
   Applied(file: String, old_size: Int, new_size: Int)
   Failed(file: String, reason: String)
@@ -73,13 +79,19 @@ fn apply_to_file_ffi(
 ) -> Result(#(Int, Int), String)
 
 /// Apply a `WorkspaceEdit` to disk (or simulate, when `dry_run`).
-/// Returns the rendered summary; per-file failures appear inline so
-/// the caller sees exactly what landed.
-pub fn handle(edit: Dynamic, dry_run: Bool) -> Result(String, ApplyError) {
+/// Files are written one by one, so a failure leaves the others
+/// applied. The summary's header says what landed, failed files are
+/// listed first, and `failed` counts them.
+pub fn handle(edit: Dynamic, dry_run: Bool) -> Result(Summary, ApplyError) {
   use file_edits <- result.try(decode(edit))
   use _ <- result.try(reject_unresolvable(file_edits))
   let outcomes = list.map(file_edits, run_one(_, dry_run))
-  Ok(render_summary(outcomes, dry_run))
+  let #(applied, failed) = count(outcomes)
+  Ok(Summary(
+    text: render_summary(outcomes, applied, failed, dry_run),
+    applied: applied,
+    failed: failed,
+  ))
 }
 
 fn decode(value: Dynamic) -> Result(List(FileEdits), ApplyError) {
@@ -166,26 +178,65 @@ fn edit_to_ffi(edit: TextEdit) -> FfiEdit {
   )
 }
 
-fn render_summary(outcomes: List(ApplyOutcome), dry_run: Bool) -> String {
-  let header = case dry_run {
-    True -> "Dry run — no files written. Re-call with dry_run=false to apply."
-    False -> "Applied edits."
-  }
-  let lines = list.map(outcomes, render_outcome)
-  let counts = render_counts(outcomes)
-  string.join([header, counts, ..lines], "\n")
+fn count(outcomes: List(ApplyOutcome)) -> #(Int, Int) {
+  list.fold(outcomes, #(0, 0), fn(acc, o) {
+    let #(ok, fail) = acc
+    case o {
+      Applied(_, _, _) -> #(ok + 1, fail)
+      Failed(_, _) -> #(ok, fail + 1)
+    }
+  })
 }
 
-fn render_counts(outcomes: List(ApplyOutcome)) -> String {
-  let #(ok, fail) =
-    list.fold(outcomes, #(0, 0), fn(acc, o) {
-      let #(ok, fail) = acc
+/// The header says what landed. "Applied edits." alone used to head a
+/// run where every file failed (#22).
+fn render_summary(
+  outcomes: List(ApplyOutcome),
+  applied: Int,
+  failed: Int,
+  dry_run: Bool,
+) -> String {
+  let total = int.to_string(applied + failed)
+  let header = case dry_run, failed, applied {
+    True, 0, _ ->
+      "Dry run — no files written (reads and edits checked, not write "
+      <> "permission). Re-call with dry_run=false to apply."
+    True, _, _ ->
+      "Dry run — no files written. "
+      <> int.to_string(failed)
+      <> " of "
+      <> total
+      <> " file(s) would fail; fix them before applying."
+    False, 0, _ -> "Applied edits."
+    False, _, 0 -> "No edits applied: all " <> total <> " file(s) failed."
+    False, _, _ ->
+      "Applied edits to "
+      <> int.to_string(applied)
+      <> " of "
+      <> total
+      <> " file(s); "
+      <> int.to_string(failed)
+      <> case failed {
+        1 -> " failed and was not written"
+        _ -> " failed and were not written"
+      }
+      <> ", so the edit is only partly applied."
+  }
+  let counts =
+    int.to_string(applied)
+    <> " file(s) ok, "
+    <> int.to_string(failed)
+    <> " failed."
+  // Failures first, so they aren't lost below a long list of oks.
+  let #(fails, oks) =
+    list.partition(outcomes, fn(o) {
       case o {
-        Applied(_, _, _) -> #(ok + 1, fail)
-        Failed(_, _) -> #(ok, fail + 1)
+        Failed(_, _) -> True
+        Applied(_, _, _) -> False
       }
     })
-  int.to_string(ok) <> " file(s) ok, " <> int.to_string(fail) <> " failed."
+  let lines = list.map(list.append(fails, oks), render_outcome)
+  string.join([header, counts, ..lines], "\n")
 }
 
 fn render_outcome(o: ApplyOutcome) -> String {

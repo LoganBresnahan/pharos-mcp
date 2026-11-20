@@ -11,6 +11,8 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
+import gleam/list
+import gleam/string
 import gleeunit/should
 import pharos/tools/apply_workspace_edit
 import pharos/workspace_root
@@ -112,7 +114,8 @@ pub fn handle_dry_run_does_not_write_test() {
       <> path
       <> "\":[{\"range\":{\"start\":{\"line\":0,\"character\":6},\"end\":{\"line\":0,\"character\":11}},\"newText\":\"WORLD\"}]}}",
     )
-  let assert Ok(summary) = apply_workspace_edit.handle(edit, True)
+  let assert Ok(apply_workspace_edit.Summary(text: summary, failed: 0, ..)) =
+    apply_workspace_edit.handle(edit, True)
 
   // Dry run header present.
   case summary {
@@ -210,3 +213,68 @@ fn mkdir_p(path: String) -> Result(Nil, String)
 
 @external(erlang, "pharos_fs_ffi", "atomic_write_text")
 fn atomic_write_text(path: String, text: String) -> Result(Nil, String)
+
+// -- #22: what landed is what the header says ---------------------------
+
+fn edit_json(paths: List(String)) -> Dynamic {
+  let entries =
+    paths
+    |> list.map(fn(path) {
+      "\"file://"
+      <> path
+      <> "\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":5}},\"newText\":\"HELLO\"}]"
+    })
+    |> string.join(",")
+  parse_dynamic("{\"changes\":{" <> entries <> "}}")
+}
+
+pub fn handle_all_files_failing_says_nothing_was_applied_test() {
+  let _ = setup()
+  let assert Ok(s) =
+    apply_workspace_edit.handle(
+      edit_json([tmp_root <> "/missing-1.txt", tmp_root <> "/missing-2.txt"]),
+      False,
+    )
+  s.applied |> should.equal(0)
+  s.failed |> should.equal(2)
+  should.be_true(string.starts_with(
+    s.text,
+    "No edits applied: all 2 file(s) failed.",
+  ))
+  should.be_false(string.contains(s.text, "Applied edits."))
+  teardown()
+}
+
+pub fn handle_partial_failure_lists_the_failed_files_first_test() {
+  let _ = setup()
+  let ok = tmp_root <> "/ok.txt"
+  let _ = shell("printf 'hello world' > " <> ok)
+  let missing = tmp_root <> "/missing.txt"
+  let assert Ok(s) =
+    apply_workspace_edit.handle(edit_json([ok, missing]), False)
+  s.applied |> should.equal(1)
+  s.failed |> should.equal(1)
+  let assert [header, counts, first, second] = string.split(s.text, "\n")
+  should.be_true(string.starts_with(
+    header,
+    "Applied edits to 1 of 2 file(s); 1 failed",
+  ))
+  counts |> should.equal("1 file(s) ok, 1 failed.")
+  should.be_true(string.starts_with(first, "  fail  file://" <> missing))
+  should.be_true(string.starts_with(second, "  ok    file://" <> ok))
+  let assert Ok(bits) = read_file(ok)
+  bits |> should.equal(<<"HELLO world":utf8>>)
+  teardown()
+}
+
+pub fn handle_dry_run_with_a_failing_file_says_so_test() {
+  let _ = setup()
+  let assert Ok(s) =
+    apply_workspace_edit.handle(edit_json([tmp_root <> "/missing.txt"]), True)
+  s.failed |> should.equal(1)
+  should.be_true(string.starts_with(
+    s.text,
+    "Dry run — no files written. 1 of 1 file(s) would fail",
+  ))
+  teardown()
+}

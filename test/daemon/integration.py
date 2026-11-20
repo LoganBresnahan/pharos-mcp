@@ -1070,6 +1070,32 @@ def t_uri_escapes_cli(sb):
               "%s: %s" % (arg, out.stdout[-400:]))
         check(f["path"] == path and f["uri"] == "file://" + quote(path, safe="/"),
               "%s: path and canonical uri: %s" % (arg, f))
+def t_apply_edit_failure_is_an_error(sb):
+    """#22: apply_workspace_edit marks the result an error when a file
+    fails, and says what landed: before, every file failing still read
+    "Applied edits." with isError false."""
+    a = sb.start({})
+    a.initialize()
+    ok = os.path.join(sb.fixture, "ok.txt")
+    with open(ok, "w") as f:
+        f.write("hello world")
+    missing = os.path.join(sb.fixture, "missing.txt")
+    rng = {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}}
+
+    def apply(id_, paths):
+        r = a.call(id_, "tools/call", {"name": "apply_workspace_edit", "arguments": {
+            "edit": {"changes": {"file://" + p: [{"range": rng, "newText": "HELLO"}] for p in paths}},
+            "dry_run": False}}, 60)
+        return r["result"]["content"][0]["text"], r["result"].get("isError")
+
+    text, err = apply(10, [missing])
+    check(err is True and text.startswith("No edits applied"), "all failed: %r %s" % (err, text))
+    text, err = apply(11, [ok, missing])
+    check(err is True and text.startswith("Applied edits to 1 of 2 file(s)")
+          and text.split("\n")[2].startswith("  fail  "), "partial: %r %s" % (err, text))
+    check(open(ok).read() == "HELLO world", "the ok file must still be written")
+    text, err = apply(12, [ok])
+    check(err is False and text.startswith("Applied edits."), "all ok: %r %s" % (err, text))
 
 
 def t_resync_open_cap(sb):
@@ -1127,6 +1153,7 @@ SCENARIOS = [
     ("uri_escapes_push_rust", t_uri_escapes_push_rust),
     ("uri_escapes_tsserver", t_uri_escapes_tsserver),
     ("uri_escapes_cli", t_uri_escapes_cli),
+    ("apply_edit_failure_is_an_error", t_apply_edit_failure_is_an_error),
 ]
 
 
