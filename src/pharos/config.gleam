@@ -117,6 +117,10 @@ pub type ServerOverride {
     /// #30. How long after a sync get_diagnostics waits for a check the
     /// server starts on save to begin. 0: no grace.
     save_check_grace_ms: Option(Int),
+    /// #38. Send changes as a ranged whole-document replace.
+    full_change_as_range: Option(Bool),
+    /// #38. Wait this long after a change before a pull request.
+    pull_after_change_ms: Option(Int),
     /// Whole-blob replace of the server's `initialization_options`
     /// JSON sent at `initialize`. Stored as a TOML string containing
     /// JSON text (LSP-server upstream docs publish init options in
@@ -199,6 +203,10 @@ pub type LanguageOverride {
     /// #30. How long after a sync get_diagnostics waits for a check the
     /// server starts on save to begin. 0: no grace.
     save_check_grace_ms: Option(Int),
+    /// #38. Send changes as a ranged whole-document replace.
+    full_change_as_range: Option(Bool),
+    /// #38. Wait this long after a change before a pull request.
+    pull_after_change_ms: Option(Int),
     /// ADR-029. User-defined custom URI schemes for this language.
     /// Each entry merges into the bundled defaults by scheme key:
     /// user-supplied schemes that already exist replace the default
@@ -873,6 +881,8 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       "lazy_workspace_index_ms",
     ),
     save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
+    full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
+    pull_after_change_ms: decode_optional_int(value, "pull_after_change_ms"),
     custom_uri_schemes: decode_optional_custom_uri_schemes(value),
   )
 }
@@ -972,6 +982,8 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
       "lazy_workspace_index_ms",
     ),
     save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
+    full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
+    pull_after_change_ms: decode_optional_int(value, "pull_after_change_ms"),
     initialization_options_json: decode_optional_string(
       value,
       "initialization_options_json",
@@ -1215,4 +1227,11 @@ fn split_csv(raw: String) -> List(String) {
   string.split(raw, ",")
   |> list.map(string.trim)
   |> list.filter(fn(s) { s != "" })
+}
+
+fn decode_optional_bool(parent: Dynamic, key: String) -> Option(Bool) {
+  case decode_field(parent, key, decode.bool) {
+    Ok(b) -> Some(b)
+    Error(_) -> None
+  }
 }

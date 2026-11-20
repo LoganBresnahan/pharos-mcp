@@ -245,6 +245,8 @@ pub opaque type Msg {
     language_id: String,
     subject: String,
     disk: List(#(String, DiskState)),
+    /// #38: the server takes changes as a ranged whole-document replace.
+    full_change_as_range: Bool,
     reply_to: Subject(Result(Expectations, EnsureOpenError)),
   )
   /// Sent to the pool actor when one of its monitored procs exits.
@@ -651,6 +653,7 @@ pub fn ensure_open(
   cache_server_id: String,
   uri: String,
   language_id: String,
+  full_change_as_range: Bool,
 ) -> Result(Nil, EnsureOpenError) {
   let Pool(subject) = pool
   let open_uris =
@@ -678,6 +681,7 @@ pub fn ensure_open(
         language_id,
         uri,
         disk,
+        full_change_as_range,
         reply,
       )
     })
@@ -793,10 +797,12 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       language_id,
       subject,
       disk,
+      full_change_as_range,
       reply,
     ) ->
       handle_sync_documents(
         state,
+        full_change_as_range,
         #(language, workspace, server_id),
         cache_server_id,
         language_id,
@@ -1846,6 +1852,7 @@ fn iolist_to_string_safe(io: dynamic.Dynamic) -> String
 
 fn handle_sync_documents(
   state: State,
+  full_change_as_range: Bool,
   proc_key: #(String, String, String),
   cache_server_id: String,
   language_id: String,
@@ -1876,6 +1883,7 @@ fn handle_sync_documents(
             language_id,
             cache_server_id,
             clock,
+            full_change_as_range,
           )
         })
       let victims =
@@ -1935,6 +1943,7 @@ fn plan_one(
   language_id: String,
   cache_server_id: String,
   clock: Int,
+  full_change_as_range: Bool,
 ) -> #(Dict(DocKey, Doc), List(doc_sync.SyncOp)) {
   let uri = k.3
   let existing = dict.get(docs, k)
@@ -1952,12 +1961,19 @@ fn plan_one(
     False, Ok(doc) -> doc.language_id
     _, _ -> language_id
   }
-  let record = fn(version, hash) {
+  // #38: each text recorded with where it ends, so the next change to a
+  // server that takes a ranged replace covers exactly what it was sent.
+  let record = fn(version, hash, text) {
     dict.insert(
       docs,
       k,
       Doc(
-        doc_sync.DocState(version:, hash:, open: True),
+        doc_sync.DocState(
+          version:,
+          hash:,
+          open: True,
+          sent_end: doc_sync.end_position(text),
+        ),
         lid,
         cache_server_id,
         last_used,
@@ -1966,13 +1982,21 @@ fn plan_one(
   }
   case plan, on_disk {
     doc_sync.Open(version), doc_sync.OnDisk(text:, hash:) -> #(
-      record(version, hash),
+      record(version, hash, text),
       [doc_sync.OpOpen(uri, lid, version, text), ..ops],
     )
-    doc_sync.Change(version), doc_sync.OnDisk(text:, hash:) -> #(
-      record(version, hash),
-      [doc_sync.OpChange(uri, lid, version, text), ..ops],
-    )
+    doc_sync.Change(version), doc_sync.OnDisk(text:, hash:) -> {
+      // The end of the text this server was last sent (a Change always
+      // follows an open document); the range-less form otherwise.
+      let previous_end = case full_change_as_range, existing {
+        True, Ok(doc) -> option.Some(doc.state.sent_end)
+        _, _ -> option.None
+      }
+      #(record(version, hash, text), [
+        doc_sync.OpChange(uri, lid, version, text, previous_end),
+        ..ops
+      ])
+    }
     doc_sync.Close, _ -> #(close_doc(docs, k), [doc_sync.OpClose(uri), ..ops])
     _, _ ->
       case existing {

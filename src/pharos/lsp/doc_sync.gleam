@@ -14,6 +14,8 @@ import gleam/dynamic/decode
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
+import gleam/string
 
 /// What the server wants after a save.
 pub type SaveMode {
@@ -33,7 +35,7 @@ pub type SyncCaps {
 /// What pharos last sent the server for one document. A closed
 /// document keeps its version, so reopening it never goes backwards.
 pub type DocState {
-  DocState(version: Int, hash: BitArray, open: Bool)
+  DocState(version: Int, hash: BitArray, open: Bool, sent_end: #(Int, Int))
 }
 
 /// A document's file as read just now.
@@ -58,8 +60,37 @@ pub type Plan {
 /// One document's sync, as the proc writes it.
 pub type SyncOp {
   OpOpen(uri: String, language_id: String, version: Int, text: String)
-  OpChange(uri: String, language_id: String, version: Int, text: String)
+  OpChange(
+    uri: String,
+    language_id: String,
+    version: Int,
+    text: String,
+    /// #38: for a server that needs the change as a ranged replace, the
+    /// end of the text last sent to it; None sends the range-less form.
+    previous_end: Option(#(Int, Int)),
+  )
   OpClose(uri: String)
+}
+
+/// #38: the LSP position just past the end of `text`, as (line,
+/// character): lines end at `\r\n`, `\n` or a lone `\r`, and characters
+/// count UTF-16 code units (the spec's default encoding; pharos doesn't
+/// negotiate another). A text ending in a line break ends at the start of
+/// the line after it; the empty text ends at (0, 0).
+pub fn end_position(text: String) -> #(Int, Int) {
+  let #(line, character, _) =
+    string.to_utf_codepoints(text)
+    |> list.fold(#(0, 0, False), fn(acc, cp) {
+      let #(line, character, after_cr) = acc
+      case string.utf_codepoint_to_int(cp) {
+        13 -> #(line + 1, 0, True)
+        10 if after_cr -> #(line, 0, False)
+        10 -> #(line + 1, 0, False)
+        c if c > 0xFFFF -> #(line, character + 2, False)
+        _ -> #(line, character + 1, False)
+      }
+    })
+  #(line, character)
 }
 
 /// SHA-256 of the text as it would be sent.
@@ -76,7 +107,7 @@ pub fn plan_subject(existing: Result(DocState, Nil), disk: DiskState) -> Plan {
     Gone, _ -> Unchanged
     OnDisk(..), Error(Nil) -> Open(1)
     OnDisk(..), Ok(DocState(version:, open: False, ..)) -> Open(version + 1)
-    OnDisk(hash:, ..), Ok(DocState(version:, hash: sent, open: True)) ->
+    OnDisk(hash:, ..), Ok(DocState(version:, hash: sent, open: True, ..)) ->
       case sent == hash {
         True -> Unchanged
         False -> Change(version + 1)
@@ -208,16 +239,19 @@ pub fn notifications(caps: SyncCaps, op: SyncOp) -> List(String) {
       did_open(uri, language_id, version, text),
     ]
     OpClose(uri:), _ -> [did_close(uri)]
-    OpChange(uri:, language_id:, version:, text:), 0 -> [
+    OpChange(uri:, language_id:, version:, text:, ..), 0 -> [
       did_close(uri),
       did_open(uri, language_id, version, text),
     ]
-    OpChange(uri:, version:, text:, ..), _ ->
-      list.append([did_change(uri, version, text)], case caps.save {
-        NoSave -> []
-        Save -> [did_save(uri, Error(Nil))]
-        SaveWithText -> [did_save(uri, Ok(text))]
-      })
+    OpChange(uri:, version:, text:, previous_end:, ..), _ ->
+      list.append(
+        [did_change(uri, version, text, previous_end)],
+        case caps.save {
+          NoSave -> []
+          Save -> [did_save(uri, Error(Nil))]
+          SaveWithText -> [did_save(uri, Ok(text))]
+        },
+      )
   }
 }
 
@@ -256,7 +290,28 @@ fn did_close(uri: String) -> String {
   )
 }
 
-fn did_change(uri: String, version: Int, text: String) -> String {
+fn did_change(
+  uri: String,
+  version: Int,
+  text: String,
+  previous_end: Option(#(Int, Int)),
+) -> String {
+  // The range-less full-content form (ADR-038), or, for a server that
+  // needs it (#38), the same replace with a range over the whole text it
+  // was last sent.
+  let change = case previous_end {
+    None -> [#("text", json.string(text))]
+    Some(#(line, character)) -> [
+      #(
+        "range",
+        json.object([
+          #("start", position(0, 0)),
+          #("end", position(line, character)),
+        ]),
+      ),
+      #("text", json.string(text)),
+    ]
+  }
   notification(
     "textDocument/didChange",
     json.object([
@@ -267,14 +322,13 @@ fn did_change(uri: String, version: Int, text: String) -> String {
           #("version", json.int(version)),
         ]),
       ),
-      #(
-        "contentChanges",
-        json.preprocessed_array([
-          json.object([#("text", json.string(text))]),
-        ]),
-      ),
+      #("contentChanges", json.preprocessed_array([json.object(change)])),
     ]),
   )
+}
+
+fn position(line: Int, character: Int) -> json.Json {
+  json.object([#("line", json.int(line)), #("character", json.int(character))])
 }
 
 fn did_save(uri: String, text: Result(String, Nil)) -> String {

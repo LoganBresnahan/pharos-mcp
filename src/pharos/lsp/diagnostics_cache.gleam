@@ -220,3 +220,8 @@ pub fn progress_quiet(
 /// indexing) that began less than `stuck_ms` ago.
 @external(erlang, "pharos_diagnostics_cache_ffi", "progress_active")
 pub fn progress_active(pid: Pid, stuck_ms: Int) -> Bool
+
+/// #38: ms since the latest sync of `uri` was written to proc `pid`'s
+/// server; -1 if never.
+@external(erlang, "pharos_diagnostics_cache_ffi", "sync_age_ms")
+pub fn sync_age_ms(uri: String, server_id: String, pid: Pid) -> Int

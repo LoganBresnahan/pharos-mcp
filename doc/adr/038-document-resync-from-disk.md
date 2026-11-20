@@ -295,6 +295,24 @@ call's deadline. On the bundled ones, a follow-up question after an
 edit costs up to the 500 ms grace on rust-analyzer only, and waits for cargo check there
 (seconds, bounded as above).
 
+**Amendment (as built, 2026-11-20, for the maintainer's review; #38, #35).** ruby-lsp 0.26.11
+advertises Incremental sync and raises on the range-less full-content `didChange` this ADR sends
+(`NoMethodError` in `Document#push_edits`), keeping the old text: every answer about the file after
+its first edit described the text before it. Two per-server settings, both off for every other
+server, change that for ruby-lsp only:
+- `full_change_as_range`: the change is sent as a replace from (0,0) to the end of the text last
+  sent to that server, recorded when it was sent (lines end at `\r\n`, `\n` or a lone `\r`;
+  characters are UTF-16 code units, the default encoding, since pharos doesn't negotiate another).
+  The range-less form stays the default: a wrong end position would corrupt every incremental
+  server, and the range-less form is the spec's own.
+- `pull_after_change_ms` (ruby-lsp 50): ruby-lsp can also answer a pull that arrives right behind a
+  change about the text before it (20 in 200 when sent at once, none with a 20 ms gap). A pull about
+  a document synced less than this long ago waits out the rest, from the call's own budget.
+
+With both, ruby-lsp was right on 320 of 320 edit-then-ask answers (CRLF, a UTF-16 tail, no final
+newline, an error moving between lines), and ruby-lsp moved to Pull diagnostics (it never pushes).
+Both behaviours are candidates for an upstream report, which is the maintainer's call.
+
 ## Alternatives considered
 
 - **A batch of only `didOpen`s doesn't count for freshness.** It fixes the case the review hit

@@ -1546,9 +1546,14 @@ fn ensure_doc_opened_for_server_id(
   // cache is keyed by the registry id, which is what the proc stamps
   // syncs under (ADR-038).
   let cache_server_id = server_id
-  let server_id = case list.find(config.servers, fn(s) { s.id == server_id }) {
-    Ok(server) -> pool.server_key(build_spawn_spec(workspace, config, server))
-    Error(_) -> server_id
+  let #(server_id, full_change_as_range) = case
+    list.find(config.servers, fn(s) { s.id == server_id })
+  {
+    Ok(server) -> #(
+      pool.server_key(build_spawn_spec(workspace, config, server)),
+      server.full_change_as_range,
+    )
+    Error(_) -> #(server_id, False)
   }
   // The pool reads the file, like every other open document: one that
   // is gone is closed if open and not opened (ADR-038).
@@ -1561,6 +1566,7 @@ fn ensure_doc_opened_for_server_id(
       cache_server_id,
       file_uri,
       languages.document_language_id(config, file_uri),
+      full_change_as_range,
     )
   Nil
 }

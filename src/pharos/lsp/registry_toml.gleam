@@ -158,6 +158,8 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "lazy_workspace_index_ms = "
       <> int.to_string(server.lazy_workspace_index_ms),
     "save_check_grace_ms = " <> int.to_string(server.save_check_grace_ms),
+    "full_change_as_range = " <> bool_text(server.full_change_as_range),
+    "pull_after_change_ms = " <> int.to_string(server.pull_after_change_ms),
     render_init_options(server.initialization_options),
     render_workspace_config(server.workspace_configuration),
   ]
@@ -245,5 +247,12 @@ fn render_workspace_config(
         |> string.join(",\n  ")
       "workspace_configuration_json = '''\n{\n  " <> entries <> "\n}\n'''"
     }
+  }
+}
+
+fn bool_text(b: Bool) -> String {
+  case b {
+    True -> "true"
+    False -> "false"
   }
 }

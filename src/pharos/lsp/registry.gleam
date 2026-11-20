@@ -213,6 +213,8 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     warm_probe: ProbeWorkspaceSymbol(""),
     lazy_workspace_index_ms: option.unwrap(override.lazy_workspace_index_ms, 0),
     save_check_grace_ms: option.unwrap(override.save_check_grace_ms, 0),
+    full_change_as_range: option.unwrap(override.full_change_as_range, False),
+    pull_after_change_ms: option.unwrap(override.pull_after_change_ms, 0),
   )
 }
 
@@ -387,6 +389,14 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.save_check_grace_ms,
       default.save_check_grace_ms,
     ),
+    full_change_as_range: option.unwrap(
+      ovr.full_change_as_range,
+      default.full_change_as_range,
+    ),
+    pull_after_change_ms: option.unwrap(
+      ovr.pull_after_change_ms,
+      default.pull_after_change_ms,
+    ),
   )
 }
 
@@ -413,6 +423,8 @@ fn server_from_override(
     warm_probe: ProbeWorkspaceSymbol(""),
     lazy_workspace_index_ms: option.unwrap(ovr.lazy_workspace_index_ms, 0),
     save_check_grace_ms: option.unwrap(ovr.save_check_grace_ms, 0),
+    full_change_as_range: option.unwrap(ovr.full_change_as_range, False),
+    pull_after_change_ms: option.unwrap(ovr.pull_after_change_ms, 0),
   )
 }
 
@@ -476,6 +488,14 @@ fn merge_primary(
     save_check_grace_ms: option.unwrap(
       override.save_check_grace_ms,
       primary.save_check_grace_ms,
+    ),
+    full_change_as_range: option.unwrap(
+      override.full_change_as_range,
+      primary.full_change_as_range,
+    ),
+    pull_after_change_ms: option.unwrap(
+      override.pull_after_change_ms,
+      primary.pull_after_change_ms,
     ),
   )
 }

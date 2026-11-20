@@ -53,7 +53,7 @@
          mark_batch/1, stamp_status/4, close_status/4, expect/4,
          expect_closed/3, expect_batch/2, forget_proc/1, lookup/4,
          settle_left/2, progress/2, progress_quiet/5,
-         progress_active/2]).
+         progress_active/2, sync_age_ms/3]).
 
 -define(TABLE, pharos_diagnostics_cache).
 -define(SYNCED, pharos_diagnostics_synced).
@@ -352,3 +352,11 @@ settle_left(Pid, SettleMs) when is_integer(SettleMs) ->
 %% Servers differ (vscode-uri escapes `@` and `+`, Rust's `url` doesn't),
 %% so the publish's own string can't be the key.
 key(Uri) -> 'pharos@workspace_root':canonical_uri(Uri).
+
+%% #38. How long ago the latest sync of `Uri0` was written to proc `Pid`'s
+%% server, in ms; -1 if pharos never synced it there.
+sync_age_ms(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
+    case ets:lookup(?PROGRESS, {sync, Pid, key(Uri0), ServerId}) of
+        [{_, Ms}] -> now_ms() - Ms;
+        [] -> -1
+    end.

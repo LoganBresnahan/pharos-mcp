@@ -15,6 +15,7 @@ scenarios.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -1709,6 +1710,94 @@ def t_false_but_serves_passes_through(sb):
           "rename_preview (gated before #37) should still refuse false: %s" % text[-300:])
 
 
+RANGED_EDITS = ["a\nb\n", "x\r\ny\r\n", "# é漢😀🎉", "one\rtwo", "", "fin\n"]
+
+
+def _ranged_server_text_matches(sb, flag):
+    """Write each of RANGED_EDITS in turn, asking after each; return the
+    edits after which the server's copy differed from the file."""
+    if flag:
+        sb.write_toml("full_change_as_range = true\n")
+    a = sb.start({"STUB_LSP_RANGED_ONLY": "1", "STUB_LSP_HOVER_RESPONSES": "sha"})
+    a.initialize()
+    path = os.path.join(sb.fixture, "main.stub")
+    wrong = []
+    for i, text in enumerate(RANGED_EDITS):
+        with open(path, "w", newline="") as f:
+            f.write(text)
+        h = a.tool(10 + i, "hover", {"uri": "file://" + path, "line": 0, "character": 0})
+        want = "sha:" + hashlib.sha256(text.encode()).hexdigest()
+        if want not in h:
+            wrong.append((i, repr(text)))
+    return wrong
+
+
+def t_ranged_change_for_a_server_that_needs_it(sb):
+    """#38: ruby-lsp 0.26 raises on the range-less full-content didChange
+    and keeps the old text. With full_change_as_range the change is sent
+    as a replace from (0,0) to the end of the text last sent, in UTF-16
+    positions with any line break: after every edit (CRLF, emoji and CJK
+    on a last line without a newline, a lone CR, an empty file, a final
+    newline) the server's copy is byte for byte the file."""
+    wrong = _ranged_server_text_matches(sb, flag=True)
+    check(wrong == [], "the server's copy differed from the file after: %r" % wrong)
+    log = open(os.path.join(sb.fixture, "stub.log")).read()
+    check("ranged-only:" not in log, "the stub refused a change: %r" % [l for l in log.splitlines() if "ranged-only" in l])
+
+
+def t_rangeless_change_is_lost_on_a_ranged_only_server(sb):
+    """#38's control: without the flag the stub keeps the old text, as
+    ruby-lsp does, so the scenario above tests the range."""
+    wrong = _ranged_server_text_matches(sb, flag=False)
+    check(len(wrong) == len(RANGED_EDITS) - 1, "expected every edit after the open to be lost: %r" % wrong)
+    check("refused a range-less change" in open(os.path.join(sb.fixture, "stub.log")).read(),
+          "the stub didn't log refusing the range-less form")
+
+
+def _pull_after_change(sb, window_ms):
+    """Alternate an ERROR line in and out, asking after each write, on a
+    pull server that answers about the old text within 60 ms of a change;
+    return (stale answers, slowest answer in s)."""
+    sb.write_toml('diagnostics_mode = "pull"\n' + ("pull_after_change_ms = %d\n" % window_ms if window_ms else ""))
+    a = sb.start({"STUB_LSP_PULL": "1", "STUB_LSP_PULL_RACE_MS": "60"})
+    a.initialize()
+    path = os.path.join(sb.fixture, "main.stub")
+    with open(path, "w") as f:
+        f.write("ok\n")
+    a.tool(9, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+    stale, slowest = 0, 0.0
+    for i in range(10):
+        broken = i % 2 == 0
+        with open(path, "w") as f:
+            f.write("ok\nERROR here\n" if broken else "ok\nfine\n")
+        t0 = time.time()
+        d = a.tool(10 + i, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+        slowest = max(slowest, time.time() - t0)
+        if ("stub error on line 1" in d) != broken:
+            stale += 1
+    return stale, slowest
+
+
+def t_pull_waits_after_a_change(sb):
+    """#38: ruby-lsp can answer a pull that arrives right behind a change
+    about the text before it. With pull_after_change_ms the pull waits out
+    that window from the document's sync, and every answer is about the
+    file as written."""
+    stale, slowest = _pull_after_change(sb, 80)
+    check(stale == 0, "%d of 10 answers were about the old text" % stale)
+    check(slowest < 1.0, "an answer took %.2fs" % slowest)
+
+
+def t_pull_without_the_window_is_unchanged(sb):
+    """#38's control: without pull_after_change_ms (every server but
+    ruby-lsp) there is no wait, so the racing stub answers stale: the
+    scenario above tests the window, and other servers' timing is
+    unchanged."""
+    stale, slowest = _pull_after_change(sb, 0)
+    check(stale > 0, "the stub didn't race: nothing to test")
+    check(slowest < 0.3, "an answer took %.2fs without a window" % slowest)
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1762,6 +1851,10 @@ SCENARIOS = [
     ("document_language_id", t_document_language_id),
     ("frames_after_an_error_reply_are_kept", t_frames_after_an_error_reply_are_kept),
     ("reply_split_across_a_timeout", t_reply_split_across_a_timeout),
+    ("ranged_change_for_a_server_that_needs_it", t_ranged_change_for_a_server_that_needs_it),
+    ("pull_waits_after_a_change", t_pull_waits_after_a_change),
+    ("pull_without_the_window_is_unchanged", t_pull_without_the_window_is_unchanged),
+    ("rangeless_change_is_lost_on_a_ranged_only_server", t_rangeless_change_is_lost_on_a_ranged_only_server),
     ("server_exit_at_initialize_says_why", t_server_exit_at_initialize_says_why),
     ("unadvertised_methods_say_unsupported", t_unadvertised_methods_say_unsupported),
     ("false_but_serves_passes_through", t_false_but_serves_passes_through),

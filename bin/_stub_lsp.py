@@ -12,6 +12,18 @@ Behavior is controlled via env vars:
                               "content_modified" (return -32801 first
                               call, then real content on retry)
   STUB_LSP_FAIL_HANDSHAKE=0   if 1, never reply to initialize
+  STUB_LSP_PULL=1             advertise diagnosticProvider and answer
+                              textDocument/diagnostic (full reports of
+                              stub_diagnostics) (#38)
+  STUB_LSP_PULL_RACE_MS=ms    with STUB_LSP_PULL: a pull arriving within
+                              `ms` of a didChange is answered about the text
+                              before it, as ruby-lsp can (#38)
+  STUB_LSP_RANGED_ONLY=1      like ruby-lsp 0.26 (#38): a range-less
+                              didChange raises inside the server and the
+                              old text stays; a ranged one is applied at
+                              its LSP positions (UTF-16, lines ending at
+                              \r\n, \n or \r), and one whose range is out
+                              of bounds is refused (the old text stays)
   STUB_LSP_EXIT_AT_INITIALIZE=code
                               write "stub_lsp: refusing to start (test)" to
                               stderr and exit with `code` instead of
@@ -193,8 +205,10 @@ on any real language server's behavior.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import queue
 import sys
 import threading
@@ -257,6 +271,7 @@ def write_message(stream, msg):
 CLIENT_PROGRESS = threading.Event()
 ERRORED_ONCE: list = []
 SPLIT_ONCE: list = []
+PULL_PREV: dict = {}
 
 
 LAST_CHECKED: dict[str, list] = {}
@@ -351,6 +366,8 @@ def handle_initialize(req):
     }
     if os.environ.get("STUB_LSP_WORKSPACE_SYMBOL", "none") != "none":
         capabilities["workspaceSymbolProvider"] = True
+    if os.environ.get("STUB_LSP_PULL"):
+        capabilities["diagnosticProvider"] = {"interFileDependencies": False, "workspaceDiagnostics": False}
     if os.environ.get("STUB_LSP_FALSE_BUT_SERVES"):
         capabilities["implementationProvider"] = False
         capabilities["renameProvider"] = False
@@ -429,6 +446,17 @@ def apply_sync(method, params):
         DOCS[uri] = {"version": doc.get("version"), "text": doc.get("text", "")}
     elif method == "textDocument/didChange":
         changes = params.get("contentChanges") or []
+        if os.environ.get("STUB_LSP_RANGED_ONLY") and uri in DOCS:
+            for change in changes:
+                if "range" not in change:
+                    log_line("ranged-only: refused a range-less change, kept the old text")
+                    return uri
+                new = apply_ranged(DOCS[uri]["text"], change["range"], change.get("text", ""))
+                if new is None:
+                    log_line("ranged-only: range out of bounds %s, kept the old text" % json.dumps(change["range"]))
+                    return uri
+                DOCS[uri] = {"version": doc.get("version"), "text": new}
+            return uri
         # Full-content changes only: a change with a range would need
         # applying, and pharos never sends one.
         if len(changes) == 1 and "range" not in changes[0] and uri in DOCS:
@@ -437,6 +465,38 @@ def apply_sync(method, params):
         DOCS.pop(uri, None)
         LAST_PUBLISHED.pop(uri, None)
     return uri
+
+
+def offset_of(text, line, character):
+    """The string index of an LSP position (UTF-16 units; lines end at
+    \r\n, \n or \r), or None if the position is outside the text."""
+    starts = [0] + [m.end() for m in re.finditer(r"\r\n|\r|\n", text)]
+    if line >= len(starts):
+        return None
+    start = starts[line]
+    end = starts[line + 1] if line + 1 < len(starts) else len(text)
+    content = re.sub(r"(\r\n|\r|\n)$", "", text[start:end])
+    units = 0
+    for i, ch in enumerate(content):
+        if units == character:
+            return start + i
+        units += 2 if ord(ch) > 0xFFFF else 1
+    return start + len(content) if units == character else None
+
+
+def apply_ranged(text, rng, new_text):
+    a = offset_of(text, rng["start"]["line"], rng["start"]["character"])
+    b = offset_of(text, rng["end"]["line"], rng["end"]["character"])
+    if a is None or b is None or b < a:
+        return None
+    return text[:a] + new_text + text[b:]
+
+
+def log_line(message):
+    path = os.environ.get("STUB_LSP_LOG")
+    if path:
+        with open(path, "a") as f:
+            f.write("%d %s\n" % (os.getpid(), message))
 
 
 def stub_diagnostics(text):
@@ -649,6 +709,14 @@ def handle_hover(req):
     delay = int(os.environ.get("STUB_LSP_HOVER_DELAY_MS", "0")) / 1000.0
     if delay:
         time.sleep(delay)
+    if mode == "sha":
+        # The whole document as the stub holds it, for comparing with the
+        # file on disk byte for byte (#38).
+        params = req.get("params") or {}
+        uri = (params.get("textDocument") or {}).get("uri")
+        text = DOCS.get(uri, {}).get("text", "")
+        return {"jsonrpc": "2.0", "id": req["id"], "result": {
+            "contents": "sha:" + hashlib.sha256(text.encode()).hexdigest()}}
     if mode == "panic":
         # Crash the process — pharos should detect via port DOWN.
         sys.exit(1)
@@ -741,6 +809,9 @@ def main():
         elif method == "exit":
             return
         elif method in ("textDocument/didOpen", "textDocument/didChange"):
+            if method == "textDocument/didChange":
+                cu = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
+                PULL_PREV[cu] = (DOCS.get(cu, {}).get("text", ""), time.time())
             if (method == "textDocument/didOpen" and os.environ.get("STUB_LSP_INDEX_PROGRESS")
                     and not INDEX_PROGRESS_SENT):
                 INDEX_PROGRESS_SENT.append(True)
@@ -820,6 +891,15 @@ def main():
             with WRITE_LOCK:
                 stdout.write(frames)
                 stdout.flush()
+        elif method == "textDocument/diagnostic" and os.environ.get("STUB_LSP_PULL"):
+            du = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
+            text = DOCS.get(du, {}).get("text", "")
+            race = int(os.environ.get("STUB_LSP_PULL_RACE_MS", "0")) / 1000.0
+            prev = PULL_PREV.get(du)
+            if race and prev and time.time() - prev[1] < race:
+                text = prev[0]
+            write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"],
+                                   "result": {"kind": "full", "items": stub_diagnostics(text)}})
         elif method == "textDocument/hover":
             resp = handle_hover(msg)
             write_message(stdout, resp)

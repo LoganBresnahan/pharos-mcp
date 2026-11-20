@@ -161,13 +161,14 @@ fn attempt_single(
     Error(err) -> Error(map_session_error(err))
     Ok(lsp) -> {
       let primary = languages.primary_server(config)
-      let #(server_id, mode, grace_ms) = case primary {
+      let #(server_id, mode, grace_ms, pull_after_change_ms) = case primary {
         Ok(server) -> #(
           server.id,
           server.diagnostics_mode,
           server.save_check_grace_ms,
+          server.pull_after_change_ms,
         )
-        Error(_) -> #("", Push, 0)
+        Error(_) -> #("", Push, 0, 0)
       }
       let result = case mode {
         Push ->
@@ -178,7 +179,14 @@ fn attempt_single(
             grace_ms,
             deadline_ms,
           ))
-        Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
+        Pull ->
+          pull_diagnostics(
+            lsp,
+            file_uri,
+            timeout_ms,
+            server_id,
+            pull_after_change_ms,
+          )
         Tsserver -> {
           let ignored = case primary {
             Ok(server) -> tsserver_diagnostics.ignored_codes(server)
@@ -861,7 +869,25 @@ fn pull_diagnostics(
   lsp: proc.Proc,
   file_uri: String,
   timeout_ms: Int,
+  server_id: String,
+  pull_after_change_ms: Int,
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
+  // #38: a server that can answer a pull arriving right behind a change
+  // about the text before it (ruby-lsp) gets `pull_after_change_ms` from
+  // the document's latest sync first, out of the call's own budget.
+  let paused = case pull_after_change_ms > 0 {
+    False -> 0
+    True ->
+      case diagnostics_cache.sync_age_ms(file_uri, server_id, proc.pid(lsp)) {
+        age if age >= 0 && age < pull_after_change_ms -> {
+          let wait = int.min(pull_after_change_ms - age, timeout_ms / 2)
+          process.sleep(wait)
+          wait
+        }
+        _ -> 0
+      }
+  }
+  let timeout_ms = int.max(timeout_ms - paused, 1)
   let params =
     json.object([
       #("textDocument", json.object([#("uri", json.string(file_uri))])),

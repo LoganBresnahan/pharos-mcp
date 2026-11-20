@@ -4,6 +4,8 @@
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
 import gleeunit/should
 import pharos/lsp/doc_sync.{
   Change, Close, DocState, Gone, NoSave, OnDisk, OpChange, OpClose, OpOpen, Open,
@@ -37,7 +39,7 @@ pub fn a_document_never_sent_is_opened_at_1_test() {
 pub fn the_same_text_sends_nothing_test() {
   let hash = doc_sync.content_hash("fn main() {}")
   doc_sync.plan_subject(
-    Ok(DocState(version: 3, hash:, open: True)),
+    Ok(DocState(version: 3, hash:, open: True, sent_end: #(0, 0))),
     on_disk("fn main() {}"),
   )
   |> should.equal(Unchanged)
@@ -46,7 +48,7 @@ pub fn the_same_text_sends_nothing_test() {
 pub fn changed_text_resyncs_at_the_next_version_test() {
   let sent = doc_sync.content_hash("v1")
   doc_sync.plan_subject(
-    Ok(DocState(version: 3, hash: sent, open: True)),
+    Ok(DocState(version: 3, hash: sent, open: True, sent_end: #(0, 0))),
     on_disk("v2"),
   )
   |> should.equal(Change(4))
@@ -57,7 +59,7 @@ pub fn changed_text_resyncs_at_the_next_version_test() {
 pub fn a_closed_document_reopens_at_the_next_version_test() {
   let hash = doc_sync.content_hash("same")
   doc_sync.plan_subject(
-    Ok(DocState(version: 7, hash:, open: False)),
+    Ok(DocState(version: 7, hash:, open: False, sent_end: #(0, 0))),
     on_disk("same"),
   )
   |> should.equal(Open(8))
@@ -67,7 +69,14 @@ pub fn a_closed_document_reopens_at_the_next_version_test() {
 /// goes back to the disk and answers as for a file that never existed.
 pub fn a_subject_whose_file_is_gone_is_closed_test() {
   doc_sync.plan_subject(
-    Ok(DocState(version: 4, hash: doc_sync.content_hash("old"), open: True)),
+    Ok(
+      DocState(
+        version: 4,
+        hash: doc_sync.content_hash("old"),
+        open: True,
+        sent_end: #(0, 0),
+      ),
+    ),
     Gone,
   )
   |> should.equal(Close)
@@ -78,7 +87,14 @@ pub fn a_subject_whose_file_is_gone_and_not_open_sends_nothing_test() {
   doc_sync.plan_subject(Error(Nil), Gone)
   |> should.equal(Unchanged)
   doc_sync.plan_subject(
-    Ok(DocState(version: 4, hash: doc_sync.content_hash("old"), open: False)),
+    Ok(
+      DocState(
+        version: 4,
+        hash: doc_sync.content_hash("old"),
+        open: False,
+        sent_end: #(0, 0),
+      ),
+    ),
     Gone,
   )
   |> should.equal(Unchanged)
@@ -86,7 +102,12 @@ pub fn a_subject_whose_file_is_gone_and_not_open_sends_nothing_test() {
 
 pub fn another_open_document_that_changed_is_resynced_test() {
   let state =
-    DocState(version: 2, hash: doc_sync.content_hash("old"), open: True)
+    DocState(
+      version: 2,
+      hash: doc_sync.content_hash("old"),
+      open: True,
+      sent_end: #(0, 0),
+    )
   doc_sync.plan_open(state, OnDisk("new", doc_sync.content_hash("new")))
   |> should.equal(Change(3))
   doc_sync.plan_open(state, OnDisk("old", doc_sync.content_hash("old")))
@@ -94,7 +115,12 @@ pub fn another_open_document_that_changed_is_resynced_test() {
 }
 
 pub fn another_open_document_whose_file_is_gone_is_closed_test() {
-  DocState(version: 2, hash: doc_sync.content_hash("old"), open: True)
+  DocState(
+    version: 2,
+    hash: doc_sync.content_hash("old"),
+    open: True,
+    sent_end: #(0, 0),
+  )
   |> doc_sync.plan_open(Gone)
   |> should.equal(Close)
 }
@@ -193,7 +219,7 @@ pub fn a_change_is_one_full_text_event_then_save_test() {
   let bodies =
     doc_sync.notifications(
       full_save,
-      OpChange("file:///a.rs", "rust", 5, "line \"quoted\"\n"),
+      OpChange("file:///a.rs", "rust", 5, "line \"quoted\"\n", None),
     )
   methods(bodies)
   |> should.equal(["textDocument/didChange", "textDocument/didSave"])
@@ -232,7 +258,7 @@ pub fn save_with_text_carries_the_text_test() {
   let assert [_, save] =
     doc_sync.notifications(
       SyncCaps(change: 1, save: SaveWithText, open_close: True),
-      OpChange("file:///a.py", "python", 2, "x = 1\n"),
+      OpChange("file:///a.py", "python", 2, "x = 1\n", None),
     )
   json.parse(
     save,
@@ -244,7 +270,7 @@ pub fn save_with_text_carries_the_text_test() {
 pub fn no_save_means_change_only_test() {
   doc_sync.notifications(
     SyncCaps(change: 1, save: NoSave, open_close: True),
-    OpChange("file:///a.go", "go", 2, "package a\n"),
+    OpChange("file:///a.go", "go", 2, "package a\n", None),
   )
   |> methods
   |> should.equal(["textDocument/didChange"])
@@ -255,7 +281,7 @@ pub fn sync_kind_none_with_open_close_closes_and_reopens_test() {
   let bodies =
     doc_sync.notifications(
       SyncCaps(change: 0, save: NoSave, open_close: True),
-      OpChange("file:///a.x", "x", 4, "new"),
+      OpChange("file:///a.x", "x", 4, "new", None),
     )
   methods(bodies)
   |> should.equal(["textDocument/didClose", "textDocument/didOpen"])
@@ -276,7 +302,7 @@ pub fn sync_kind_none_with_open_close_closes_and_reopens_test() {
 pub fn sync_kind_none_without_open_close_still_closes_and_reopens_test() {
   doc_sync.notifications(
     SyncCaps(change: 0, save: NoSave, open_close: False),
-    OpChange("file:///a.x", "x", 2, "new"),
+    OpChange("file:///a.x", "x", 2, "new", None),
   )
   |> methods
   |> should.equal(["textDocument/didClose", "textDocument/didOpen"])
@@ -296,4 +322,56 @@ pub fn close_sends_did_close_test() {
 fn unwrap(r: Result(a, e)) -> a {
   let assert Ok(v) = r
   v
+}
+
+// #38: where a text ends, in LSP positions (UTF-16, any line break).
+
+pub fn end_of_the_empty_text_test() {
+  doc_sync.end_position("") |> should.equal(#(0, 0))
+}
+
+pub fn end_without_a_final_newline_test() {
+  doc_sync.end_position("ab\ncd") |> should.equal(#(1, 2))
+}
+
+pub fn end_after_a_final_newline_test() {
+  doc_sync.end_position("ab\ncd\n") |> should.equal(#(2, 0))
+}
+
+pub fn end_counts_crlf_as_one_break_test() {
+  doc_sync.end_position("ab\r\ncd\r\n") |> should.equal(#(2, 0))
+  doc_sync.end_position("ab\r\ncd") |> should.equal(#(1, 2))
+}
+
+pub fn end_counts_a_lone_cr_as_a_break_test() {
+  doc_sync.end_position("ab\rcd") |> should.equal(#(1, 2))
+  doc_sync.end_position("ab\r") |> should.equal(#(1, 0))
+  doc_sync.end_position("a\r\rb") |> should.equal(#(2, 1))
+}
+
+pub fn end_counts_utf16_code_units_test() {
+  // é (1 unit), 漢 (1), 😀 (2: a surrogate pair), 🎉 (2).
+  doc_sync.end_position("x\n# é漢😀🎉") |> should.equal(#(1, 8))
+}
+
+pub fn a_ranged_change_covers_the_text_last_sent_test() {
+  let assert [change, ..] =
+    doc_sync.notifications(
+      SyncCaps(change: 2, save: NoSave, open_close: True),
+      OpChange("file:///a.rb", "ruby", 3, "new\n", Some(#(4, 7))),
+    )
+  change
+  |> string.contains(
+    "\"contentChanges\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":4,\"character\":7}},\"text\":\"new\\n\"}]",
+  )
+  |> should.be_true
+}
+
+pub fn without_previous_end_the_change_stays_rangeless_test() {
+  let assert [change, ..] =
+    doc_sync.notifications(
+      SyncCaps(change: 2, save: NoSave, open_close: True),
+      OpChange("file:///a.go", "go", 3, "new", None),
+    )
+  change |> string.contains("\"range\"") |> should.be_false
 }
