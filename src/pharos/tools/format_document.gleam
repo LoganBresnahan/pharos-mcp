@@ -119,7 +119,7 @@ fn json_parse_dynamic(text: String) -> Result(Dynamic, String) {
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {
-    session.NotAFileUri(uri) -> "not a file:// URI: " <> uri
+    session.NotAFileUri(uri) -> "not a local file:// URI: " <> uri
     session.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri

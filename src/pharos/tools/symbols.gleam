@@ -254,6 +254,8 @@ pub type SymbolsError {
   DecodeFailed(reason: String)
   HandleStale(reason: String)
   BodyRangeUnknown(reason: String)
+  /// `scope_uri` names a directory, or a file that doesn't exist (#24).
+  InvalidScope(reason: String)
 }
 
 // -- find_symbol ---------------------------------------------------------
@@ -268,6 +270,7 @@ pub fn find_symbol(
   policy: Disambiguation,
 ) -> Result(Resolution, SymbolsError) {
   let NamePath(parts) = name_path
+  use Nil <- result.try(check_scope(scope_uri))
   case parts {
     [] -> Error(InvalidNamePath("empty path post-construction"))
     [head, ..rest] -> {
@@ -1401,7 +1404,7 @@ fn position_decoder() -> decode.Decoder(Position) {
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {
-    session.NotAFileUri(uri) -> "not a file:// URI: " <> uri
+    session.NotAFileUri(uri) -> "not a local file:// URI: " <> uri
     session.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri
@@ -1426,6 +1429,32 @@ fn describe_session_error(err: session.SessionError) -> String {
   }
 }
 
+/// A `file://` scope must be a file that exists. A directory has no
+/// language to route by and failed as "unsupported file type"; a missing
+/// file reached tsserver and came back as its raw "No Project." stack
+/// trace (#24). Other schemes (`jdt://`) are the session's to judge.
+fn check_scope(scope_uri: String) -> Result(Nil, SymbolsError) {
+  case workspace_root.uri_to_path(scope_uri) {
+    Error(_) -> Ok(Nil)
+    Ok(path) ->
+      case scope_is_directory(path), scope_is_file(path) {
+        True, _ ->
+          Error(InvalidScope(
+            "scope_uri must name a file, not a directory: " <> scope_uri,
+          ))
+        False, False ->
+          Error(InvalidScope("scope file not found: " <> scope_uri))
+        False, True -> Ok(Nil)
+      }
+  }
+}
+
+@external(erlang, "pharos_fs_ffi", "is_directory")
+fn scope_is_directory(path: String) -> Bool
+
+@external(erlang, "pharos_fs_ffi", "is_regular_file")
+fn scope_is_file(path: String) -> Bool
+
 pub fn describe_symbols_error(err: SymbolsError) -> String {
   case err {
     InvalidNamePath(reason) -> "invalid name_path: " <> reason
@@ -1435,6 +1464,7 @@ pub fn describe_symbols_error(err: SymbolsError) -> String {
     DecodeFailed(reason) -> "decode failed: " <> reason
     HandleStale(reason) -> "stale handle: " <> reason
     BodyRangeUnknown(reason) -> "body range unknown: " <> reason
+    InvalidScope(reason) -> "invalid scope_uri: " <> reason
   }
 }
 

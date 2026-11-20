@@ -2959,7 +2959,9 @@ fn decode_workspace_symbols_arguments(
 
 pub fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
   case err {
-    diagnostics.NotAFileUri(uri) -> "uri must start with file:// — got: " <> uri
+    diagnostics.NotAFileUri(uri) ->
+      "uri must be a local file:// URI (file:///path or file://localhost/path) — got: "
+      <> uri
     diagnostics.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     diagnostics.SpawnFailed(reason) -> "LSP spawn failed: " <> reason
@@ -3130,7 +3132,18 @@ fn find_symbol_tool_definition() -> Json {
           "properties",
           json.object([
             #("name_path", json.object([#("type", json.string("string"))])),
-            #("scope_uri", json.object([#("type", json.string("string"))])),
+            #(
+              "scope_uri",
+              json.object([
+                #("type", json.string("string")),
+                #(
+                  "description",
+                  json.string(
+                    "file:// URI of a file in the workspace to search (not a directory); matches in it come first.",
+                  ),
+                ),
+              ]),
+            ),
             #(
               "policy",
               json.object([

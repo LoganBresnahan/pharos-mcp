@@ -946,7 +946,9 @@ fn prepare_all_with_selector(
 /// internal fallback used by `prepare_all_for_method`.
 fn describe_session_error(err: SessionError) -> String {
   case err {
-    NotAFileUri(uri) -> "uri must start with file:// — got: " <> uri
+    NotAFileUri(uri) ->
+      "uri must be a local file:// URI (file:///path or file://localhost/path) — got: "
+      <> uri
     WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     SpawnFailed(reason) -> "LSP spawn failed: " <> reason

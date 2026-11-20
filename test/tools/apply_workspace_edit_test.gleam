@@ -159,7 +159,7 @@ pub fn handle_rejects_non_file_uri_test() {
   let assert Error(apply_workspace_edit.InvalidUris(reason)) =
     apply_workspace_edit.handle(edit, True)
   case reason {
-    "non-file://" <> _ -> Nil
+    "only local file:// URIs can be applied: " <> _ -> Nil
     _ -> panic as { "unexpected reason: " <> reason }
   }
 }

@@ -40,16 +40,42 @@ pub fn read_file(path: String) -> Result(BitArray, String)
 /// percent-escapes decoded (`%20` is a space). Text that isn't a valid
 /// escape (a raw `%` from a client that didn't encode) is kept as it is.
 /// Does not validate the path exists.
+///
+/// The authority must be empty (`file:///path`) or `localhost`
+/// (`file://localhost/path`, RFC 8089). Any other host names a file on
+/// another machine, and is refused as not a local file URI.
 pub fn uri_to_path(uri: String) -> Result(String, DiscoveryError) {
   case string.starts_with(uri, "file://") {
     True -> {
-      let raw = string.drop_start(uri, 7)
-      Ok(case gleam_uri.percent_decode(raw) {
-        Ok(decoded) -> decoded
-        Error(Nil) -> raw
-      })
+      let rest = string.drop_start(uri, 7)
+      case local_path(rest) {
+        Ok(raw) ->
+          Ok(case gleam_uri.percent_decode(raw) {
+            Ok(decoded) -> decoded
+            Error(Nil) -> raw
+          })
+        Error(Nil) -> Error(NotAFileUri(uri))
+      }
     }
     False -> Error(NotAFileUri(uri))
+  }
+}
+
+/// The path part of a file URI after `file://`: itself when it starts
+/// with `/` (an empty authority), the rest after a `localhost` authority
+/// (in any case), else Error.
+fn local_path(rest: String) -> Result(String, Nil) {
+  case rest {
+    "/" <> _ -> Ok(rest)
+    _ ->
+      case string.split_once(rest, "/") {
+        Ok(#(host, path)) ->
+          case string.lowercase(host) == "localhost" {
+            True -> Ok("/" <> path)
+            False -> Error(Nil)
+          }
+        Error(Nil) -> Error(Nil)
+      }
   }
 }
 

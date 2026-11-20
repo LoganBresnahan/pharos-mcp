@@ -146,7 +146,7 @@ fn describe_unresolvable_uris(bad: List(String)) -> String {
   }
   let other_msg = case other {
     [] -> ""
-    _ -> "non-file:// URIs cannot be applied: " <> string.join(other, ", ")
+    _ -> "only local file:// URIs can be applied: " <> string.join(other, ", ")
   }
   case virtual_msg, other_msg {
     "", o -> o
@@ -157,7 +157,7 @@ fn describe_unresolvable_uris(bad: List(String)) -> String {
 
 fn run_one(file: FileEdits, dry_run: Bool) -> ApplyOutcome {
   case workspace_root.uri_to_path(file.uri) {
-    Error(_) -> Failed(file.uri, "not a file:// URI")
+    Error(_) -> Failed(file.uri, "not a local file:// URI")
     Ok(path) -> {
       let ffi_edits = list.map(file.edits, edit_to_ffi)
       case apply_to_file_ffi(path, ffi_edits, dry_run) {

@@ -161,3 +161,24 @@ pub fn discover_from_uri_with_escaped_characters_test() {
   let _ = shell("rm -rf /tmp/pharos_workspace_root_test_16")
   Nil
 }
+
+// -- file://localhost (RFC 8089) --------------------------------------------
+
+pub fn uri_to_path_accepts_a_localhost_authority_test() {
+  workspace_root.uri_to_path("file://localhost/tmp/a%20b/c.ts")
+  |> should.equal(Ok("/tmp/a b/c.ts"))
+  workspace_root.uri_to_path("file://LocalHost/tmp/c.ts")
+  |> should.equal(Ok("/tmp/c.ts"))
+  workspace_root.canonical_uri("file://localhost/tmp/a%20b/c.ts")
+  |> should.equal("file:///tmp/a%20b/c.ts")
+}
+
+pub fn uri_to_path_refuses_another_host_test() {
+  workspace_root.uri_to_path("file://server/share/c.ts")
+  |> should.equal(Error(workspace_root.NotAFileUri("file://server/share/c.ts")))
+  // A relative path reads as a host, per the RFC.
+  workspace_root.uri_to_path("file://src/a.ts")
+  |> should.equal(Error(workspace_root.NotAFileUri("file://src/a.ts")))
+  workspace_root.uri_to_path("file://")
+  |> should.equal(Error(workspace_root.NotAFileUri("file://")))
+}

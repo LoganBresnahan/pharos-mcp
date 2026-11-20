@@ -1230,6 +1230,35 @@ def t_non_ascii_c_locale(sb):
     spawn path decoded UTF-8 anyway, so a server under a non-ASCII path
     wasn't found. Conversions now follow file:native_name_encoding()."""
     non_ascii_daemon(sb, {"LC_ALL": "C", "LANG": "C"})
+def t_find_symbol_bad_scope(sb):
+    """#24: a scope_uri naming a directory failed as "unsupported file
+    type", and one naming a missing file reached tsserver and came back as
+    its raw "No Project." stack trace. Both now say what's wrong with the
+    scope, as a tool error."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "tsserver", "STUB_LSP_TSSERVER": "answer"})
+    a.initialize()
+    stub_file(sb, "a.stub", "function helper() {\n  return 1;\n}\n")
+
+    def ask(id_, scope):
+        r = a.call(id_, "tools/call", {"name": "find_symbol",
+                                       "arguments": {"name_path": "helper", "scope_uri": scope}}, 60)
+        return r["result"]["content"][0]["text"], r["result"].get("isError")
+
+    text, err = ask(10, "file://" + sb.fixture)
+    check(err is True and "not a directory" in text and "unsupported file type" not in text,
+          "directory scope: %r %s" % (err, text))
+    text, err = ask(11, "file://" + os.path.join(sb.fixture, "nope.stub"))
+    check(err is True and "scope file not found" in text and "No Project" not in text,
+          "missing scope: %r %s" % (err, text))
+    text, err = ask(12, "file://" + os.path.join(sb.fixture, "a.stub"))
+    check(not err and '"status":"single"' in text, "a file scope still answers: %r %s" % (err, text))
+    # RFC 8089's localhost authority is the same local file; another host
+    # is refused as not local.
+    text, err = ask(13, "file://localhost" + os.path.join(sb.fixture, "a.stub"))
+    check(not err and '"status":"single"' in text, "file://localhost scope: %r %s" % (err, text))
+    text, err = ask(14, "file://elsewhere" + os.path.join(sb.fixture, "a.stub"))
+    check(err is True and "not a local file:// URI" in text, "a remote host: %r %s" % (err, text))
 
 
 def t_resync_open_cap(sb):
@@ -1293,6 +1322,7 @@ SCENARIOS = [
     ("uri_escapes_cli", t_uri_escapes_cli),
     ("apply_edit_failure_is_an_error", t_apply_edit_failure_is_an_error),
     ("find_symbol_cold_session", t_find_symbol_cold_session),
+    ("find_symbol_bad_scope", t_find_symbol_bad_scope),
 ]
 
 
