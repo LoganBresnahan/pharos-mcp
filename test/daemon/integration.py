@@ -1097,6 +1097,22 @@ def t_apply_edit_failure_is_an_error(sb):
     text, err = apply(12, [ok])
     check(err is False and text.startswith("Applied edits."), "all ok: %r %s" % (err, text))
 
+def t_find_symbol_cold_session(sb):
+    """#21: on a fresh session, find_symbol asks workspace/symbol before
+    anything is open. tsserver answers that only from loaded projects and
+    loads one when a file is opened, so it threw "No Project."; and right
+    after the didOpen its navto still sees only the opened file. find_symbol
+    now opens scope_uri and, on a tsserver-mode server, asks projectInfo
+    first. The scope (b) only calls `helper`; a defines it."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "tsserver", "STUB_LSP_TSSERVER": "answer",
+                  "STUB_LSP_TSSERVER_PROJECT": os.path.join(sb.fixture, "tsconfig.json")})
+    a.initialize()
+    stub_file(sb, "a.stub", "function helper() {\n  return 1;\n}\n")
+    uri = stub_file(sb, "b.stub", "helper();\n")
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check("No Project" not in out and '"status":"single"' in out and 'a.stub' in out,
+          "first find_symbol on a cold session: %s" % out[-400:])
 
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
@@ -1154,6 +1170,7 @@ SCENARIOS = [
     ("uri_escapes_tsserver", t_uri_escapes_tsserver),
     ("uri_escapes_cli", t_uri_escapes_cli),
     ("apply_edit_failure_is_an_error", t_apply_edit_failure_is_an_error),
+    ("find_symbol_cold_session", t_find_symbol_cold_session),
 ]
 
 

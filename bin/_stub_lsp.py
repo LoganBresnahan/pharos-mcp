@@ -89,6 +89,20 @@ URIs escaped differently (#16):
                               tsserver requests find the document by its
                               decoded path and name files by plain path,
                               and a didOpen log line ends " uri=<uri>"
+Symbols (#21):
+
+  STUB_LSP_WORKSPACE_SYMBOL=  unset: no workspace/symbol. "tsserver":
+                              advertise it and answer the way tsserver's
+                              navto does, from loaded projects only: an
+                              error ("No Project.") while no document is
+                              open; then, until a tsserver projectInfo
+                              request has loaded the project, every
+                              `function <query>` line in the open
+                              documents only (tsserver's first navto after
+                              a didOpen), and after it, in every file of
+                              the open documents' folders. documentSymbol then
+                              answers each `function <name>` line of a
+                              document (open, or read from disk)
 
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
@@ -174,6 +188,8 @@ def handle_initialize(req):
         "hoverProvider": True,
         "documentSymbolProvider": True,
     }
+    if os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
+        capabilities["workspaceSymbolProvider"] = True
     kind = os.environ.get("STUB_LSP_SYNC_KIND", "1")
     save = os.environ.get("STUB_LSP_SYNC_SAVE")
     if kind != "omit":
@@ -300,6 +316,7 @@ def handle_tsserver_request(req):
                 "error": {"code": 1, "message": "stub_lsp: tsserver request failed"}}
     request, file_uri = args[0], (args[1] or {}).get("file")
     if request == "projectInfo":
+        PROJECT_LOADED.set()
         project = os.environ.get("STUB_LSP_TSSERVER_PROJECT", "")
         if not project:
             return {"jsonrpc": "2.0", "id": req["id"],
@@ -354,6 +371,62 @@ def maybe_publish(stdout, uri):
     write_message(stdout, {"jsonrpc": "2.0",
                            "method": "textDocument/publishDiagnostics",
                            "params": params})
+
+
+def function_lines(text):
+    """(line, name, line text) for each `function <name>` line."""
+    out = []
+    for i, line in enumerate(text.split("\n")):
+        idx = line.find("function ")
+        if idx >= 0:
+            name = line[idx + len("function "):].split("(")[0].strip()
+            if name:
+                out.append((i, name, line))
+    return out
+
+
+PROJECT_LOADED = threading.Event()
+
+
+def handle_workspace_symbol(req):
+    if not DOCS:
+        return {"jsonrpc": "2.0", "id": req["id"],
+                "error": {"code": 1, "message": "<syntax> TypeScript Server Error (stub)\nNo Project."}}
+    query = (req.get("params") or {}).get("query", "")
+    texts = {uri: doc["text"] for uri, doc in DOCS.items()}
+    if PROJECT_LOADED.is_set():
+        for folder in {os.path.dirname(uri_path(u)) for u in DOCS}:
+            for name in sorted(os.listdir(folder)):
+                path = os.path.join(folder, name)
+                uri = "file://" + path
+                if uri not in texts and os.path.isfile(path):
+                    try:
+                        texts[uri] = open(path).read()
+                    except (OSError, UnicodeDecodeError):
+                        pass
+    result = []
+    for uri, text in texts.items():
+        for i, name, line in function_lines(text):
+            if name == query:
+                rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
+                result.append({"name": name, "kind": 12, "location": {"uri": uri, "range": rng}})
+    return {"jsonrpc": "2.0", "id": req["id"], "result": result}
+
+
+def handle_document_symbol(req):
+    uri = ((req.get("params") or {}).get("textDocument") or {}).get("uri", "")
+    doc = DOCS.get(uri)
+    text = doc["text"] if doc else None
+    if text is None:
+        try:
+            text = open(uri_path(uri)).read()
+        except OSError:
+            text = ""
+    result = []
+    for i, name, line in function_lines(text):
+        rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
+        result.append({"name": name, "kind": 12, "range": rng, "selectionRange": rng, "children": []})
+    return {"jsonrpc": "2.0", "id": req["id"], "result": result}
 
 
 def handle_hover(req):
@@ -465,6 +538,10 @@ def main():
             apply_sync(method, msg.get("params") or {})
         elif method == "textDocument/didSave":
             continue
+        elif method == "workspace/symbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
+            write_message(stdout, handle_workspace_symbol(msg))
+        elif method == "textDocument/documentSymbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
+            write_message(stdout, handle_document_symbol(msg))
         elif method == "textDocument/hover":
             resp = handle_hover(msg)
             write_message(stdout, resp)

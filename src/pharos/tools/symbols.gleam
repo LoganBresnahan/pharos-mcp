@@ -33,8 +33,10 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import pharos/lsp/capabilities
+import pharos/lsp/languages
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
+import pharos/lsp/tsserver_diagnostics
 import pharos/tools/session
 import pharos/tools/tool_helpers
 import pharos/workspace_root
@@ -1116,6 +1118,10 @@ type ReferenceLocation {
   ReferenceLocation(uri: String, range: Range)
 }
 
+/// The most a find_symbol waits for tsserver to load `scope_uri`'s
+/// project before asking workspace/symbol (#21).
+const project_load_timeout_ms = 5000
+
 fn workspace_symbol_query(
   pool: Pool,
   scope_uri: String,
@@ -1123,15 +1129,58 @@ fn workspace_symbol_query(
   timeout_ms: Int,
 ) -> Result(List(WorkspaceSymbolRow), SymbolsError) {
   let params = json.object([#("query", json.string(query))])
-  case
-    session.with_workspace_session_and_retry(pool, scope_uri, fn(lsp) {
+  let ask = fn(load_project: Bool) {
+    fn(lsp) {
+      case load_project {
+        // Right after the didOpen, navto sees only the opened file's
+        // program (an import of `helper`, not its definition); 3 s later,
+        // or after a projectInfo, the whole project. projectInfo loads it
+        // synchronously, so ask it first; its answer doesn't matter (#21).
+        True -> {
+          let _ =
+            proc.request(
+              lsp,
+              "workspace/executeCommand",
+              tsserver_diagnostics.project_params(scope_uri),
+              int.min(timeout_ms, project_load_timeout_ms),
+            )
+          Nil
+        }
+        False -> Nil
+      }
       tool_helpers.with_capability_gate(lsp, "workspace/symbol", fn() {
         session.request_with_content_modified_retry(fn() {
           proc.request(lsp, "workspace/symbol", params, timeout_ms)
         })
       })
-    })
-  {
+    }
+  }
+  // Open `scope_uri` first when it is a file: tsserver answers
+  // workspace/symbol (navto) from the projects it has loaded, and loads
+  // one only when a file in it is opened, so on a cold session it threw
+  // "No Project." (#21). A scope that names no language goes to the
+  // workspace session as before, which opens nothing (a directory scope
+  // fails there with "unsupported file type", as it did before #21:
+  // #24).
+  let asked = case session.config_for_uri(scope_uri) {
+    Ok(config) -> {
+      let load_project = case
+        languages.primary_server_for_method(config, "workspace/symbol")
+      {
+        Ok(server) -> server.diagnostics_mode == languages.Tsserver
+        Error(_) -> False
+      }
+      session.with_session_and_retry_for_method(
+        pool,
+        scope_uri,
+        "workspace/symbol",
+        ask(load_project),
+      )
+    }
+    Error(_) ->
+      session.with_workspace_session_and_retry(pool, scope_uri, ask(False))
+  }
+  case asked {
     Ok(raw) ->
       decode.run(raw, decode.list(workspace_symbol_decoder()))
       |> result.map_error(fn(_) {
