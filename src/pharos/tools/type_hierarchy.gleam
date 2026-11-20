@@ -27,6 +27,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
+import pharos/workspace_root
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -129,7 +130,7 @@ fn call_with_item(
 }
 
 fn item_uri_decoder() -> decode.Decoder(String) {
-  decode.field("uri", decode.string, decode.success)
+  decode.field("uri", workspace_root.uri_decoder(), decode.success)
 }
 
 fn describe_session_error(err: session.SessionError) -> String {

@@ -10,8 +10,11 @@
 //// `pharos_fs_ffi` does the actual disk checks.
 
 import gleam/bit_array
+import gleam/dynamic/decode
+import gleam/int
 import gleam/list
 import gleam/string
+import gleam/uri as gleam_uri
 
 pub type DiscoveryError {
   /// Caller passed a URI that did not start with `file://`.
@@ -33,20 +36,76 @@ fn dirname(path: String) -> String
 @external(erlang, "pharos_fs_ffi", "read_file")
 pub fn read_file(path: String) -> Result(BitArray, String)
 
-/// Strip `file://` from a URI to get a local filesystem path. Does
-/// not validate the path exists.
+/// The local filesystem path of a `file://` URI: `file://` stripped and
+/// percent-escapes decoded (`%20` is a space). Text that isn't a valid
+/// escape (a raw `%` from a client that didn't encode) is kept as it is.
+/// Does not validate the path exists.
 pub fn uri_to_path(uri: String) -> Result(String, DiscoveryError) {
   case string.starts_with(uri, "file://") {
-    True -> Ok(string.drop_start(uri, 7))
+    True -> {
+      let raw = string.drop_start(uri, 7)
+      Ok(case gleam_uri.percent_decode(raw) {
+        Ok(decoded) -> decoded
+        Error(Nil) -> raw
+      })
+    }
     False -> Error(NotAFileUri(uri))
   }
 }
 
-/// Encode a filesystem path as a `file://` URI. Inverse of
-/// `uri_to_path` for absolute paths. Does not URL-encode special
-/// characters — sufficient for the paths LSPs actually deal with.
+/// Encode an absolute filesystem path as a `file://` URI, the inverse of
+/// `uri_to_path`. Every byte but the unreserved characters
+/// (`A-Z a-z 0-9 - . _ ~`) and `/` is percent-encoded, as vscode-uri
+/// (typescript-language-server's) does for them: a space is `%20`, `#`
+/// `%23`, `%` `%25`, and a non-ASCII character its UTF-8 bytes (#16).
 pub fn path_to_uri(path: String) -> String {
-  "file://" <> path
+  "file://" <> encode_path(<<path:utf8>>, "")
+}
+
+/// One spelling for a `file://` URI however its client or server
+/// escaped it: decoded, then encoded as `path_to_uri` does. Anything
+/// else (a `jdt://` URI) is returned as it is. Keys that must match
+/// across spellings use it: the tools' `uri` arguments and the
+/// diagnostics cache, whose publishes come from servers that escape
+/// differently (#16).
+pub fn canonical_uri(uri: String) -> String {
+  case uri_to_path(uri) {
+    Ok(path) -> path_to_uri(path)
+    Error(_) -> uri
+  }
+}
+
+/// A decoder for a tool's `uri` argument, canonical as `canonical_uri`.
+pub fn uri_decoder() -> decode.Decoder(String) {
+  decode.string |> decode.map(canonical_uri)
+}
+
+fn encode_path(bytes: BitArray, acc: String) -> String {
+  case bytes {
+    <<>> -> acc
+    <<b:int, rest:bits>> -> {
+      let piece = case is_kept(b) {
+        True -> {
+          let assert Ok(c) = bit_array.to_string(<<b:int>>)
+          c
+        }
+        False -> "%" <> string.pad_start(int.to_base16(b), 2, "0")
+      }
+      encode_path(rest, acc <> piece)
+    }
+    _ -> acc
+  }
+}
+
+fn is_kept(b: Int) -> Bool {
+  { b >= 0x41 && b <= 0x5A }
+  || { b >= 0x61 && b <= 0x7A }
+  || { b >= 0x30 && b <= 0x39 }
+  || b == 0x2D
+  || b == 0x2E
+  || b == 0x5F
+  || b == 0x7E
+  || b == 0x2F
 }
 
 /// Ascend the directory tree from a starting directory until a

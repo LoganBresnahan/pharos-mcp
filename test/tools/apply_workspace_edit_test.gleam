@@ -13,6 +13,7 @@ import gleam/dynamic/decode
 import gleam/json
 import gleeunit/should
 import pharos/tools/apply_workspace_edit
+import pharos/workspace_root
 
 @external(erlang, "pharos_fs_ffi", "shell")
 fn shell(cmd: String) -> String
@@ -179,3 +180,33 @@ pub fn handle_decodes_document_changes_form_test() {
 
   teardown()
 }
+
+/// #16: an edit to a file whose path has a space, `#`, `%` and `é`, named
+/// by its escaped URI (as servers send it), lands on that file.
+pub fn handle_applies_to_an_escaped_non_ascii_path_test() {
+  let _ = setup()
+  let dir = tmp_root <> "/my proj #1 100% é"
+  let path = dir <> "/c.txt"
+  let assert Ok(Nil) = mkdir_p(dir)
+  let assert Ok(Nil) = atomic_write_text(path, "hello world")
+
+  let edit =
+    parse_dynamic(
+      "{\"changes\":{\""
+      <> workspace_root.path_to_uri(path)
+      <> "\":[{\"range\":{\"start\":{\"line\":0,\"character\":6},\"end\":{\"line\":0,\"character\":11}},\"newText\":\"WORLD\"}]}}",
+    )
+  let assert Ok(_summary) = apply_workspace_edit.handle(edit, False)
+
+  let assert Ok(bits) = read_file(path)
+  bits
+  |> should.equal(<<"hello WORLD":utf8>>)
+
+  teardown()
+}
+
+@external(erlang, "pharos_fs_ffi", "mkdir_p")
+fn mkdir_p(path: String) -> Result(Nil, String)
+
+@external(erlang, "pharos_fs_ffi", "atomic_write_text")
+fn atomic_write_text(path: String, text: String) -> Result(Nil, String)

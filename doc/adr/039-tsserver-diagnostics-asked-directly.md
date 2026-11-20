@@ -89,7 +89,8 @@ The pure part (request params, response mapping, ignored codes) is
   the shape of tsserver's diagnostics. If either changes, the requests fail and pharos falls
   back to the push cache, with ADR-038's F4 back as a limit. The fallback is logged.
 - A path with characters a URI must escape gets a `relatedInformation` URI that is
-  `file://` plus the raw path. typescript-language-server would percent-encode it.
+  `file://` plus the raw path. typescript-language-server would percent-encode it. (Fixed
+  by #16: `path_to_uri` now percent-encodes as vscode-uri does.)
 - The mode is set per server, not per language: a pharos.toml can turn it on for another
   server that forwards `typescript.tsserverRequest` (vtsls, say), or turn it off.
 

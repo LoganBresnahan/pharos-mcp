@@ -193,6 +193,21 @@ def t_a_new_file_in_a_new_directory_through_a_linked_root():
     r.done()
 
 
+def t_a_path_with_escapes_reaches_pharos_intact():
+    """#16: a path holding a space, `#`, a valid-looking escape (`%25`) and
+    `\u00e9` goes to `pharos diagnostics` as the path itself (the CLI
+    escapes it for the daemon), and its error is reported under it."""
+    rel = "a b#c%25d-\u00e9/x.ts"
+    r = Run()
+    r.write(rel, "x\n")
+    r.event("UserPromptSubmit")
+    a, _ = r.edit(rel, "x\nERROR 2304 broken\n")
+    check(a.get("text") == HEAD_EDIT + "\n" + rel + ":2:1 TS2304 broken", a)
+    with open(r.log) as fh:
+        calls = fh.read().splitlines()
+    check(any(c.split(" ", 1)[0] == rel or c == rel for c in calls), calls)
+    r.done()
+
 def t_unsure_is_silent_and_logged():
     r = Run()
     r.write("a.ts", "x\n")

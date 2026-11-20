@@ -128,7 +128,7 @@ pub fn run(release: &Release, args: &[OsString]) -> ExitCode {
     let mut results = Vec::new();
     for file in &opts.files {
         let path = absolute(&cwd, file);
-        let uri = format!("file://{}", path.display());
+        let uri = file_uri(&path);
         match session.get_diagnostics(&uri, opts.timeout_ms) {
             Ok(reply) => results.push(classify(file, &path, &uri, &reply)),
             Err(e) => {
@@ -167,6 +167,23 @@ pub fn run(release: &Release, args: &[OsString]) -> ExitCode {
 /// `file` made absolute against `cwd`, with `.` and `..` resolved
 /// lexically. Symlinks are kept as the caller wrote them, like the
 /// paths an agent's tools pass.
+/// The `file://` URI of an absolute path, percent-encoded as the daemon's
+/// `workspace_root.path_to_uri` does: every byte but `A-Z a-z 0-9 - . _ ~ /`.
+/// The daemon decodes every `uri` argument, so a raw path holding a valid
+/// escape (`100%25`, `a%20b`) would name another file (#16).
+pub fn file_uri(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut out = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
 pub fn absolute(cwd: &Path, file: &str) -> PathBuf {
     let joined = if Path::new(file).is_absolute() {
         PathBuf::from(file)
@@ -454,6 +471,19 @@ mod tests {
         assert!(parse_args(&s(&["--json"])).is_err());
         assert!(parse_args(&s(&["--timeout-ms", "0", "a"])).is_err());
         assert!(parse_args(&s(&["--nope", "a"])).is_err());
+    }
+
+    #[test]
+    fn file_uris_are_escaped_as_the_daemon_escapes() {
+        assert_eq!(
+            file_uri(Path::new("/w/proj/src/a.ts")),
+            "file:///w/proj/src/a.ts"
+        );
+        assert_eq!(
+            file_uri(Path::new("/w/a b#c%25d-\u{e9}/x+y.ts")),
+            "file:///w/a%20b%23c%2525d-%C3%A9/x%2By.ts"
+        );
+        assert_eq!(file_uri(Path::new("/w/a-b_c.d~e")), "file:///w/a-b_c.d~e");
     }
 
     #[test]

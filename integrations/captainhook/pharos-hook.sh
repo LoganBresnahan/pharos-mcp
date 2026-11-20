@@ -275,6 +275,22 @@ forget_turn() {
 # The files touched this turn, one per line.
 touched_files() { get touched.json '{}' | jq -r 'keys[]'; }
 
+# with_lines <lines> <cmd…>: run cmd with each line of <lines> as one more
+# argument. Split on newlines only, with globbing off, so a path holding a
+# space or a `*` stays one argument (pharos-mcp#16).
+with_lines() {
+  _lines=$1; shift
+  _ifs=$IFS
+  IFS='
+'
+  set -f
+  # shellcheck disable=SC2086 # split on newlines, globbing off
+  set -- "$@" $_lines
+  IFS=$_ifs
+  set +f
+  "$@"
+}
+
 # diff: {new, fresh, skipped} for $DIR/current.json against each touched
 # file's baseline. Out-of-scope files are skipped silently; a file with an
 # unknown baseline, or that this check didn't know, is `skipped`.
@@ -344,8 +360,7 @@ case $EVENT in
     lock || { unsure failed "timeout-lock"; noop; exit 0; }
     files=$(touched_files)
     if [ -z "$files" ]; then unlock; noop; exit 0; fi
-    # shellcheck disable=SC2086 # one rel path per line, no spaces (pharos-mcp#16)
-    fresh_check $files || { unlock; noop; exit 0; }
+    with_lines "$files" fresh_check || { unlock; noop; exit 0; }
     d=$(diff_errors)
     fresh=$(printf '%s' "$d" | jq -c '.fresh')
     shown=$(printf '%s' "$fresh" | jq -c --argjson cap "$CAP" '.[0:$cap]')
@@ -368,9 +383,8 @@ case $EVENT in
     files=$(touched_files)
     # Nothing touched this turn: nothing for arm 3 to check.
     if [ -z "$files" ]; then forget_turn; unlock; noop; exit 0; fi
-    # shellcheck disable=SC2086
-    if reusable 0 $files; then jq -c '.files' "$DIR/snap.json" > "$DIR/current.json"
-    else fresh_check $files || { forget_turn; unlock; noop; exit 0; }; fi
+    if with_lines "$files" reusable 0; then jq -c '.files' "$DIR/snap.json" > "$DIR/current.json"
+    else with_lines "$files" fresh_check || { forget_turn; unlock; noop; exit 0; }; fi
     d=$(diff_errors)
     new=$(printf '%s' "$d" | jq -c '.new')
     [ "$(printf '%s' "$d" | jq '.skipped | length')" -eq 0 ] || unsure no-baseline "files=$(printf '%s' "$d" | jq -r '.skipped | join(",")')"

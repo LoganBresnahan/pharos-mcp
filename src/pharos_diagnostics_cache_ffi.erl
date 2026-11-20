@@ -80,14 +80,16 @@ now_ms() ->
     erlang:monotonic_time(millisecond).
 
 %% Record a publish read by the calling proc.
-put(Uri, ServerId, Term) when is_binary(Uri), is_binary(ServerId) ->
+put(Uri0, ServerId, Term) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
     true = ets:insert(?TABLE, {{Uri, ServerId, self()}, seq(), Term}),
     nil.
 
 %% A publish carrying a `version` lower than the version this proc last
 %% synced admits to describing text the server has already replaced:
 %% drop it. `Version` is `{some, V}` or `none` (Gleam's Option).
-put_publish(Uri, ServerId, Version, Term) when is_binary(Uri), is_binary(ServerId) ->
+put_publish(Uri0, ServerId, Version, Term) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
     Stale = case {Version, ets:lookup(?SYNCED, {Uri, ServerId, self()})} of
         {{some, V}, [{_, _, Synced}]} when is_integer(V), is_integer(Synced) -> V < Synced;
         _ -> false
@@ -98,32 +100,37 @@ put_publish(Uri, ServerId, Version, Term) when is_binary(Uri), is_binary(ServerI
     end.
 
 %% Any proc's entry for (Uri, ServerId): for tests and introspection.
-get(Uri, ServerId) when is_binary(Uri), is_binary(ServerId) ->
+get(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
     case ets:match_object(?TABLE, {{Uri, ServerId, '_'}, '_', '_'}) of
         [{_, _, Term} | _] -> {ok, Term};
         [] -> {error, nil}
     end.
 
 %% Every cached entry for `Uri`, as `{ServerId, Term}`.
-get_all_for_uri(Uri) when is_binary(Uri) ->
+get_all_for_uri(Uri0) when is_binary(Uri0) ->
+    Uri = key(Uri0),
     Rows = ets:match_object(?TABLE, {{Uri, '_', '_'}, '_', '_'}),
     [{ServerId, Term} || {{_, ServerId, _}, _, Term} <- Rows].
 
-drop(Uri, ServerId) when is_binary(Uri), is_binary(ServerId) ->
+drop(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
     ets:match_delete(?TABLE, {{Uri, ServerId, '_'}, '_', '_'}),
     nil.
 
 %% Forget everything about a URI regardless of server or proc: its
 %% entries, its synced stamps and its expectations.
-drop_uri(Uri) when is_binary(Uri) ->
+drop_uri(Uri0) when is_binary(Uri0) ->
+    Uri = key(Uri0),
     ets:match_delete(?TABLE, {{Uri, '_', '_'}, '_', '_'}),
     ets:match_delete(?SYNCED, {{Uri, '_', '_'}, '_', '_'}),
     ets:match_delete(?EXPECTED, {{Uri, '_', '_'}, '_'}),
     nil.
 
 %% Called by the proc, right after writing a sync.
-mark_synced(Uri, ServerId, Version)
-        when is_binary(Uri), is_binary(ServerId), is_integer(Version) ->
+mark_synced(Uri0, ServerId, Version)
+        when is_binary(Uri0), is_binary(ServerId), is_integer(Version) ->
+    Uri = key(Uri0),
     true = ets:insert(?SYNCED, {{Uri, ServerId, self()}, seq(), Version}),
     nil.
 
@@ -141,7 +148,8 @@ expect_batch(Pid, N) when is_integer(N) ->
     nil.
 
 %% Called by the proc when a sync's write failed.
-mark_failed(Uri, ServerId) when is_binary(Uri), is_binary(ServerId) ->
+mark_failed(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
     true = ets:insert(?SYNCED, {{Uri, ServerId, self()}, seq(), failed}),
     nil.
 
@@ -149,14 +157,16 @@ mark_failed(Uri, ServerId) when is_binary(Uri), is_binary(ServerId) ->
 %% Kept as a stamp (not deleted) so a caller still waiting on an earlier
 %% sync of the document, which another session's LRU just closed, stops
 %% waiting.
-mark_closed(Uri, ServerId) when is_binary(Uri), is_binary(ServerId) ->
+mark_closed(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
     true = ets:insert(?SYNCED, {{Uri, ServerId, self()}, seq(), closed}),
     nil.
 
 %% reached | pending | failed: has `Pid` written the document's sync at
 %% `Version` (or later), or closed it since?
-stamp_status(Uri, ServerId, Version, Pid)
-        when is_binary(Uri), is_binary(ServerId), is_integer(Version) ->
+stamp_status(Uri0, ServerId, Version, Pid)
+        when is_binary(Uri0), is_binary(ServerId), is_integer(Version) ->
+    Uri = key(Uri0),
     case ets:lookup(?SYNCED, {Uri, ServerId, Pid}) of
         [{_, _, failed}] -> failed;
         [{_, _, closed}] -> reached;
@@ -167,8 +177,9 @@ stamp_status(Uri, ServerId, Version, Pid)
 %% reached | pending | failed: has `Pid` written the close of a document
 %% last synced at `Version`, or reopened it since (at a later version,
 %% which it writes after the close)?
-close_status(Uri, ServerId, Version, Pid)
-        when is_binary(Uri), is_binary(ServerId), is_integer(Version) ->
+close_status(Uri0, ServerId, Version, Pid)
+        when is_binary(Uri0), is_binary(ServerId), is_integer(Version) ->
+    Uri = key(Uri0),
     case ets:lookup(?SYNCED, {Uri, ServerId, Pid}) of
         [{_, _, failed}] -> failed;
         [{_, _, closed}] -> reached;
@@ -177,13 +188,15 @@ close_status(Uri, ServerId, Version, Pid)
     end.
 
 %% Called by the pool when it records a sync (before the proc writes it).
-expect(Uri, ServerId, Version, Pid)
-        when is_binary(Uri), is_binary(ServerId), is_integer(Version) ->
+expect(Uri0, ServerId, Version, Pid)
+        when is_binary(Uri0), is_binary(ServerId), is_integer(Version) ->
+    Uri = key(Uri0),
     true = ets:insert(?EXPECTED, {{Uri, ServerId, Pid}, Version}),
     nil.
 
 %% Called by the pool when it records a close (before the proc writes it).
-expect_closed(Uri, ServerId, Pid) when is_binary(Uri), is_binary(ServerId) ->
+expect_closed(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
     true = ets:insert(?EXPECTED, {{Uri, ServerId, Pid}, closed}),
     nil.
 
@@ -209,8 +222,9 @@ forget_proc(Pid) ->
 %% An entry from before a close, or with a close expected and not yet
 %% written, is missing. The entry is read before the stamps, so a race
 %% can only make an answer carried over or missing, never falsely fresh.
-lookup(Uri, ServerId, Pid, SettleMs)
-        when is_binary(Uri), is_binary(ServerId), is_integer(SettleMs) ->
+lookup(Uri0, ServerId, Pid, SettleMs)
+        when is_binary(Uri0), is_binary(ServerId), is_integer(SettleMs) ->
+    Uri = key(Uri0),
     Key = {Uri, ServerId, Pid},
     case ets:lookup(?TABLE, Key) of
         [] -> missing;
@@ -270,3 +284,9 @@ settle_left(Pid, SettleMs) when is_integer(SettleMs) ->
         {[], [{_, _, _, At}]} -> max(0, At + SettleMs - now_ms());
         {[], []} -> 0
     end.
+
+%% The URI part of every key: one spelling of a `file://` URI, however the
+%% server that published it or the client that asks escaped it (#16).
+%% Servers differ (vscode-uri escapes `@` and `+`, Rust's `url` doesn't),
+%% so the publish's own string can't be the key.
+key(Uri) -> 'pharos@workspace_root':canonical_uri(Uri).

@@ -432,3 +432,29 @@ pub fn a_reopen_after_the_close_ends_the_close_wait_test() {
   |> should.equal(diagnostics_cache.Reached)
   diagnostics_cache.forget_proc(me)
 }
+
+/// #16: a server publishes the URI as it escapes it (vscode-uri: `%20`,
+/// `%40`; Rust's `url`: `@` raw), and the tool asks with the client's
+/// spelling. Every key is the canonical URI, so they meet.
+pub fn spellings_of_one_uri_share_an_entry_test() {
+  diagnostics_cache.init()
+  diagnostics_cache.drop_uri("file:///tmp/my proj/x@y.ts")
+  let me = process.self()
+
+  diagnostics_cache.expect("file:///tmp/my proj/x@y.ts", "ts", 1, me)
+  diagnostics_cache.mark_synced("file:///tmp/my%20proj/x@y.ts", "ts", 1)
+  diagnostics_cache.put_publish(
+    "file:///tmp/my%20proj/x%40y.ts",
+    "ts",
+    Some(1),
+    dynamic.string("published"),
+  )
+  diagnostics_cache.lookup("file:///tmp/my proj/x@y.ts", "ts", me)
+  |> should.equal(diagnostics_cache.Fresh(dynamic.string("published")))
+  diagnostics_cache.get_all_for_uri("file:///tmp/my%20proj/x%40y.ts")
+  |> should.equal([#("ts", dynamic.string("published"))])
+
+  diagnostics_cache.drop_uri("file:///tmp/my%20proj/x%40y.ts")
+  diagnostics_cache.lookup("file:///tmp/my proj/x@y.ts", "ts", me)
+  |> should.equal(diagnostics_cache.Missing)
+}

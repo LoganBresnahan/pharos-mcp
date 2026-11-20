@@ -78,6 +78,18 @@ typescript-language-server forwards it:
                               project (configFileName); unset: tsserver's
                               "No Project." failure
 
+URIs escaped differently (#16):
+
+  STUB_LSP_URI_STYLE=         unset: publish each URI as pharos sent it.
+                              "vscode": re-escape it as vscode-uri does
+                              (typescript-language-server; every byte
+                              but A-Z a-z 0-9 - . _ ~ / escaped). "rust":
+                              as Rust's `url` does (rust-analyzer; sub-
+                              delims and : @ left raw). Either way the
+                              tsserver requests find the document by its
+                              decoded path and name files by plain path,
+                              and a didOpen log line ends " uri=<uri>"
+
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
 range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
@@ -97,6 +109,7 @@ import queue
 import sys
 import threading
 import time
+from urllib.parse import quote, unquote
 
 
 HOVER_RETRY_STATE: dict[str, int] = {}
@@ -183,6 +196,18 @@ def handle_initialize(req):
     }
 
 
+def uri_path(uri):
+    return unquote(uri[len("file://"):]) if uri and uri.startswith("file://") else uri
+
+
+def published_uri(uri):
+    """The URI as a server that escapes in STUB_LSP_URI_STYLE would publish it."""
+    style = os.environ.get("STUB_LSP_URI_STYLE", "")
+    if not style or not uri or not uri.startswith("file://"):
+        return uri
+    return "file://" + quote(uri_path(uri), safe="/" if style == "vscode" else "/!$&'()*+,;=:@")
+
+
 def sha8(text):
     import hashlib
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
@@ -201,7 +226,10 @@ def sync_log_suffix(method, params):
 
 def sync_log_detail(method, params, doc):
     if method == "textDocument/didOpen":
-        return " v=%s sha=%s lang=%s" % (doc.get("version"), sha8(doc.get("text", "")), doc.get("languageId"))
+        line = " v=%s sha=%s lang=%s" % (doc.get("version"), sha8(doc.get("text", "")), doc.get("languageId"))
+        if os.environ.get("STUB_LSP_URI_STYLE"):
+            line += " uri=%s" % doc.get("uri")
+        return line
     if method == "textDocument/didChange":
         changes = params.get("contentChanges") or []
         ranged = any("range" in c or "rangeLength" in c for c in changes)
@@ -282,6 +310,12 @@ def handle_tsserver_request(req):
                            "body": {"configFileName": project, "languageServiceDisabled": False}}}
     body = []
     doc = DOCS.get(file_uri)
+    related_file = file_uri[len("file://"):]
+    if os.environ.get("STUB_LSP_URI_STYLE"):
+        # typescript-language-server hands tsserver a path, and tsserver
+        # names files by path.
+        doc = next((d for u, d in DOCS.items() if uri_path(u) == uri_path(file_uri)), None)
+        related_file = uri_path(file_uri)
     if doc is None:
         return {"jsonrpc": "2.0", "id": req["id"],
                 "result": {"type": "response", "command": request, "success": False,
@@ -297,7 +331,7 @@ def handle_tsserver_request(req):
                              "relatedInformation": [
                                  {"span": {"start": {"line": 1, "offset": 1},
                                            "end": {"line": 1, "offset": 2},
-                                           "file": file_uri[len("file://"):]},
+                                           "file": related_file},
                                   "message": "related here", "category": "message",
                                   "code": 9002}]})
     return {"jsonrpc": "2.0", "id": req["id"],
@@ -314,7 +348,7 @@ def maybe_publish(stdout, uri):
     if mode == "push-suppress" and LAST_PUBLISHED.get(uri) == diagnostics:
         return
     LAST_PUBLISHED[uri] = diagnostics
-    params = {"uri": uri, "diagnostics": diagnostics}
+    params = {"uri": published_uri(uri), "diagnostics": diagnostics}
     if mode != "push-versionless":
         params["version"] = doc["version"]
     write_message(stdout, {"jsonrpc": "2.0",

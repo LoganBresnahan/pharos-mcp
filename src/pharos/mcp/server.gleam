@@ -57,6 +57,7 @@ import pharos/tools/symbols
 import pharos/tools/type_hierarchy
 import pharos/tools/workspace_symbols
 import pharos/version
+import pharos/workspace_root
 
 const protocol_version: String = "2024-11-05"
 
@@ -977,7 +978,7 @@ fn decode_get_diagnostics_arguments(
 ) -> Result(#(String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use timeout_arg <- decode.optional_field(
       "timeout_ms",
       None,
@@ -1690,7 +1691,7 @@ fn decode_fetch_uri_contents_arguments(
 ) -> Result(#(String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use timeout_arg <- decode.optional_field(
       "timeout_ms",
       None,
@@ -2470,7 +2471,7 @@ fn decode_position_with_timeout(
 ) -> Result(#(String, Int, Int, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use line <- decode.field("line", decode.int)
     use character <- decode.field("character", decode.int)
     use timeout_arg <- decode.optional_field(
@@ -2501,7 +2502,7 @@ fn decode_find_references_arguments(
 ) -> Result(#(String, Int, Int, Bool, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use line <- decode.field("line", decode.int)
     use character <- decode.field("character", decode.int)
     use include_decl <- decode.optional_field(
@@ -2548,7 +2549,7 @@ fn decode_uri_only_with_timeout(
 ) -> Result(#(String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use timeout_arg <- decode.optional_field(
       "timeout_ms",
       None,
@@ -2568,7 +2569,7 @@ fn decode_rename_arguments(
 ) -> Result(#(String, Int, Int, String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use line <- decode.field("line", decode.int)
     use character <- decode.field("character", decode.int)
     use new_name <- decode.field("new_name", decode.string)
@@ -2606,7 +2607,7 @@ fn decode_code_actions_arguments(
 ) -> Result(#(String, Int, Int, Int, Int, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use sl <- decode.field("start_line", decode.int)
     use sc <- decode.field("start_character", decode.int)
     use el <- decode.field("end_line", decode.int)
@@ -2646,7 +2647,7 @@ fn decode_goto_implementation_arguments(
 ) -> Result(#(String, Int, Int, Int, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use line <- decode.field("line", decode.int)
     use character <- decode.field("character", decode.int)
     use limit <- decode.optional_field(
@@ -2688,7 +2689,7 @@ fn decode_format_document_arguments(
 ) -> Result(#(String, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use timeout_arg <- decode.optional_field(
       "timeout_ms",
       None,
@@ -2748,7 +2749,7 @@ fn decode_semantic_tokens_arguments(
 ) -> Result(#(String, Int, Int, Int, Int, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use sl <- decode.optional_field("start_line", 0, decode.int)
     use sc <- decode.optional_field("start_character", 0, decode.int)
     use el <- decode.optional_field("end_line", 0, decode.int)
@@ -2789,7 +2790,7 @@ fn decode_inlay_hints_arguments(
 ) -> Result(#(String, Int, Int, Int, Int, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use sl <- decode.field("start_line", decode.int)
     use sc <- decode.field("start_character", decode.int)
     use el <- decode.field("end_line", decode.int)
@@ -2844,7 +2845,7 @@ fn decode_lsp_request_raw_arguments(
 ) -> Result(#(String, String, Dynamic, Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use uri <- decode.field("uri", decode.string)
+    use uri <- decode.field("uri", workspace_root.uri_decoder())
     use method <- decode.field("method", decode.string)
     use params <- decode.field("params", decode.dynamic)
     use timeout_arg <- decode.optional_field(
@@ -2901,7 +2902,7 @@ fn decode_workspace_symbols_arguments(
 ) -> Result(#(String, String, Int, Option(String), Int), String) {
   use raw <- result.try(option.to_result(args, "arguments object missing"))
   let decoder = {
-    use hint <- decode.field("workspace_uri_hint", decode.string)
+    use hint <- decode.field("workspace_uri_hint", workspace_root.uri_decoder())
     use query <- decode.field("query", decode.string)
     use limit <- decode.optional_field(
       "limit",
@@ -3515,7 +3516,7 @@ fn decode_find_symbol_arguments(
     Some(args) -> {
       let decoder = {
         use name_path <- decode.field("name_path", decode.string)
-        use scope_uri <- decode.field("scope_uri", decode.string)
+        use scope_uri <- decode.field("scope_uri", workspace_root.uri_decoder())
         use policy_str <- decode.optional_field(
           "policy",
           "all_matches",
@@ -3546,7 +3547,7 @@ fn decode_get_symbols_overview_arguments(
     None -> Error("missing arguments")
     Some(args) -> {
       let decoder = {
-        use uri <- decode.field("uri", decode.string)
+        use uri <- decode.field("uri", workspace_root.uri_decoder())
         decode.success(uri)
       }
       case decode.run(args, decoder) {
@@ -3564,7 +3565,7 @@ fn decode_containing_symbol_arguments(
     None -> Error("missing arguments")
     Some(args) -> {
       let decoder = {
-        use uri <- decode.field("uri", decode.string)
+        use uri <- decode.field("uri", workspace_root.uri_decoder())
         use line <- decode.field("line", decode.int)
         use character <- decode.optional_field("character", 0, decode.int)
         decode.success(#(uri, line, character))

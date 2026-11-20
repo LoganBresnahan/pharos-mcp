@@ -15,6 +15,7 @@ import gleeunit/should
 import pharos/tools/symbols.{
   InsertAfter, InsertBefore, Multiple, NotFound, ReplaceBody, Single,
 }
+import pharos/workspace_root
 
 // -- parse_name_path -----------------------------------------------------
 
@@ -276,3 +277,32 @@ fn sym_match(
 // here to exercise the public decoder against that exact shape.
 @external(erlang, "json", "decode")
 fn json_to_dynamic(s: String) -> a
+
+/// #16: tool URIs are canonical, so escaped. The drift check's hash must
+/// read the file they name, not give "" (which turns the check off).
+pub fn body_hash_reads_an_escaped_non_ascii_path_test() {
+  let dir = "/tmp/pharos_symbols_test_16/h sp #1 100% é"
+  let path = dir <> "/a.ts"
+  let assert Ok(Nil) = mkdir_p(dir)
+  let assert Ok(Nil) =
+    atomic_write_text(path, "export function helper() {\n  return 1;\n}\n")
+  let range =
+    symbols.Range(
+      start: symbols.Position(line: 0, character: 0),
+      end: symbols.Position(line: 2, character: 1),
+    )
+  let escaped = symbols.body_hash_for(workspace_root.path_to_uri(path), range)
+  should.not_equal(escaped, "")
+  should.equal(escaped, symbols.body_hash_for("file://" <> path, range))
+  let _ = rm_rf("/tmp/pharos_symbols_test_16")
+  Nil
+}
+
+@external(erlang, "pharos_fs_ffi", "mkdir_p")
+fn mkdir_p(path: String) -> Result(Nil, String)
+
+@external(erlang, "pharos_fs_ffi", "atomic_write_text")
+fn atomic_write_text(path: String, text: String) -> Result(Nil, String)
+
+@external(erlang, "pharos_fs_ffi", "rm_rf")
+fn rm_rf(path: String) -> Result(Nil, String)

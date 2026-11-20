@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A project whose path holds a character a URI escapes (a space, `#`, `%`) or a non-ASCII one
+  couldn't be asked about. Through 0.3.4, an escaped URI (`my%20proj`) was never decoded, so
+  no workspace root was found. A raw one reached the root but waited out the timeout on a
+  Push server: the server published under its own escaping, and the diagnostics cache
+  matched URIs as strings. And any non-ASCII path named a different file, because the file
+  and spawn calls read each UTF-8 byte as a character. Now:
+  - `file://` URIs are decoded and encoded (as vscode-uri does). A `uri` argument is always
+    decoded, so a raw URI holding a literal `%XX` reads it as an escape; send escaped URIs.
+  - The tools' `uri` arguments and the diagnostics cache use one canonical spelling.
+  - Paths reach the file system as their own bytes.
+  - `pharos diagnostics` escapes the paths it is given.
+  - The captAInHook payload (`pharos-hook.sh`) keeps a touched path with a space whole.
+  - `edit_at_symbol`'s drift check reads escaped paths, instead of quietly skipping (#16).
+
 ## [0.3.4] — 2026-11-19
 
 ### Fixed

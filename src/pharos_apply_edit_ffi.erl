@@ -36,7 +36,7 @@
 %%   {ok, {OldByteCount, NewByteCount}}  — wrote (or would have)
 %%   {error, ReasonBinary}               — human-readable error
 apply_to_file(Path, Edits, DryRun) when is_binary(Path), is_list(Edits) ->
-    case file:read_file(binary_to_list(Path)) of
+    case file:read_file(Path) of
         {error, Reason} ->
             {error, prefix(<<"read failed: ">>, format_reason(Reason))};
         {ok, Bytes} ->
@@ -47,7 +47,7 @@ apply_to_file(Path, Edits, DryRun) when is_binary(Path), is_list(Edits) ->
                     case DryRun of
                         true -> {ok, {OldSize, NewSize}};
                         false ->
-                            case write_atomic(binary_to_list(Path), NewBytes) of
+                            case write_atomic(Path, NewBytes) of
                                 ok -> {ok, {OldSize, NewSize}};
                                 {error, R} ->
                                     {error, prefix(<<"write failed: ">>, R)}
@@ -196,7 +196,7 @@ splice_all(Bytes, [{S, E, NewText} | Rest]) ->
 %% (no UTF assumption; writes bytes verbatim) and returns Erlang-style
 %% ok / {error, _}.
 write_atomic(PathStr, Bytes) ->
-    Tmp = PathStr ++ ".tmp",
+    Tmp = <<PathStr/binary, ".tmp">>,
     case file:write_file(Tmp, Bytes) of
         ok ->
             case file:rename(Tmp, PathStr) of

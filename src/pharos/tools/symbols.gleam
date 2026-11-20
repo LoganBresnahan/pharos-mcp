@@ -37,6 +37,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
+import pharos/workspace_root
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -1012,7 +1013,7 @@ fn render_preview(
 /// inclusive on both ends. Returns `""` when the URI can't be read
 /// (binary file, file deleted, etc.) — handle still mints, but
 /// edit_at_symbol's drift check becomes a no-op.
-fn body_hash_for(uri: String, range: Range) -> String {
+pub fn body_hash_for(uri: String, range: Range) -> String {
   case read_uri_lines(uri) {
     Error(_) -> ""
     Ok(all_lines) -> hash_lines_at_range(all_lines, range)
@@ -1020,9 +1021,12 @@ fn body_hash_for(uri: String, range: Range) -> String {
 }
 
 fn read_uri_lines(uri: String) -> Result(List(String), Nil) {
-  let path = case string.starts_with(uri, "file://") {
-    True -> string.drop_start(uri, 7)
-    False -> uri
+  // Decoded: tool URIs are canonical, so escaped, and a raw strip left
+  // `%20` in the path, so the read failed and the drift check went quietly
+  // off (#16).
+  let path = case workspace_root.uri_to_path(uri) {
+    Ok(p) -> p
+    Error(_) -> uri
   }
   case fs_read_file(path) {
     Ok(bytes) ->
@@ -1485,7 +1489,7 @@ pub fn symbol_handle_to_json(h: SymbolHandle) -> json.Json {
 /// pre-staleness pharos versions carry no hash and skip the drift
 /// check downstream.
 pub fn symbol_handle_decoder() -> decode.Decoder(SymbolHandle) {
-  use uri <- decode.field("uri", decode.string)
+  use uri <- decode.field("uri", workspace_root.uri_decoder())
   use name <- decode.field("name", decode.string)
   use selection_line <- decode.field("selection_line", decode.int)
   use selection_character <- decode.field("selection_character", decode.int)

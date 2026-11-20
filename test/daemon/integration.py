@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import traceback
+from urllib.parse import quote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -986,6 +987,91 @@ def t_document_language_id(sb):
           "didOpen languageIds: %r" % opens)
 
 
+def escaped_project(sb):
+    """#16: a workspace whose path has a space, `#`, `%` and a non-ASCII
+    character. Returns its file's path and three spellings of its URI:
+    escaped as vscode-uri does (pharos's canonical form), raw, and escaped
+    as Rust's `url` does."""
+    proj = os.path.join(sb.fixture, "my proj #1 100% \u00e9")
+    os.makedirs(proj, exist_ok=True)
+    open(os.path.join(proj, "stub.root"), "w").close()
+    path = os.path.join(proj, "main.stub")
+    with open(path, "w") as f:
+        f.write("ok\nERROR one\n")
+    return path, ["file://" + quote(path, safe="/"), "file://" + path,
+                  "file://" + quote(path, safe="/!$&'()*+,;=:@")]
+
+
+def uri_escapes_push(sb, style):
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push", "STUB_LSP_URI_STYLE": style})
+    a.initialize()
+    _, spellings = escaped_project(sb)
+    for i, uri in enumerate(spellings):
+        t0 = time.time()
+        d = a.tool(10 + i, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+        took = time.time() - t0
+        check("stub error on line 1" in d, "%s: %s" % (uri, d[-400:]))
+        check(took < 10, "%s took %.1fs: the publish never matched the question" % (uri, took))
+    opens = [l for l in sync_lines(sb, "textDocument/didOpen") if "main.stub" in l]
+    check(len(opens) == 1 and opens[0].endswith(" uri=" + spellings[0]),
+          "expected one didOpen, of the canonical URI %s: %r" % (spellings[0], opens))
+
+
+def t_uri_escapes_push_vscode(sb):
+    """#16: a Push server that escapes as vscode-uri does
+    (typescript-language-server) publishes `%20`; questions asked with any
+    spelling of the URI match that publish, and the server sees one
+    document, opened under the canonical URI. Before, an escaped URI found
+    no workspace root, and a raw one waited out the timeout."""
+    uri_escapes_push(sb, "vscode")
+
+
+def t_uri_escapes_push_rust(sb):
+    """#16: the same with a server that escapes as Rust's `url` does
+    (rust-analyzer), leaving sub-delims raw: the cache key can't be the
+    publish's own string."""
+    uri_escapes_push(sb, "rust")
+
+
+def t_uri_escapes_tsserver(sb):
+    """#16: Tsserver mode (ADR-039) with the same workspace: tsserver finds
+    the file by its path, and relatedInformation, which tsserver names by
+    path, comes back as the escaped URI."""
+    sb.write_toml('diagnostics_mode = "tsserver"\n')
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push", "STUB_LSP_TSSERVER": "answer",
+                  "STUB_LSP_URI_STYLE": "vscode"})
+    a.initialize()
+    _, spellings = escaped_project(sb)
+    for i, uri in enumerate(spellings):
+        d = a.tool(10 + i, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+        check("tsserver error on line 1" in d, "%s: %s" % (uri, d[-400:]))
+        check('"uri":"%s"' % spellings[0] in d,
+              "relatedInformation must name the file by its canonical URI: %s" % d[-600:])
+
+
+def t_uri_escapes_cli(sb):
+    """#16: `pharos diagnostics` on a workspace whose name holds a valid
+    escape (`%25`) as well as a space, `#` and a non-ASCII character. The
+    daemon decodes every uri argument, so the CLI must escape the path, or
+    `%25` reads as `%` and names another folder. Relative and absolute
+    paths both work, and the printed uri is the canonical one."""
+    proj = os.path.join(sb.fixture, "a b#c%25d-\u00e9")
+    os.makedirs(proj)
+    open(os.path.join(proj, "stub.root"), "w").close()
+    path = os.path.join(proj, "main.stub")
+    with open(path, "w") as f:
+        f.write("ok\nERROR one\n")
+    env = {"STUB_LSP_DIAGNOSTICS": "push"}
+    for arg, cwd in (("main.stub", proj), (path, sb.fixture)):
+        out = sb.cli("diagnostics", "--json", arg, extra_env=env, timeout=60, cwd=cwd)
+        check(out.returncode == 0, "%s: exit %d: %s" % (arg, out.returncode, out.stderr[-400:]))
+        f = json.loads(out.stdout)["files"][0]
+        check(f["status"] == "ok" and any("stub error on line 1" in d["message"] for d in f["diagnostics"]),
+              "%s: %s" % (arg, out.stdout[-400:]))
+        check(f["path"] == path and f["uri"] == "file://" + quote(path, safe="/"),
+              "%s: path and canonical uri: %s" % (arg, f))
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1037,6 +1123,10 @@ SCENARIOS = [
     ("diagnostics_cli_busy_tsserver", t_diagnostics_cli_busy_tsserver),
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
+    ("uri_escapes_push_vscode", t_uri_escapes_push_vscode),
+    ("uri_escapes_push_rust", t_uri_escapes_push_rust),
+    ("uri_escapes_tsserver", t_uri_escapes_tsserver),
+    ("uri_escapes_cli", t_uri_escapes_cli),
 ]
 
 

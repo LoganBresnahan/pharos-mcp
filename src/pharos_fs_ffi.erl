@@ -12,16 +12,16 @@
 -export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1, days_since_iso8601/1, setenv/2]).
 
 is_regular_file(Path) ->
-    filelib:is_regular(binary_to_list(Path)).
+    filelib:is_regular(Path).
 
 is_directory(Path) ->
-    filelib:is_dir(binary_to_list(Path)).
+    filelib:is_dir(Path).
 
 dirname(Path) ->
-    list_to_binary(filename:dirname(binary_to_list(Path))).
+    filename:dirname(Path).
 
 read_file(Path) ->
-    case file:read_file(binary_to_list(Path)) of
+    case file:read_file(Path) of
         {ok, Bytes} ->
             {ok, Bytes};
         {error, Reason} ->
@@ -48,7 +48,7 @@ encode_json(Term) ->
 %% rare, but file:get_cwd/0 can return {error, _} on permission issues).
 cwd() ->
     case file:get_cwd() of
-        {ok, Path} -> list_to_binary(Path);
+        {ok, Path} -> name_to_binary(Path);
         {error, _} -> <<>>
     end.
 
@@ -62,8 +62,8 @@ cwd() ->
 %%   {ok, nil}    — success
 %%   {error, Bin} — human-readable error binary
 atomic_write_text(Path, Text) when is_binary(Path), is_binary(Text) ->
-    PathStr = binary_to_list(Path),
-    Tmp = PathStr ++ ".tmp",
+    PathStr = Path,
+    Tmp = <<PathStr/binary, ".tmp">>,
     case file:write_file(Tmp, Text) of
         ok ->
             case file:rename(Tmp, PathStr) of
@@ -86,7 +86,7 @@ format_reason(Reason) ->
 %% Safe on a path that does not exist (returns ok). Used by tests to
 %% clean scratch dirs.
 rm_rf(Path) when is_binary(Path) ->
-    PathStr = binary_to_list(Path),
+    PathStr = Path,
     case filelib:is_dir(PathStr) orelse filelib:is_regular(PathStr) of
         false -> {ok, nil};
         true ->
@@ -124,7 +124,7 @@ which_executable(Cmd) when is_binary(Cmd) ->
 %% Create `Path` and all missing parent directories. Returns
 %% {ok, nil} or {error, BinaryReason}.
 mkdir_p(Path) when is_binary(Path) ->
-    case filelib:ensure_dir(binary_to_list(Path) ++ "/.placeholder") of
+    case filelib:ensure_dir(<<Path/binary, "/.placeholder">>) of
         ok -> {ok, nil};
         {error, Reason} -> {error, format_reason(Reason)}
     end.
@@ -133,9 +133,9 @@ mkdir_p(Path) when is_binary(Path) ->
 %% `Path`. Returns {ok, [Binary]} or {error, BinaryReason}. Entries
 %% are the basename only (not full paths).
 list_dir(Path) when is_binary(Path) ->
-    case file:list_dir(binary_to_list(Path)) of
+    case file:list_dir(Path) of
         {ok, Names} ->
-            Filtered = [list_to_binary(N) || N <- Names],
+            Filtered = [name_to_binary(N) || N <- Names],
             {ok, Filtered};
         {error, Reason} -> {error, format_reason(Reason)}
     end.
@@ -144,7 +144,7 @@ list_dir(Path) when is_binary(Path) ->
 %% {error, BinaryReason} otherwise. {error, enoent} (file already
 %% gone) collapses into {ok, nil} — idempotent prune.
 delete_file(Path) when is_binary(Path) ->
-    case file:delete(binary_to_list(Path)) of
+    case file:delete(Path) of
         ok -> {ok, nil};
         {error, enoent} -> {ok, nil};
         {error, Reason} -> {error, format_reason(Reason)}
@@ -155,7 +155,7 @@ delete_file(Path) when is_binary(Path) ->
 %% silently overwriting. ADR-027 §6.a relies on this for no-overwrite
 %% save semantics.
 write_excl(Path, Text) when is_binary(Path), is_binary(Text) ->
-    PathStr = binary_to_list(Path),
+    PathStr = Path,
     case file:open(PathStr, [exclusive, write, binary]) of
         {ok, Fd} ->
             case file:write(Fd, Text) of
@@ -216,4 +216,17 @@ days_since_iso8601(Iso) when is_binary(Iso) ->
         (Now - Then) div 86400
     catch
         _:_ -> 0
+    end.
+
+%% A file name the file module returned, as the bytes it names. Paths go
+%% in as binaries, which the file module passes through as raw bytes in
+%% either filename mode; names come back as lists, decoded per the
+%% native encoding. `binary_to_list` / `list_to_binary` instead read each
+%% UTF-8 byte as a character, so a non-ASCII path named another file
+%% (#16).
+name_to_binary(N) when is_binary(N) -> N;
+name_to_binary(N) ->
+    case file:native_name_encoding() of
+        utf8 -> unicode:characters_to_binary(N);
+        latin1 -> list_to_binary(N)
     end.

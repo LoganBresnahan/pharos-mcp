@@ -30,6 +30,7 @@ import pharos/log/entry as log_entry
 import pharos/lsp/client
 import pharos/lsp/lifecycle
 import pharos/version
+import pharos/workspace_root
 
 const rust_analyzer_path: String = "/home/oof/.cargo/bin/rust-analyzer"
 
@@ -113,7 +114,7 @@ pub fn run(workspace_path: String) -> Nil {
 }
 
 fn build_initialize_params(workspace_path: String) -> json.Json {
-  let root_uri = "file://" <> workspace_path
+  let root_uri = workspace_root.path_to_uri(workspace_path)
 
   json.object([
     #("processId", json.null()),

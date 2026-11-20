@@ -57,13 +57,16 @@ spawn(Command, Args, Cwd, Env) ->
         {ok, Resolved} ->
             try
                 Port = erlang:open_port({spawn_executable, Resolved}, [
-                    {args, [binary_to_list(A) || A <- Args]},
+                    %% Binaries, passed as raw bytes: binary_to_list would
+                    %% read each UTF-8 byte of a non-ASCII path as a
+                    %% character (#16).
+                    {args, Args},
                     binary,
                     use_stdio,
                     exit_status,
                     stream,
                     hide,
-                    {cd, binary_to_list(Cwd)}
+                    {cd, Cwd}
                 ] ++ env_options(Env, os:env())),
                 {ok, Port}
             catch
