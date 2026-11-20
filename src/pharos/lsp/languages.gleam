@@ -982,6 +982,10 @@ fn html() -> LanguageConfig {
   )
 }
 
+fn css_section_settings() -> json.Json {
+  json.object([#("validate", json.bool(True))])
+}
+
 fn css() -> LanguageConfig {
   LanguageConfig(
     id: "css",
@@ -998,7 +1002,16 @@ fn css() -> LanguageConfig {
         command: "vscode-css-language-server",
         args: ["--stdio"],
         initialization_options: json.object([]),
-        workspace_configuration: None,
+        // vscode-css asks `workspace/configuration` for its section
+        // before validating, and reads `null` as validation off: it never
+        // published a diagnostic (found checking #8's servers).
+        workspace_configuration: Some(
+          dict.from_list([
+            #("css", css_section_settings()),
+            #("scss", css_section_settings()),
+            #("less", css_section_settings()),
+          ]),
+        ),
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,

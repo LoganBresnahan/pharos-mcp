@@ -12,6 +12,7 @@
 import gleam/dynamic/decode
 import gleam/json
 import gleeunit/should
+import pharos/lsp/languages
 import pharos/tools/session
 
 pub fn capabilities_has_workspace_and_text_document_test() {
@@ -80,6 +81,33 @@ pub fn capabilities_text_document_advertises_call_hierarchy_test() {
 
   payload
   |> has_nested(["textDocument", "callHierarchy"])
+  |> should.be_true
+}
+
+/// #8: pull diagnostics are advertised only to a server pharos asks in
+/// Pull mode. Advertised to rust-analyzer (Push), it moved its own
+/// diagnostics to pull and pushed only cargo check's.
+pub fn pull_diagnostics_only_for_pull_mode_servers_test() {
+  let text_document = fn(mode) {
+    let Json(dyn) = serialize(session.build_client_capabilities_for(mode))
+    let assert Ok(td) =
+      decode.run(
+        dyn,
+        decode.field("textDocument", decode.dynamic, decode.success),
+      )
+    Json(td)
+  }
+  text_document(languages.Pull) |> has_field("diagnostic") |> should.be_true
+  text_document(languages.Push) |> has_field("diagnostic") |> should.be_false
+  text_document(languages.Tsserver)
+  |> has_field("diagnostic")
+  |> should.be_false
+  // Everything else is the same for every mode.
+  text_document(languages.Push)
+  |> has_field("publishDiagnostics")
+  |> should.be_true
+  text_document(languages.Pull)
+  |> has_field("publishDiagnostics")
   |> should.be_true
 }
 

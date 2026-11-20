@@ -1324,7 +1324,7 @@ fn build_initialize_params(
     #("processId", json.int(vm_os_pid())),
     #("rootUri", json.string(root_uri)),
     #("rootPath", json.string(workspace_path)),
-    #("capabilities", build_client_capabilities()),
+    #("capabilities", build_client_capabilities_for(server.diagnostics_mode)),
     #(
       "clientInfo",
       json.object([
@@ -1351,9 +1351,21 @@ fn build_initialize_params(
 /// surface exercises. New tools added later may need to extend this
 /// payload. Marked `pub` so unit tests can introspect the JSON shape.
 pub fn build_client_capabilities() -> json.Json {
+  build_client_capabilities_for(languages.Push)
+}
+
+/// The capabilities for a server pharos runs in `mode`. Pull
+/// diagnostics (`textDocument.diagnostic`) are advertised only to a
+/// server pharos asks in Pull mode. A server that supports both models
+/// serves its own diagnostics by pull to a client that says it can pull:
+/// rust-analyzer then pushed only cargo check's, and pharos (in Push
+/// mode) never asked for the rest (#8).
+pub fn build_client_capabilities_for(
+  mode: languages.DiagnosticsMode,
+) -> json.Json {
   json.object([
     #("workspace", workspace_capabilities()),
-    #("textDocument", text_document_capabilities()),
+    #("textDocument", text_document_capabilities(mode == languages.Pull)),
   ])
 }
 
@@ -1384,7 +1396,13 @@ fn workspace_capabilities() -> json.Json {
   ])
 }
 
-fn text_document_capabilities() -> json.Json {
+fn text_document_capabilities(pull_diagnostics: Bool) -> json.Json {
+  let pull = case pull_diagnostics {
+    True -> [
+      #("diagnostic", json.object([#("dynamicRegistration", json.bool(False))])),
+    ]
+    False -> []
+  }
   json.object([
     #(
       "synchronization",
@@ -1475,8 +1493,8 @@ fn text_document_capabilities() -> json.Json {
       // text it has since replaced.
       json.object([#("versionSupport", json.bool(True))]),
     ),
-    #("diagnostic", json.object([#("dynamicRegistration", json.bool(False))])),
     #("inlayHint", json.object([#("dynamicRegistration", json.bool(False))])),
+    ..pull
   ])
 }
 

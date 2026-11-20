@@ -12,7 +12,9 @@ Behavior is controlled via env vars:
                               "content_modified" (return -32801 first
                               call, then real content on retry)
   STUB_LSP_FAIL_HANDSHAKE=0   if 1, never reply to initialize
-  STUB_LSP_LOG=path           append "<pid> <method>" for every message
+  STUB_LSP_LOG=path           append "<pid> <method>" for every message;
+                              initialize logs "processId=<n> pull=<bool>",
+                              whether pull diagnostics were advertised
                               received (proves e.g. that a cancel
                               reached the LSP as $/cancelRequest);
                               initialize also logs its processId
@@ -505,8 +507,10 @@ def main():
         if log_path:
             with open(log_path, "a") as log:
                 if method == "initialize":
-                    pid_param = (msg.get("params") or {}).get("processId")
-                    log.write(f"{os.getpid()} {method} processId={pid_param}\n")
+                    init = msg.get("params") or {}
+                    pid_param = init.get("processId")
+                    td = (init.get("capabilities") or {}).get("textDocument") or {}
+                    log.write(f"{os.getpid()} {method} processId={pid_param} pull={'diagnostic' in td}\n")
                 else:
                     suffix = sync_log_suffix(method, msg.get("params") or {})
                     log.write(f"{os.getpid()} {method}{suffix}\n")

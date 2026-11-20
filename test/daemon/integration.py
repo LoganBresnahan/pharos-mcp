@@ -1278,6 +1278,24 @@ def t_find_symbol_bad_scope(sb):
     check(len(lsps) == 1, "file:////abs must reuse the one server: %r" % lsps)
 
 
+def t_pull_capability_follows_mode(sb):
+    """#8: pull diagnostics (textDocument.diagnostic) are advertised only to
+    a server pharos runs in Pull mode. Advertised to rust-analyzer (Push),
+    they moved its own diagnostics to pull, which pharos never asked for."""
+    with open(os.path.join(sb.fixture, ".pharos.toml"), "w") as f:
+        f.write('[languages.stub]\nfile_extensions = [".stub"]\n'
+                'root_markers = ["stub.root"]\ncommand = "%s"\n'
+                '[languages.stubpull]\nfile_extensions = [".stubpull"]\n'
+                'root_markers = ["stub.root"]\ncommand = "%s"\ndiagnostics_mode = "pull"\n' % (STUB, STUB))
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    hover_line(a, stub_file(sb, "a.stub", "one\n"), 10)
+    hover_line(a, stub_file(sb, "b.stubpull", "two\n"), 11)
+    inits = [l for l in open(os.path.join(sb.fixture, "stub.log")) if " initialize " in l]
+    pulls = sorted(l.rsplit("pull=", 1)[-1].strip() for l in inits)
+    check(pulls == ["False", "True"], "expected one Push (pull=False) and one Pull (pull=True) initialize: %r" % inits)
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1329,6 +1347,7 @@ SCENARIOS = [
     ("diagnostics_cli_busy_tsserver", t_diagnostics_cli_busy_tsserver),
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
+    ("pull_capability_follows_mode", t_pull_capability_follows_mode),
     ("long_runtime_dir", t_long_runtime_dir),
     ("non_ascii_home_and_server_path", t_non_ascii_home_and_server_path),
     ("non_ascii_home_default_state", t_non_ascii_home_default_state),
