@@ -43,6 +43,7 @@ import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option
 import gleam/string
 import pharos/log
 import pharos/log/entry as log_entry
@@ -925,8 +926,17 @@ fn pull_diagnostics(
       Error(TransportFailed(tool_helpers.describe_request_error(err)))
 
     Ok(result_value) ->
-      case decode.run(result_value, full_report_items_decoder()) {
-        Error(decode_errs) ->
+      case
+        decode.run(result_value, decode.optional(decode.dynamic)),
+        decode.run(result_value, full_report_items_decoder())
+      {
+        // A null report: ruby-lsp answers so for a document it doesn't
+        // hold, as after pharos closed a file that's gone from disk. Not
+        // a report LSP allows, but the server is fine: no diagnostics
+        // observed, as in push mode, rather than a transport failure
+        // that would evict and respawn it.
+        Ok(option.None), _ -> Ok(NoDiagnosticsObserved(uri: file_uri))
+        _, Error(decode_errs) ->
           Error(TransportFailed(
             "diagnostic response decode failed: "
             <> describe_decode_errors(decode_errs),
@@ -934,7 +944,7 @@ fn pull_diagnostics(
 
         // The server answered, so an empty list means clean, not
         // "nothing observed".
-        Ok(items_json) ->
+        _, Ok(items_json) ->
           Ok(Diagnostics(
             uri: file_uri,
             body_json: publish_envelope(

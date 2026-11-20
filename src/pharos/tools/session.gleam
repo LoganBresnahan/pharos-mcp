@@ -1689,7 +1689,7 @@ fn ensure_doc_opened_for_server_id(
         )
       #(key, server.full_change_as_range, found)
     }
-    Error(_) -> #(server_id, False, #([], fn() { Nil }))
+    Error(_) -> #(server_id, option.None, #([], fn() { Nil }))
   }
   // The pool reads the file, like every other open document: one that
   // is gone is closed if open and not opened (ADR-038). The scanner keeps

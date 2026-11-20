@@ -158,7 +158,11 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "lazy_workspace_index_ms = "
       <> int.to_string(server.lazy_workspace_index_ms),
     "save_check_grace_ms = " <> int.to_string(server.save_check_grace_ms),
-    "full_change_as_range = " <> bool_text(server.full_change_as_range),
+    case server.full_change_as_range {
+      None ->
+        "# full_change_as_range unset: ranged for an Incremental server, whole text for Full (ADR-038)"
+      Some(ranged) -> "full_change_as_range = " <> bool_text(ranged)
+    },
     "pull_after_change_ms = " <> int.to_string(server.pull_after_change_ms),
     case server.watch_files {
       languages.WatchIfRegistered ->

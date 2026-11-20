@@ -81,14 +81,15 @@ describes. It does not watch files.
   a server only if the server watches the disk itself. Measured on 2026-11-18 (a file created,
   deleted or changed after the server started, asked about from the file importing it):
   typescript-language-server sees all three; gopls and pyright see none. rust-analyzer is not
-  measured. That gap is pharos-mcp#10, not this ADR.
+  measured. That gap is pharos-mcp#10, not this ADR (ADR-043 closes it).
 - The proc, which holds the server's `textDocumentSync` capability (resolved the way VS Code's
   client does it), writes the notifications:
   - **Open:** `didOpen`. pharos opens what it asks about whatever `openClose` says, which is
     today's behaviour.
   - **Close:** `didClose`.
   - **Change, sync kind Full or Incremental:** one `didChange` whose single content change
-    carries only `text`, with no `range` and no `rangeLength`. LSP 3.17 says such an event "is
+    carries only `text`, with no `range` and no `rangeLength` (amended (A), below: an
+    Incremental server now gets the same text as a replace ranged over the whole document). LSP 3.17 says such an event "is
     considered to be the full content of the document". It doesn't say whether a server that
     advertises Incremental must accept it. gopls accepts exactly one such event and rejects a
     batch. Versions only have to increase ("doesn't need to be consecutive"). Then `didSave`
@@ -258,7 +259,7 @@ Follow-up data, from the dogfood and the 23-language sweep:
 - Whether each Tier-1 server accepts a range-less change.
 - Which servers publish only on change.
 
-**Amendment (as built, 2026-11-20, for the maintainer's review; #30).** A publish stamped after
+**Amendment (as built, 2026-11-20; #30).** A publish stamped after
 a document's sync could still describe the text before it. rust-analyzer republishes at the new
 version with cargo check's results from the last check, and replaces them only when the check
 it reruns on save ends, about 2 s later. So right after an agent fixed a Rust error,
@@ -295,23 +296,76 @@ call's deadline. On the bundled ones, a follow-up question after an
 edit costs up to the 500 ms grace on rust-analyzer only, and waits for cargo check there
 (seconds, bounded as above).
 
-**Amendment (as built, 2026-11-20, for the maintainer's review; #38, #35).** ruby-lsp 0.26.11
-advertises Incremental sync and raises on the range-less full-content `didChange` this ADR sends
-(`NoMethodError` in `Document#push_edits`), keeping the old text: every answer about the file after
-its first edit described the text before it. Two per-server settings, both off for every other
-server, change that for ruby-lsp only:
-- `full_change_as_range`: the change is sent as a replace from (0,0) to the end of the text last
-  sent to that server, recorded when it was sent (lines end at `\r\n`, `\n` or a lone `\r`;
-  characters are UTF-16 code units, the default encoding, since pharos doesn't negotiate another).
-  The range-less form stays the default: a wrong end position would corrupt every incremental
-  server, and the range-less form is the spec's own.
-- `pull_after_change_ms` (ruby-lsp 50): ruby-lsp can also answer a pull that arrives right behind a
-  change about the text before it (20 in 200 when sent at once, none with a 20 ms gap). A pull about
-  a document synced less than this long ago waits out the rest, from the call's own budget.
+**Amendment (A) (2026-11-20; #38, #35; replaces the #38/#35 amendment).** A re-sync's
+`didChange` now takes the form the server's sync kind asks for:
+- **Incremental:** one content change replacing the whole document, from (0,0) to the end of the
+  text last sent to that server, recorded when it was sent (lines end at `\r\n`, `\n` or a lone
+  `\r`; characters are UTF-16 code units, the spec's default, which pharos doesn't negotiate away).
+- **Full:** the range-less full text, as before.
+- **None:** close and reopen, as before.
 
-With both, ruby-lsp was right on 320 of 320 edit-then-ask answers (CRLF, a UTF-16 tail, no final
-newline, an error moving between lines), and ruby-lsp moved to Pull diagnostics (it never pushes).
-Both behaviours are candidates for an upstream report, which is the maintainer's call.
+`full_change_as_range` (pharos.toml, per language or per server) forces either form: `true` the
+ranged one, `false` the range-less one, whatever the sync kind. Set per language, it applies to
+the language's primary server and wins over that server's own key, as every per-language knob
+does. Unset, which is every bundled
+server, follows the sync kind. `pull_after_change_ms` stays a ruby-lsp-only setting (50 ms): it
+can answer a pull that arrives right behind a change about the text before it.
+
+Why: LSP 3.17's Incremental kind reads "documents are synced by sending the full content on open.
+After that only incremental updates to the document are sent". A replace ranged over the whole
+text is such an update; the range-less form is the Full kind's. ruby-lsp 0.26.11 advertises
+Incremental and raises on the range-less form (`NoMethodError` in `Document#push_edits`), keeping
+the old text, and its maintainers closed two reports calling that a client bug. The #38 fix
+turned the ranged form on for ruby-lsp alone; (A) makes it the rule.
+
+Evidence (verifier, 2026-11-20, pharos 7435276): every bundled server, each form, a chain of 16
+edits × 3 (error moving, growth to ~100 lines and back, CRLF and back, no final newline, an emoji
+as the last character, a one-character tail change), each followed by `get_diagnostics` and
+`document_symbols`, judged against a cold open of the same text. "lines" = the lines carrying a
+diagnostic match; "sym" = the documentSymbol answer matches.
+
+| server | sync | range-less: lines, sym | ranged: lines, sym | note |
+|---|---|---|---|---|
+| rust-analyzer | Incr | 47/47, 47/47 | 47/47, 47/47 | |
+| gopls | Incr | 47, 47 | 47, 47 | |
+| typescript-language-server | Incr | 47, 47 | 47, 47 | |
+| pyright (+ ruff, merged) | Incr | 47, 47 | 47, 47 | |
+| **ruby-lsp** | Incr | **5/47, 5/47** (keeps the opened text; `Error processing textDocument/didChange` ×47) | **47, 47** | the only server where the form matters |
+| zls | Incr | 47, 47 | 47, 47 | |
+| clangd | Incr | 47, 47 | 47, 47 | |
+| hls | Incr | 47 (3 unsure), 47 | same | no republish when diagnostics are unchanged, either form |
+| perlnavigator | Incr | sym 95/95, diag 84/95 | sym 95/95, diag 82/95 | stale Perl::Critic entries in both forms |
+| vscode-html / -css / -json | Incr | 47, 47 | 47, 47 | html has no diagnostics |
+| yaml-language-server | Incr | 47, 47 | 47, 47 | |
+| terraform-ls | Incr | 47, 47 | 47, 47 | |
+| elp | Incr | 90/95, sym 95 | 89/95, sym 95 | an empty-then-real publish, both forms |
+| jdtls | Incr | 91/95, sym 95 | 94/95, sym 95 | an interim empty publish, both forms |
+| lua-language-server | Incr | 95/95 (1 unsure), sym 95 | 95/95 (9 unsure, each right, 2.04 s), sym 95 | see below |
+| next-ls, clojure-lsp, marksman, gleam-lsp, bash-language-server, metals | Full | as ranged | right, with the same exceptions in both forms: next-ls's document symbols empty (an ArithmeticError inside it), marksman 6 unsure, metals offline lagging | under (A) they get range-less |
+
+No Incremental server did worse with the ranged form, CRLF and UTF-16 tails included, and none
+negotiated an encoding other than UTF-16. lua-language-server is the one soft difference: after
+a ranged edit to a line carrying an unchanged diagnostic it sometimes publishes nothing, so
+pharos waits 2 s and answers carried over (the content right every time). Clean-to-clean edits
+behave the same in both forms (verifier's follow-up), and its real problem, no publish at all for
+a file clean from open, predates (A) and is #46. So lua-ls follows the rule like the rest; the
+setting can still force it range-less.
+
+The earlier amendment's caution (a wrong end position would corrupt every Incremental server)
+is what the evidence answers: the end is the end of the exact text pharos last sent, recorded as
+sent, and all 18 Incremental servers agreed with it on every edit.
+
+**A lone `\r`** (one not followed by `\n`) was the exception that evidence didn't cover: its
+chain had none. LSP 3.17 counts one as a line break, and so does pharos's end, but
+rust-analyzer, clangd and ruby-lsp count lines at `\n` only, and gopls tolerates one stray `\r`
+but not a file of them (verifier-two, 2026-11-20). After pharos has sent such a text, the next
+ranged change's end lies past their last line: rust-analyzer, gopls and ruby-lsp keep the old
+text, and clangd drops the document, until it's reopened. So when the text last sent to a server
+has a lone `\r`, a change that would go ranged goes as `didClose` + `didOpen` instead, as for
+sync kind None: right whatever the server's line counting. Counting lines at `\n` only instead
+isn't an option: typescript-language-server, pyright, jdtls and lua-language-server follow the
+spec and would keep a stale tail. The range-less form has no end to misplace, so a Full server
+is unaffected.
 
 ## Alternatives considered
 

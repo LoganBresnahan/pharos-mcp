@@ -214,12 +214,21 @@ pub fn opening_ignores_open_close_false_test() {
 }
 
 /// One full-text change: exactly one content change, carrying only
-/// `text` (no `range`, no `rangeLength`), even for an Incremental server.
+/// `text` (no `range`, no `rangeLength`), when no end of the text last sent
+/// is known.
 pub fn a_change_is_one_full_text_event_then_save_test() {
   let bodies =
     doc_sync.notifications(
       full_save,
-      OpChange("file:///a.rs", "rust", 5, "line \"quoted\"\n", None),
+      OpChange(
+        "file:///a.rs",
+        "rust",
+        5,
+        "line \"quoted\"\n",
+        None,
+        None,
+        False,
+      ),
     )
   methods(bodies)
   |> should.equal(["textDocument/didChange", "textDocument/didSave"])
@@ -258,7 +267,7 @@ pub fn save_with_text_carries_the_text_test() {
   let assert [_, save] =
     doc_sync.notifications(
       SyncCaps(change: 1, save: SaveWithText, open_close: True),
-      OpChange("file:///a.py", "python", 2, "x = 1\n", None),
+      OpChange("file:///a.py", "python", 2, "x = 1\n", None, None, False),
     )
   json.parse(
     save,
@@ -270,7 +279,7 @@ pub fn save_with_text_carries_the_text_test() {
 pub fn no_save_means_change_only_test() {
   doc_sync.notifications(
     SyncCaps(change: 1, save: NoSave, open_close: True),
-    OpChange("file:///a.go", "go", 2, "package a\n", None),
+    OpChange("file:///a.go", "go", 2, "package a\n", None, None, False),
   )
   |> methods
   |> should.equal(["textDocument/didChange"])
@@ -281,7 +290,7 @@ pub fn sync_kind_none_with_open_close_closes_and_reopens_test() {
   let bodies =
     doc_sync.notifications(
       SyncCaps(change: 0, save: NoSave, open_close: True),
-      OpChange("file:///a.x", "x", 4, "new", None),
+      OpChange("file:///a.x", "x", 4, "new", None, None, False),
     )
   methods(bodies)
   |> should.equal(["textDocument/didClose", "textDocument/didOpen"])
@@ -302,7 +311,7 @@ pub fn sync_kind_none_with_open_close_closes_and_reopens_test() {
 pub fn sync_kind_none_without_open_close_still_closes_and_reopens_test() {
   doc_sync.notifications(
     SyncCaps(change: 0, save: NoSave, open_close: False),
-    OpChange("file:///a.x", "x", 2, "new", None),
+    OpChange("file:///a.x", "x", 2, "new", None, None, False),
   )
   |> methods
   |> should.equal(["textDocument/didClose", "textDocument/didOpen"])
@@ -358,7 +367,7 @@ pub fn a_ranged_change_covers_the_text_last_sent_test() {
   let assert [change, ..] =
     doc_sync.notifications(
       SyncCaps(change: 2, save: NoSave, open_close: True),
-      OpChange("file:///a.rb", "ruby", 3, "new\n", Some(#(4, 7))),
+      OpChange("file:///a.rb", "ruby", 3, "new\n", Some(#(4, 7)), None, False),
     )
   change
   |> string.contains(
@@ -371,7 +380,97 @@ pub fn without_previous_end_the_change_stays_rangeless_test() {
   let assert [change, ..] =
     doc_sync.notifications(
       SyncCaps(change: 2, save: NoSave, open_close: True),
-      OpChange("file:///a.go", "go", 3, "new", None),
+      OpChange("file:///a.go", "go", 3, "new", None, None, False),
     )
   change |> string.contains("\"range\"") |> should.be_false
+}
+
+// -- ADR-038 amendment (A): the form follows the sync kind --------------
+
+pub fn incremental_gets_the_ranged_form_test() {
+  doc_sync.ranged_end(2, None, Some(#(3, 7))) |> should.equal(Some(#(3, 7)))
+}
+
+pub fn full_gets_the_rangeless_form_test() {
+  doc_sync.ranged_end(1, None, Some(#(3, 7))) |> should.equal(None)
+}
+
+pub fn the_setting_forces_either_form_test() {
+  doc_sync.ranged_end(1, Some(True), Some(#(3, 7)))
+  |> should.equal(Some(#(3, 7)))
+  doc_sync.ranged_end(2, Some(False), Some(#(3, 7))) |> should.equal(None)
+}
+
+pub fn an_incremental_change_carries_the_whole_range_test() {
+  let assert [change] =
+    doc_sync.notifications(
+      SyncCaps(change: 2, save: NoSave, open_close: True),
+      OpChange(
+        "file:///a.rb",
+        "ruby",
+        3,
+        "new text\n",
+        Some(#(1, 0)),
+        None,
+        False,
+      ),
+    )
+  change
+  |> string.contains(
+    "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":1,\"character\":0}}",
+  )
+  |> should.be_true
+}
+
+pub fn a_full_change_has_no_range_test() {
+  let assert [change] =
+    doc_sync.notifications(
+      SyncCaps(change: 1, save: NoSave, open_close: True),
+      OpChange(
+        "file:///a.sh",
+        "sh",
+        3,
+        "new text\n",
+        Some(#(1, 0)),
+        None,
+        False,
+      ),
+    )
+  change |> string.contains("\"range\"") |> should.be_false
+}
+
+// -- ADR-038 amendment (A): a lone \r ------------------------------------
+
+pub fn a_lone_cr_is_found_and_crlf_is_not_test() {
+  doc_sync.has_lone_cr("a\rb") |> should.be_true
+  doc_sync.has_lone_cr("a\r\nb\r") |> should.be_true
+  doc_sync.has_lone_cr("a\r\nb\r\n") |> should.be_false
+  doc_sync.has_lone_cr("a\nb") |> should.be_false
+}
+
+pub fn a_ranged_change_after_a_lone_cr_reopens_test() {
+  let caps = SyncCaps(change: 2, save: NoSave, open_close: True)
+  let assert [close, open] =
+    doc_sync.notifications(
+      caps,
+      OpChange(
+        "file:///a.rs",
+        "rust",
+        4,
+        "fn a() {}\n",
+        Some(#(2, 0)),
+        None,
+        True,
+      ),
+    )
+  close |> string.contains("textDocument/didClose") |> should.be_true
+  open |> string.contains("textDocument/didOpen") |> should.be_true
+  open |> string.contains("\"version\":4") |> should.be_true
+  // A range-less change has no end to misplace: sent as before.
+  let assert [change] =
+    doc_sync.notifications(
+      SyncCaps(change: 1, save: NoSave, open_close: True),
+      OpChange("file:///a.sh", "sh", 4, "x\n", Some(#(2, 0)), None, True),
+    )
+  change |> string.contains("textDocument/didChange") |> should.be_true
 }

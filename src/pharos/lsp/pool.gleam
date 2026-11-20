@@ -246,8 +246,10 @@ pub opaque type Msg {
     language_id: String,
     subject: String,
     disk: List(#(String, DiskState)),
-    /// #38: the server takes changes as a ranged whole-document replace.
-    full_change_as_range: Bool,
+    /// #38, (A): the server's setting for the change's form: Some(True)
+    /// a ranged whole-document replace, Some(False) the range-less form,
+    /// None the form its sync kind asks for (`doc_sync.ranged_end`).
+    full_change_as_range: option.Option(Bool),
     /// ADR-043: encoded notifications sent first in the batch (files
     /// changed on disk), so the batch's freshness rule covers them.
     notifications: List(String),
@@ -315,12 +317,15 @@ type DocKey =
 /// One document pharos has told an LSP about. `cache_server_id` keys
 /// the diagnostics cache (the registry server id, without the ADR-034
 /// variant); `last_used` orders the open set for the LRU cap.
+/// `sent_lone_cr`: the text last sent has a lone `\r` (ADR-038
+/// amendment (A)): servers count its lines differently.
 type Doc {
   Doc(
     state: DocState,
     language_id: String,
     cache_server_id: String,
     last_used: Int,
+    sent_lone_cr: Bool,
   )
 }
 
@@ -672,7 +677,7 @@ pub fn ensure_open(
   cache_server_id: String,
   uri: String,
   language_id: String,
-  full_change_as_range: Bool,
+  full_change_as_range: option.Option(Bool),
   notifications: List(String),
 ) -> Result(Nil, EnsureOpenError) {
   let Pool(subject) = pool
@@ -734,7 +739,7 @@ pub fn notify(
           "",
           "",
           [],
-          False,
+          option.None,
           notifications,
           reply,
         )
@@ -1924,7 +1929,7 @@ fn iolist_to_string_safe(io: dynamic.Dynamic) -> String
 
 fn handle_sync_documents(
   state: State,
-  full_change_as_range: Bool,
+  full_change_as_range: option.Option(Bool),
   proc_key: #(String, String, String),
   cache_server_id: String,
   language_id: String,
@@ -2029,7 +2034,7 @@ fn plan_one(
   language_id: String,
   cache_server_id: String,
   clock: Int,
-  full_change_as_range: Bool,
+  full_change_as_range: option.Option(Bool),
 ) -> #(Dict(DocKey, Doc), List(doc_sync.SyncOp)) {
   let uri = k.3
   let existing = dict.get(docs, k)
@@ -2063,6 +2068,7 @@ fn plan_one(
         lid,
         cache_server_id,
         last_used,
+        doc_sync.has_lone_cr(text),
       ),
     )
   }
@@ -2073,13 +2079,23 @@ fn plan_one(
     )
     doc_sync.Change(version), doc_sync.OnDisk(text:, hash:) -> {
       // The end of the text this server was last sent (a Change always
-      // follows an open document); the range-less form otherwise.
-      let previous_end = case full_change_as_range, existing {
-        True, Ok(doc) -> option.Some(doc.state.sent_end)
-        _, _ -> option.None
+      // follows an open document). The proc picks the form from the
+      // server's sync kind, unless `full_change_as_range` forces one
+      // (ADR-038 amendment (A)).
+      let #(previous_end, previous_lone_cr) = case existing {
+        Ok(doc) -> #(option.Some(doc.state.sent_end), doc.sent_lone_cr)
+        Error(_) -> #(option.None, False)
       }
       #(record(version, hash, text), [
-        doc_sync.OpChange(uri, lid, version, text, previous_end),
+        doc_sync.OpChange(
+          uri,
+          lid,
+          version,
+          text,
+          previous_end,
+          full_change_as_range,
+          previous_lone_cr,
+        ),
         ..ops
       ])
     }

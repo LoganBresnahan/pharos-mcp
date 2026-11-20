@@ -125,7 +125,9 @@ pub type ServerOverride {
     /// #30. How long after a sync get_diagnostics waits for a check the
     /// server starts on save to begin. 0: no grace.
     save_check_grace_ms: Option(Int),
-    /// #38. Send changes as a ranged whole-document replace.
+    /// ADR-038 amendment (A). true: send changes as a ranged
+    /// whole-document replace; false: the range-less full text. Unset:
+    /// the form the server's sync kind asks for.
     full_change_as_range: Option(Bool),
     /// #38. Wait this long after a change before a pull request.
     pull_after_change_ms: Option(Int),
@@ -215,7 +217,9 @@ pub type LanguageOverride {
     /// #30. How long after a sync get_diagnostics waits for a check the
     /// server starts on save to begin. 0: no grace.
     save_check_grace_ms: Option(Int),
-    /// #38. Send changes as a ranged whole-document replace.
+    /// ADR-038 amendment (A). true: send changes as a ranged
+    /// whole-document replace; false: the range-less full text. Unset:
+    /// the form the server's sync kind asks for.
     full_change_as_range: Option(Bool),
     /// #38. Wait this long after a change before a pull request.
     pull_after_change_ms: Option(Int),

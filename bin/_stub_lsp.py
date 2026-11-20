@@ -18,12 +18,18 @@ Behavior is controlled via env vars:
   STUB_LSP_PULL_RACE_MS=ms    with STUB_LSP_PULL: a pull arriving within
                               `ms` of a didChange is answered about the text
                               before it, as ruby-lsp can (#38)
+  STUB_LSP_PULL_NULL=1        with STUB_LSP_PULL: a pull about a document
+                              the stub doesn't hold is answered null, as
+                              ruby-lsp 0.26 does
   STUB_LSP_RANGED_ONLY=1      like ruby-lsp 0.26 (#38): a range-less
                               didChange raises inside the server and the
                               old text stays; a ranged one is applied at
                               its LSP positions (UTF-16, lines ending at
                               \r\n, \n or \r), and one whose range is out
                               of bounds is refused (the old text stays)
+  STUB_LSP_LF_LINES=1         ranged changes count lines at \n only, as
+                              rust-analyzer, clangd and ruby-lsp do (a lone
+                              \r is not a line break to them)
   STUB_LSP_EXIT_AT_INITIALIZE=code
                               write "stub_lsp: refusing to start (test)" to
                               stderr and exit with `code` instead of
@@ -481,10 +487,21 @@ def apply_sync(method, params):
                     return uri
                 DOCS[uri] = {"version": doc.get("version"), "text": new}
             return uri
-        # Full-content changes only: a change with a range would need
-        # applying, and pharos never sends one.
-        if len(changes) == 1 and "range" not in changes[0] and uri in DOCS:
-            DOCS[uri] = {"version": doc.get("version"), "text": changes[0].get("text", "")}
+        # A range-less change is the full content; a ranged one (pharos
+        # sends Incremental servers a replace over the whole text, ADR-038
+        # amendment (A)) is applied to the stub's copy.
+        if uri in DOCS:
+            text = DOCS[uri]["text"]
+            for change in changes:
+                if "range" in change:
+                    new = apply_ranged(text, change["range"], change.get("text", ""))
+                    if new is None:
+                        log_line("range out of bounds %s, kept the old text" % json.dumps(change["range"]))
+                        return uri
+                    text = new
+                else:
+                    text = change.get("text", "")
+            DOCS[uri] = {"version": doc.get("version"), "text": text}
     elif method == "textDocument/didClose":
         DOCS.pop(uri, None)
         LAST_PUBLISHED.pop(uri, None)
@@ -494,7 +511,8 @@ def apply_sync(method, params):
 def offset_of(text, line, character):
     """The string index of an LSP position (UTF-16 units; lines end at
     \r\n, \n or \r), or None if the position is outside the text."""
-    starts = [0] + [m.end() for m in re.finditer(r"\r\n|\r|\n", text)]
+    breaks = r"\n" if os.environ.get("STUB_LSP_LF_LINES") else r"\r\n|\r|\n"
+    starts = [0] + [m.end() for m in re.finditer(breaks, text)]
     if line >= len(starts):
         return None
     start = starts[line]
@@ -954,6 +972,9 @@ def main():
             prev = PULL_PREV.get(du)
             if race and prev and time.time() - prev[1] < race:
                 text = prev[0]
+            if os.environ.get("STUB_LSP_PULL_NULL") and du not in DOCS:
+                write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"], "result": None})
+                continue
             write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"],
                                    "result": {"kind": "full", "items": stub_diagnostics(text)}})
         elif method == "textDocument/hover":

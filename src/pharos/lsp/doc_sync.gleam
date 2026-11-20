@@ -65,9 +65,15 @@ pub type SyncOp {
     language_id: String,
     version: Int,
     text: String,
-    /// #38: for a server that needs the change as a ranged replace, the
-    /// end of the text last sent to it; None sends the range-less form.
+    /// The end of the text last sent to the server, when it was open.
     previous_end: Option(#(Int, Int)),
+    /// ADR-038 amendment (A): None sends the form the sync kind asks for;
+    /// Some(True) forces the ranged form, Some(False) the range-less one.
+    form: Option(Bool),
+    /// The text last sent has a lone `\r`: a ranged change goes as
+    /// `didClose` + `didOpen` instead (servers that count lines at `\n`
+    /// only would place its end past their last line).
+    previous_lone_cr: Bool,
   )
   OpClose(uri: String)
   /// ADR-043: a notification about no open document (the files changed
@@ -95,6 +101,16 @@ pub fn end_position(text: String) -> #(Int, Int) {
       }
     })
   #(line, character)
+}
+
+/// Whether `text` has a `\r` not followed by `\n`. LSP 3.17 counts one
+/// as a line break, and pharos computes a ranged change's end that way;
+/// rust-analyzer, clangd and ruby-lsp count lines at `\n` only, and gopls
+/// tolerates one but not a file of them, so after such a text a ranged
+/// change's end lands past their last line.
+pub fn has_lone_cr(text: String) -> Bool {
+  string.contains(text, "\r")
+  && string.contains(string.replace(text, "\r\n", ""), "\r")
 }
 
 /// SHA-256 of the text as it would be sent.
@@ -228,10 +244,15 @@ fn save_decoder() -> decode.Decoder(SaveMode) {
 ///   whatever the server's `openClose` says (unchanged behaviour; which
 ///   servers advertise otherwise is ADR-038 follow-up data).
 /// - Close: a `didClose`, so the server goes back to the disk.
-/// - Change, sync kind Full or Incremental: one `didChange` whose single
-///   content change carries only `text` (no `range`, no `rangeLength`:
-///   the spec's full-content form, and the only one gopls accepts
-///   without a range), then a `didSave` when the server asks for one.
+/// - Change, sync kind Full or Incremental: one `didChange` with a single
+///   content change carrying the whole `text`, then a `didSave` when the
+///   server asks for one. Its form follows `ranged_end` (ADR-038
+///   amendment (A)): for Incremental, a replace ranged from (0,0) to the
+///   end of the text last sent; for Full, the range-less form;
+///   `full_change_as_range` forces either.
+/// - Change in the ranged form after a text with a lone `\r`: `didClose`
+///   then `didOpen` instead, since servers disagree on where such a text
+///   ends (`has_lone_cr`).
 /// - Change, sync kind None: `didClose` then `didOpen` at the new
 ///   version (never a second `didOpen` without a close). Since pharos
 ///   opened the document whatever `openClose` said, it mirrors that on
@@ -248,15 +269,50 @@ pub fn notifications(caps: SyncCaps, op: SyncOp) -> List(String) {
       did_close(uri),
       did_open(uri, language_id, version, text),
     ]
-    OpChange(uri:, version:, text:, previous_end:, ..), _ ->
-      list.append(
-        [did_change(uri, version, text, previous_end)],
-        case caps.save {
-          NoSave -> []
-          Save -> [did_save(uri, Error(Nil))]
-          SaveWithText -> [did_save(uri, Ok(text))]
-        },
-      )
+    OpChange(
+      uri:,
+      language_id:,
+      version:,
+      text:,
+      previous_end:,
+      form:,
+      previous_lone_cr:,
+    ),
+      kind
+    ->
+      case ranged_end(kind, form, previous_end), previous_lone_cr {
+        // A ranged change after a text with a lone \r: the server may
+        // count that text's lines differently, so reopen instead, as for
+        // sync kind None. Correct whatever its line counting.
+        Some(_), True -> [
+          did_close(uri),
+          did_open(uri, language_id, version, text),
+        ]
+        end, _ ->
+          list.append([did_change(uri, version, text, end)], case caps.save {
+            NoSave -> []
+            Save -> [did_save(uri, Error(Nil))]
+            SaveWithText -> [did_save(uri, Ok(text))]
+          })
+      }
+  }
+}
+
+/// ADR-038 amendment (A): the end a didChange's range runs to, or None
+/// for the range-less form. LSP 3.17's Incremental kind reads "only
+/// incremental updates after open": a ranged replace of the whole text
+/// is one, and ruby-lsp rejects the range-less form. A Full server gets
+/// the full text without a range, as the spec asks.
+pub fn ranged_end(
+  kind: Int,
+  form: Option(Bool),
+  previous_end: Option(#(Int, Int)),
+) -> Option(#(Int, Int)) {
+  case form, kind {
+    Some(False), _ -> None
+    Some(True), _ -> previous_end
+    None, 2 -> previous_end
+    None, _ -> None
   }
 }
 
@@ -301,9 +357,9 @@ fn did_change(
   text: String,
   previous_end: Option(#(Int, Int)),
 ) -> String {
-  // The range-less full-content form (ADR-038), or, for a server that
-  // needs it (#38), the same replace with a range over the whole text it
-  // was last sent.
+  // The range-less full-content form, or the same replace with a range
+  // over the whole text the server was last sent, as `ranged_end` picks
+  // (ADR-038 amendment (A)).
   let change = case previous_end {
     None -> [#("text", json.string(text))]
     Some(#(line, character)) -> [

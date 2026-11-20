@@ -653,8 +653,9 @@ def hover_line(shim, uri, id_, line=0):
 
 def t_resync_follows_disk(sb):
     """A file saved between two questions gets the second answer about the
-    new text: one full-text didChange at the next version, then didSave; an
-    unchanged file sends nothing."""
+    new text: one full-text didChange at the next version (for this
+    Incremental server, a replace ranged over the whole text, ADR-038
+    amendment (A)), then didSave; an unchanged file sends nothing."""
     a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_SYNC_KIND": "2",
                   "STUB_LSP_SYNC_SAVE": "true"})
     a.initialize()
@@ -666,10 +667,23 @@ def t_resync_follows_disk(sb):
     check("line 0: second" in hover_line(a, uri, 12), "unchanged re-ask")
     changes = sync_lines(sb, "textDocument/didChange")
     check(len(changes) == 1 and "v=2" in changes[0] and "changes=1" in changes[0]
-          and "range=False" in changes[0], "expected one full-text didChange v=2: %r" % changes)
+          and "range=True" in changes[0], "expected one whole-text ranged didChange v=2: %r" % changes)
     saves = sync_lines(sb, "textDocument/didSave")
     check(len(saves) == 1 and "save_text=False" in saves[0], "expected one plain didSave: %r" % saves)
     check(len(sync_lines(sb, "textDocument/didOpen")) == 1, "reopened: %r" % sync_lines(sb))
+
+
+def t_resync_full_sync_is_rangeless(sb):
+    """ADR-038 amendment (A): a Full-sync server gets a re-sync as the
+    range-less full text, as LSP's Full kind asks."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_SYNC_KIND": "1"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "first\n")
+    hover_line(a, uri, 10)
+    stub_file(sb, "main.stub", "second\n")
+    check("line 0: second" in hover_line(a, uri, 11), "answer did not follow the disk")
+    changes = sync_lines(sb, "textDocument/didChange")
+    check(len(changes) == 1 and "range=False" in changes[0], "expected one range-less didChange: %r" % changes)
 
 
 def t_resync_shared_sessions(sb):
@@ -2014,12 +2028,15 @@ def t_false_but_serves_passes_through(sb):
 RANGED_EDITS = ["a\nb\n", "x\r\ny\r\n", "# é漢😀🎉", "one\rtwo", "", "fin\n"]
 
 
-def _ranged_server_text_matches(sb, flag):
-    """Write each of RANGED_EDITS in turn, asking after each; return the
-    edits after which the server's copy differed from the file."""
-    if flag:
-        sb.write_toml("full_change_as_range = true\n")
-    a = sb.start({"STUB_LSP_RANGED_ONLY": "1", "STUB_LSP_HOVER_RESPONSES": "sha"})
+def _ranged_server_text_matches(sb, setting, kind):
+    """Write each of RANGED_EDITS in turn, asking after each, to a server
+    of sync kind `kind` that refuses the range-less form (ruby-lsp), with
+    `full_change_as_range = <setting>` when given; return the edits after
+    which the server's copy differed from the file."""
+    if setting is not None:
+        sb.write_toml("full_change_as_range = %s\n" % setting)
+    a = sb.start({"STUB_LSP_RANGED_ONLY": "1", "STUB_LSP_HOVER_RESPONSES": "sha",
+                  "STUB_LSP_SYNC_KIND": kind})
     a.initialize()
     path = os.path.join(sb.fixture, "main.stub")
     wrong = []
@@ -2033,26 +2050,80 @@ def _ranged_server_text_matches(sb, flag):
     return wrong
 
 
+def t_ranged_change_after_a_lone_cr_reopens(sb):
+    """ADR-038 amendment (A), B1: after pharos has sent a text with a lone
+    \r, a server that counts lines at \n only (rust-analyzer, clangd,
+    ruby-lsp) puts the end of the next ranged change past its last line
+    and keeps the old text. pharos reopens the document instead
+    (didClose + didOpen), so the server's copy follows the disk through
+    every edit after."""
+    a = sb.start({"STUB_LSP_RANGED_ONLY": "1", "STUB_LSP_LF_LINES": "1",
+                  "STUB_LSP_HOVER_RESPONSES": "sha", "STUB_LSP_SYNC_KIND": "2"})
+    a.initialize()
+    path = os.path.join(sb.fixture, "main.stub")
+    wrong = []
+    for i, text in enumerate(["first\nline\n", "one\rtwo\rthree\n", "after\nthe cr\n",
+                              "again\n", "x\ry\n", "z\n"]):
+        with open(path, "w", newline="") as f:
+            f.write(text)
+        h = a.tool(10 + i, "hover", {"uri": "file://" + path, "line": 0, "character": 0})
+        if "sha:" + hashlib.sha256(text.encode()).hexdigest() not in h:
+            wrong.append((i, repr(text)))
+    check(wrong == [], "the server's copy differed from the file after: %s" % wrong)
+    log = open(os.path.join(sb.fixture, "stub.log")).read()
+    check("out of bounds" not in log, "a ranged change missed the server's text")
+    check(len(sync_lines(sb, "textDocument/didClose")) == 2,
+          "expected a reopen after each lone-CR text: %r" % sync_lines(sb, "textDocument/didClose"))
+
+
 def t_ranged_change_for_a_server_that_needs_it(sb):
-    """#38: ruby-lsp 0.26 raises on the range-less full-content didChange
-    and keeps the old text. With full_change_as_range the change is sent
-    as a replace from (0,0) to the end of the text last sent, in UTF-16
-    positions with any line break: after every edit (CRLF, emoji and CJK
-    on a last line without a newline, a lone CR, an empty file, a final
-    newline) the server's copy is byte for byte the file."""
-    wrong = _ranged_server_text_matches(sb, flag=True)
+    """#38, ADR-038 amendment (A): ruby-lsp 0.26 raises on the range-less
+    full-content didChange and keeps the old text. An Incremental server
+    now gets every change as a replace from (0,0) to the end of the text
+    last sent, in UTF-16 positions with any line break, with no setting:
+    after every edit (CRLF, emoji and CJK on a last line without a
+    newline, a lone CR, an empty file, a final newline) the server's copy
+    is byte for byte the file."""
+    wrong = _ranged_server_text_matches(sb, None, "2")
     check(wrong == [], "the server's copy differed from the file after: %r" % wrong)
     log = open(os.path.join(sb.fixture, "stub.log")).read()
     check("ranged-only:" not in log, "the stub refused a change: %r" % [l for l in log.splitlines() if "ranged-only" in l])
 
 
+def t_ranged_change_forced_on_a_full_server(sb):
+    """ADR-038 amendment (A): full_change_as_range = true forces the ranged
+    form on a server whose sync kind (Full) would get the range-less one."""
+    wrong = _ranged_server_text_matches(sb, "true", "1")
+    check(wrong == [], "the server's copy differed from the file after: %r" % wrong)
+
+
 def t_rangeless_change_is_lost_on_a_ranged_only_server(sb):
-    """#38's control: without the flag the stub keeps the old text, as
-    ruby-lsp does, so the scenario above tests the range."""
-    wrong = _ranged_server_text_matches(sb, flag=False)
+    """The control: full_change_as_range = false forces the range-less form
+    on the same Incremental server, and it keeps the old text, as ruby-lsp
+    does, so the scenarios above test the range."""
+    wrong = _ranged_server_text_matches(sb, "false", "2")
     check(len(wrong) == len(RANGED_EDITS) - 1, "expected every edit after the open to be lost: %r" % wrong)
     check("refused a range-less change" in open(os.path.join(sb.fixture, "stub.log")).read(),
           "the stub didn't log refusing the range-less form")
+
+
+def t_pull_null_for_a_deleted_file_keeps_the_server(sb):
+    """A pull server that answers null for a document it doesn't hold
+    (ruby-lsp, after pharos closed a file gone from disk) used to read as a
+    transport failure: "diagnostic response decode failed", and the server
+    evicted and respawned. Now: no diagnostics observed, same server."""
+    sb.write_toml('diagnostics_mode = "pull"\n')
+    a = sb.start({"STUB_LSP_PULL": "1", "STUB_LSP_PULL_NULL": "1"})
+    a.initialize()
+    uri = stub_file(sb, "gone.stub", "ERROR here\n")
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 5000})
+    check("stub error on line 0" in d, "first answer: %s" % d[-300:])
+    os.remove(uri[len("file://"):])
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 5000})
+    check("decode failed" not in d and "transport" not in d.lower(), "answer: %s" % d[-300:])
+    check("stub error" not in d, "the gone file's old diagnostics: %s" % d[-300:])
+    inits = open(os.path.join(sb.fixture, "stub.log")).read().count(" initialize processId=")
+    check(inits == 1, "the server was respawned (%d initializes)" % inits)
 
 
 def _pull_after_change(sb, window_ms):
@@ -2134,6 +2205,7 @@ SCENARIOS = [
     ("reap_on_idle", t_reap_on_idle),
     ("reap_after_death", t_reap_after_death),
     ("resync_follows_disk", t_resync_follows_disk),
+    ("resync_full_sync_is_rangeless", t_resync_full_sync_is_rangeless),
     ("resync_shared_sessions", t_resync_shared_sessions),
     ("resync_other_open_documents", t_resync_other_open_documents),
     ("resync_sync_kind_none", t_resync_sync_kind_none),
@@ -2153,6 +2225,9 @@ SCENARIOS = [
     ("frames_after_an_error_reply_are_kept", t_frames_after_an_error_reply_are_kept),
     ("reply_split_across_a_timeout", t_reply_split_across_a_timeout),
     ("ranged_change_for_a_server_that_needs_it", t_ranged_change_for_a_server_that_needs_it),
+    ("ranged_change_after_a_lone_cr_reopens", t_ranged_change_after_a_lone_cr_reopens),
+    ("pull_null_for_a_deleted_file_keeps_the_server", t_pull_null_for_a_deleted_file_keeps_the_server),
+    ("ranged_change_forced_on_a_full_server", t_ranged_change_forced_on_a_full_server),
     ("pull_waits_after_a_change", t_pull_waits_after_a_change),
     ("pull_without_the_window_is_unchanged", t_pull_without_the_window_is_unchanged),
     ("rangeless_change_is_lost_on_a_ranged_only_server", t_rangeless_change_is_lost_on_a_ranged_only_server),

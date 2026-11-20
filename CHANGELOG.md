@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- A file that changed on disk reaches the server in the form its sync kind asks for: a server
+  that syncs Incrementally gets a replace ranged over the whole document, a Full one the whole
+  text as before. Through 0.3.5 every server got the range-less form, which LSP defines for the
+  Full kind only and which ruby-lsp rejects: after its first edit, every answer about a Ruby file
+  described the text before it. Measured on every bundled server: no Incremental server answered
+  worse. After a text with a lone carriage return (one not followed by a line feed), which
+  servers count as a line break or not, the next change reopens the document instead.
+  `full_change_as_range = true | false` forces either form for a server (ADR-038
+  amendment (A)).
+- get_diagnostics on a file deleted from disk, on a pull server that answers a null report for
+  a document it doesn't hold (ruby-lsp), answers that no diagnostics were observed. It used to
+  fail with "diagnostic response decode failed" and restart the server.
 - Files changed on disk that pharos never opened reach the servers that rely on their client to
   watch files (gopls, pyright, jdtls and others). Before, a file a checkout or a build created,
   changed or deleted stayed unknown to them: an import of a new package stayed broken. pharos

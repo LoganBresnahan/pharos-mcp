@@ -298,17 +298,18 @@
 # file_extensions = [".my"]
 # save_check_grace_ms = 500
 
-# 4d) Per-server workarounds for how a server takes edits (#38).
+# 4d) How a server is sent an edit (ADR-038 amendment (A)).
 #
-# These two exist for one server's quirks and are bundled on for
-# ruby-lsp only; leave them alone unless your own server shows the same
-# trouble.
-#
-# `full_change_as_range` sends each edit as a ranged replace of the
-# whole document, from the start to the end of the text sent last,
-# instead of the range-less whole-text form (ruby-lsp mishandles the
-# range-less form and keeps the old text). Bundled: ruby-lsp true,
-# others false.
+# When a file pharos holds open changed on disk, the server gets the new
+# text in the form its sync kind asks for: a server that syncs
+# Incrementally gets a replace ranged over the whole document (from the
+# start to the end of the text it was last sent), a Full one the whole
+# text without a range. `full_change_as_range` forces either form: true
+# the ranged one, false the range-less one. Every bundled server is unset
+# (it follows its sync kind); set it only for a server of your own that
+# mishandles the form it gets. Set under [languages.<id>] it applies to the
+# language's primary server and wins over that server's own key; set it
+# under [[languages.<id>.servers]] for another server.
 #
 # `pull_after_change_ms` waits this long between sending an edit and
 # pulling diagnostics (textDocument/diagnostic), for a server that can
@@ -318,7 +319,7 @@
 # [languages.mylang]
 # command = "mylang-lsp"
 # file_extensions = [".my"]
-# full_change_as_range = true
+# full_change_as_range = false
 # pull_after_change_ms = 50
 
 # 4e) Files changed on disk (ADR-043, #10).

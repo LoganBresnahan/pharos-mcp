@@ -213,7 +213,7 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     warm_probe: ProbeWorkspaceSymbol(""),
     lazy_workspace_index_ms: option.unwrap(override.lazy_workspace_index_ms, 0),
     save_check_grace_ms: option.unwrap(override.save_check_grace_ms, 0),
-    full_change_as_range: option.unwrap(override.full_change_as_range, False),
+    full_change_as_range: override.full_change_as_range,
     pull_after_change_ms: option.unwrap(override.pull_after_change_ms, 0),
     watch_files: watch_mode(override.watch_files, languages.WatchIfRegistered),
   )
@@ -390,7 +390,7 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.save_check_grace_ms,
       default.save_check_grace_ms,
     ),
-    full_change_as_range: option.unwrap(
+    full_change_as_range: option.or(
       ovr.full_change_as_range,
       default.full_change_as_range,
     ),
@@ -425,7 +425,7 @@ fn server_from_override(
     warm_probe: ProbeWorkspaceSymbol(""),
     lazy_workspace_index_ms: option.unwrap(ovr.lazy_workspace_index_ms, 0),
     save_check_grace_ms: option.unwrap(ovr.save_check_grace_ms, 0),
-    full_change_as_range: option.unwrap(ovr.full_change_as_range, False),
+    full_change_as_range: ovr.full_change_as_range,
     pull_after_change_ms: option.unwrap(ovr.pull_after_change_ms, 0),
     watch_files: watch_mode(ovr.watch_files, languages.WatchIfRegistered),
   )
@@ -492,7 +492,7 @@ fn merge_primary(
       override.save_check_grace_ms,
       primary.save_check_grace_ms,
     ),
-    full_change_as_range: option.unwrap(
+    full_change_as_range: option.or(
       override.full_change_as_range,
       primary.full_change_as_range,
     ),
