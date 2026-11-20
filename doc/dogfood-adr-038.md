@@ -302,3 +302,10 @@ ts checks passed too, now in 0.01 s where the push path took 0.41 s: the comment
 seeing b.ts's new signature (TS2554, the other-open-document re-sync), and the deleted file.
 Coverage limit (c) above no longer holds for that check.
 
+**Addendum (2026-11-19, #14).** "Private `PHAROS_RUNTIME_DIR` … under the scratch dir" above
+holds only when the socket path fits (about 100 bytes). A deeper scratch dir sends the socket to
+`/tmp/pharos-<uid>/`. Through 0.3.5 that merged every such run into one daemon, unless something
+in the daemon key differed (this report's runs had their own `XDG_STATE_HOME`, so they were
+isolated). Since #14, the fallback socket's name carries a hash of the requested dir, and the shim
+says on stderr that it fell back.
+

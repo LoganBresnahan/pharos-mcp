@@ -1118,6 +1118,43 @@ def t_find_symbol_cold_session(sb):
     check("No Project" not in out and '"status":"single"' in out and 'a.stub' in out,
           "first find_symbol on a cold session: %s" % out[-400:])
 
+def t_long_runtime_dir(sb):
+    """#14: a PHAROS_RUNTIME_DIR whose socket path won't fit falls back to
+    /tmp/pharos-<uid>/, and used to merge every such session into one
+    daemon there, silently. Now the requested dir is hashed into the socket
+    name, so two sessions asking for different long dirs get two daemons
+    (one's stop leaves the other running), and the fallback is reported on
+    stderr."""
+    long_a = os.path.join(sb.dir, "a" * 70)
+    long_b = os.path.join(sb.dir, "b" * 70)
+    env_a, env_b = {"PHAROS_RUNTIME_DIR": long_a}, {"PHAROS_RUNTIME_DIR": long_b}
+    try:
+        long_runtime_dir_checks(sb, env_a, env_b)
+    finally:
+        # These daemons live in the shared /tmp/pharos-<uid>/, outside the
+        # sandbox teardown cleans: stop them whatever happened.
+        for env in (env_a, env_b):
+            sb.cli("daemon", "stop", extra_env=env)
+
+
+def long_runtime_dir_checks(sb, env_a, env_b):
+    for env in (env_a, env_b):
+        s = sb.start(env)
+        s.initialize()
+    st_a = sb.cli("daemon", "status", extra_env=env_a)
+    st_b = sb.cli("daemon", "status", extra_env=env_b)
+    check(st_a.returncode == 0 and st_b.returncode == 0, "status: %r %r" % (st_a.stderr, st_b.stderr))
+    check("too long for a socket path" in st_a.stderr, "the fallback must be reported: %r" % st_a.stderr)
+    pid_a = json.loads(st_a.stdout.splitlines()[0])["daemon_pid"]
+    pid_b = json.loads(st_b.stdout.splitlines()[0])["daemon_pid"]
+    check(pid_a != pid_b, "two long runtime dirs shared daemon %s" % pid_a)
+    check(sb.cli("daemon", "stop", extra_env=env_a).returncode == 0, "stop a")
+    wait_until(lambda: not alive(pid_a), 15, "daemon a to exit")
+    check(alive(pid_b), "stopping a's daemon stopped b's")
+    check(sb.cli("daemon", "stop", extra_env=env_b).returncode == 0, "stop b")
+    wait_until(lambda: not alive(pid_b), 15, "daemon b to exit")
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1169,6 +1206,7 @@ SCENARIOS = [
     ("diagnostics_cli_busy_tsserver", t_diagnostics_cli_busy_tsserver),
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
+    ("long_runtime_dir", t_long_runtime_dir),
     ("uri_escapes_push_vscode", t_uri_escapes_push_vscode),
     ("uri_escapes_push_rust", t_uri_escapes_push_rust),
     ("uri_escapes_tsserver", t_uri_escapes_tsserver),

@@ -17,7 +17,10 @@ Usage:
 
 <scratch-dir> holds everything a run creates: the fixtures (ra/, py/,
 ts/, go/), the private daemon's runtime dir (rt/) and its logs
-(state/pharos/log/). Each run deletes and rewrites the fixture dirs
+(state/pharos/log/). When <scratch-dir>/rt is too long for a socket path
+(over about 100 bytes, as deep scratch dirs are), the socket goes to
+/tmp/pharos-<uid>/ instead, under a name that hashes rt/ in, so the
+daemon stays this run's own (#14). Each run deletes and rewrites the fixture dirs
 inside it, so the script only takes a new or empty directory, or one it
 made before (it leaves a .dogfood-adr-038 marker).
 

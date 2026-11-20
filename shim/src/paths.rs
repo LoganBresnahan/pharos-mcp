@@ -33,16 +33,23 @@ pub const DAEMON_KEY_VARS: &[&str] = &[
 /// 8 hex digits of FNV-1a over the daemon-scoped vars, in
 /// `DAEMON_KEY_VARS` order, each as `NAME=value` or `NAME unset`.
 pub fn daemon_key(lookup: impl Fn(&str) -> Option<OsString>) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut entries = Vec::new();
     for name in DAEMON_KEY_VARS {
         let entry = match lookup(name) {
             Some(value) => format!("{}={}\0", name, value.to_string_lossy()),
             None => format!("{} unset\0", name),
         };
-        for byte in entry.as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        entries.extend_from_slice(entry.as_bytes());
+    }
+    fnv8(&entries)
+}
+
+/// 8 hex digits of FNV-1a 64 folded to 32 bits.
+fn fnv8(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{:08x}", (hash ^ (hash >> 32)) as u32)
 }
@@ -59,13 +66,30 @@ pub struct DaemonPaths {
 }
 
 impl DaemonPaths {
+    /// In the runtime dir when the socket path fits. Otherwise in
+    /// `/tmp/pharos-<uid>/`, with a hash of the requested dir in the name,
+    /// so two sessions that asked for different (long) runtime dirs never
+    /// share a daemon there (#14). An explicit `PHAROS_RUNTIME_DIR` that
+    /// doesn't fit is reported on stderr, not dropped silently.
     pub fn new(build_id: &str, key: &str) -> DaemonPaths {
-        let name = format!("{}-{}", build_id, key);
+        use std::os::unix::ffi::OsStrExt;
+        let mut name = format!("{}-{}", build_id, key);
         let preferred = runtime_dir();
-        let dir = if preferred.join(format!("{}.sock", name)).as_os_str().len() <= MAX_SOCKET_PATH {
+        let wanted = preferred.join(format!("{}.sock", name));
+        let dir = if wanted.as_os_str().len() <= MAX_SOCKET_PATH {
             preferred
         } else {
-            fallback_runtime_dir()
+            name = format!("{}-r{}", name, fnv8(preferred.as_os_str().as_bytes()));
+            let dir = fallback_runtime_dir();
+            if absolute_env("PHAROS_RUNTIME_DIR").is_some() {
+                eprintln!(
+                    "pharos: PHAROS_RUNTIME_DIR is too long for a socket path ({} > {} bytes); using {}",
+                    wanted.as_os_str().len(),
+                    MAX_SOCKET_PATH,
+                    dir.join(format!("{}.sock", name)).display()
+                );
+            }
+            dir
         };
         DaemonPaths {
             socket: dir.join(format!("{}.sock", name)),
@@ -158,6 +182,10 @@ pub fn ensure_private_dir(dir: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// Tests that set PHAROS_RUNTIME_DIR hold this: the process env is
+    /// shared by the test threads.
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn daemon_key_is_stable_and_eight_hex_digits() {
         let lookup = |name: &str| match name {
@@ -203,6 +231,7 @@ mod tests {
 
     #[test]
     fn a_long_runtime_dir_falls_back_to_tmp() {
+        let _env = ENV.lock().unwrap();
         let long = "/x".repeat(60);
         env::set_var("PHAROS_RUNTIME_DIR", &long);
         let paths = DaemonPaths::new("0123456789abcdef", "01234567");
@@ -211,6 +240,33 @@ mod tests {
         assert!(paths.socket.as_os_str().len() <= MAX_SOCKET_PATH);
         assert_eq!(paths.lock.extension().unwrap(), "lock");
         assert_eq!(paths.pid.extension().unwrap(), "pid");
+    }
+
+    #[test]
+    fn two_long_runtime_dirs_never_share_a_fallback_socket() {
+        // #14: the fallback used to merge every long PHAROS_RUNTIME_DIR
+        // into one socket in /tmp/pharos-<uid>/.
+        let _env = ENV.lock().unwrap();
+        let socket_for = |dir: &str| {
+            env::set_var("PHAROS_RUNTIME_DIR", dir);
+            let paths = DaemonPaths::new("0123456789abcdef", "01234567");
+            env::remove_var("PHAROS_RUNTIME_DIR");
+            paths
+        };
+        let a = socket_for(&format!("{}/a", "/x".repeat(60)));
+        let b = socket_for(&format!("{}/b", "/x".repeat(60)));
+        assert_eq!(a.dir, b.dir);
+        assert_ne!(a.socket, b.socket);
+        assert_ne!(a.pid, b.pid);
+        assert_eq!(
+            socket_for(&format!("{}/a", "/x".repeat(60))).socket,
+            a.socket
+        );
+        let short = socket_for("/tmp/r14");
+        assert_eq!(
+            short.socket,
+            PathBuf::from("/tmp/r14/0123456789abcdef-01234567.sock")
+        );
     }
 
     #[test]
