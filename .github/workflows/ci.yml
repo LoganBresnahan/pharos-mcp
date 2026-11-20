@@ -170,6 +170,12 @@ jobs:
           lines=$(echo "$out" | grep -c '^{"jsonrpc"')
           [ "$lines" = "3" ] || { echo "expected 3 response lines, got $lines"; exit 1; }
 
+      # #9: the dev wrapper's stdout is JSON-RPC only too, with SASL's
+      # reports on and off, and with its stdio as pipes and as sockets
+      # (how Claude Code runs MCP servers).
+      - name: Check bin/pharos-dev's stdio
+        run: python3 -I test/dev_wrapper_stdio.py
+
   # ADR-034: the shim against an assembled release, with the stub LSP:
   # sharing, spawn race, build isolation, idle exit, daemon death,
   # stdout purity, per-session isolation, surviving the spawning

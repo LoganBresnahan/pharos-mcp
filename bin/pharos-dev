@@ -36,7 +36,9 @@ done
 # workaround in mix.exs handles the prior pain point); `_build/dev/lib`
 # carries every BEAM the runtime needs, including the OTP application
 # trampoline `pharos:main/0`.
-mix compile 1>&2
+# The wrapper loads _build/dev, so compile that whatever MIX_ENV the
+# caller has (CI runs with MIX_ENV=test, #9).
+MIX_ENV=dev mix compile 1>&2
 
 # Restore the original cwd before exec'ing erl so pharos's project-TOML
 # walk-up (and any other cwd-sensitive code) sees the directory the
@@ -72,22 +74,29 @@ cd "$ORIG_CWD"
 # `+W w` routes Erlang warnings through the same logger. PHAROS_SASL=0
 # opts out for hosts that have a noisy LSP set and want a quiet
 # stderr; default on for diagnostic builds.
-SASL_FLAGS=""
+#
+# Stdout stays JSON-RPC only (invariant 1, #9). Plain `erl` reads no
+# sys.config, so OTP's default logger handler writes to standard_io,
+# which is stdout here. LOGGER_FLAGS points it at standard_error, with
+# the legacy `=PROGRESS REPORT` header. SASL's reports go through that
+# handler too (`sasl_error_logger false`): SASL's own handler wrote to
+# stdout with `tty`, and with a file it must open /dev/stderr, which
+# fails when stderr is a socket (as under Claude Code), and the node then
+# shuts down. test/dev_wrapper_stdio.py checks all of this in CI.
+LOGGER_FLAGS=(-kernel logger '[{handler,default,logger_std_h,#{config => #{type => standard_error}, formatter => {logger_formatter, #{legacy_header => true, single_line => false}}}}]')
+SASL_FLAGS=()
 if [ "${PHAROS_SASL:-1}" != "0" ]; then
-  # OTP 27+ routes SASL reports through `logger`. The
-  # `logger_sasl_compatible true` flag restores the old `=PROGRESS
-  # REPORT` / `=CRASH REPORT` / `=SUPERVISOR REPORT` plaintext
-  # format on stderr. `-sasl errlog_type all` opts SASL's own
-  # filter into every event class (progress + crash + supervisor)
-  # so silently-restarted children surface. `start_sasl` actually
-  # boots the sasl application so its handlers register.
-  SASL_FLAGS="-boot start_sasl -sasl errlog_type all -sasl sasl_error_logger tty -kernel logger_sasl_compatible true -kernel logger_level info"
+  # `start_sasl` boots the sasl application, so supervisor and crash
+  # reports (and progress reports, at logger_level info) surface, and
+  # silently-restarted children show up.
+  SASL_FLAGS=(-boot start_sasl -sasl errlog_type all -sasl sasl_error_logger false -kernel logger_level info)
 fi
 
 exec erl \
-  -pa $PROJECT_ROOT/_build/dev/lib/*/ebin \
+  -pa "$PROJECT_ROOT"/_build/dev/lib/*/ebin \
   -noshell \
   -noinput \
-  $SASL_FLAGS \
+  "${LOGGER_FLAGS[@]}" \
+  ${SASL_FLAGS[@]+"${SASL_FLAGS[@]}"} \
   -eval "pharos:main(), halt(0)." \
   -extra "$@"
