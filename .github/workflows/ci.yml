@@ -130,6 +130,13 @@ jobs:
           fossil_grep 'filename:basedir\(user_cache'    'wrong XDG var for the Burrito cache path — Burrito uses user_data (XDG_DATA_HOME), not user_cache (XDG_CACHE_HOME)'
           fossil_grep 'burrito_runtime'                 'fossil path segment — Burrito does not use a `burrito_runtime` subdir'
 
+          # #16: binary_to_list on a UTF-8 path reads each byte as a
+          # character, so a non-ASCII path names another file. Pass the
+          # binary straight to the file module (ADR-042).
+          fossil_grep 'file:read_file\(binary_to_list\('      'binary_to_list on a path — pass the binary to file:read_file (non-ASCII paths, ADR-042)'
+          fossil_grep 'filelib:is_regular\(binary_to_list\('  'binary_to_list on a path — pass the binary to filelib:is_regular (non-ASCII paths, ADR-042)'
+          fossil_grep 'filelib:is_dir\(binary_to_list\('      'binary_to_list on a path — pass the binary to filelib:is_dir (non-ASCII paths, ADR-042)'
+
           if [ "$fail" -ne 0 ]; then
             exit 1
           fi

@@ -340,6 +340,8 @@ condition surfaces when it does.
 | 16 | **Session drain on disconnect** | `daemon/conn.gleam` | 2000ms | `PHAROS_SHUTDOWN_DRAIN_MS` | A closed connection's in-flight requests get this long before they are cancelled. |
 | 18 | **LSP group reap** | `pharos_instance_track_ffi.erl` (`REAP_*`) | 3000ms grace, then TERM, 2000ms, then KILL | not exposed | After an LSP's actor goes, whatever is left in its process group gets the grace, then TERM, then KILL (ADR-037). Runs in the LSP's own reaper; blocks nothing. |
 | 19 | **Final reap at application stop** | `pharos_app_ffi:stop/1` → `final_reap/0` | 1000ms grace, 1000ms after TERM | not exposed | Synchronous: delays the VM's halt by at most ~2s, and only while some LSP group doesn't empty by itself. |
+| 22 | **Tsserver diagnostics: projectInfo reserve** | `tools/diagnostics.gleam` (`reserve`) | `min(2000, remaining / 4)` of the call's budget, kept for projectInfo after the three `*DiagnosticsSync` requests (ADR-039, 0.3.3) | via #5 | tsserver didn't name the file's project in time: the answer carries `pharos.project_unknown`, never an error (ADR-040). |
+| 23 | **find_symbol: project load before workspace/symbol** | `tools/symbols.gleam` (`project_load_timeout_ms`) | `min(timeout_ms, 5000)` | via #5 (lowers it only) | A Tsserver-mode server is slow to answer projectInfo for `scope_uri`; the result is ignored and workspace/symbol is asked anyway, so it may see only the opened file (#21). |
 | 14 | **Harness wall-clock** | `bin/dogfood-23lang.py` | `timeout_ms / 1000 + 45s` | `PER_LANG_TIMEOUT_MS` const + per-target override | Harness gives up + sends `notifications/cancelled`. M14 dogfood-only. |
 
 Resolution stack at request time (ADR-021): #5 wins → #4 → #3 → #2

@@ -61,6 +61,7 @@ Sequential, zero-padded to three digits: `001-`, `002-`, etc. Numbers are immuta
 | 039 | [TypeScript diagnostics: ask tsserver directly](039-tsserver-diagnostics-asked-directly.md) | Accepted; amended by 040 |
 | 040 | [`pharos diagnostics` and the captAInHook payload](040-diagnostics-cli-and-captainhook-payload.md) | Accepted |
 | 041 | [A document's languageId follows its extension](041-document-language-id-per-extension.md) | Accepted |
+| 042 | [One canonical spelling for `file://` URIs](042-one-canonical-spelling-for-file-uris.md) | Accepted |
 
 ## Anticipated future ADRs
 
