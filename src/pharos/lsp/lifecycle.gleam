@@ -265,6 +265,9 @@ fn on_progress(
   params: Dynamic,
 ) -> Result(Client, RequestError) {
   let now = monotonic_ms()
+  // #30: recorded here too, so get_diagnostics knows this server reports
+  // progress from its first sync on.
+  record_progress(params)
   case decode.run(params, progress_token_and_kind_decoder()) {
     Ok(#(t, "end")) if t == r.token -> Ok(client)
     Ok(#(t, kind)) -> {
@@ -361,7 +364,17 @@ fn cache_publish_diagnostics(
           )
         Error(_) -> Nil
       }
+    // #30: progress is recorded, so get_diagnostics can wait while the
+    // server still works on a sync (cargo check after a save).
+    "$/progress" -> record_progress(params)
     _ -> Nil
+  }
+}
+
+fn record_progress(params: Dynamic) -> Nil {
+  case decode.run(params, progress_token_and_kind_decoder()) {
+    Ok(#(token, kind)) -> diagnostics_cache.progress(token, kind)
+    Error(_) -> Nil
   }
 }
 

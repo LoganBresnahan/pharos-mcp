@@ -258,6 +258,37 @@ Follow-up data, from the dogfood and the 23-language sweep:
 - Whether each Tier-1 server accepts a range-less change.
 - Which servers publish only on change.
 
+**Amendment (as built, 2026-11-20, for the maintainer's review; #30).** A publish stamped after
+a document's sync could still describe the text before it. rust-analyzer republishes at the new
+version with cargo check's results from the last check, and replaces them only when the check
+it reruns on save ends, about 2 s later. So right after an agent fixed a Rust error,
+`get_diagnostics` returned the old error as fresh. Since #12 pharos advertises
+`window.workDoneProgress`, and rust-analyzer brackets each check in a progress token
+(`rust-analyzer/flycheck/0`). Push mode now waits while the server still works on the sync:
+- The proc records every `$/progress` it reads, stamped with the cache's sequence.
+- `get_diagnostics` waits while a progress that began after the document's latest sync is
+  running.
+- A sync on a server that reports progress waits up to 500 ms for a begin to land (cargo
+  check's comes just after the save).
+- A progress running past 30 s is taken as stuck and no longer holds answers.
+- The wait never passes the call's deadline. If the deadline comes first, the entry is answered
+  marked carried over (unsure), never as fresh.
+
+The grace applies once the server has reported progress at least once. rust-analyzer always
+reports its cache priming at startup, so it's covered from its first sync. A server whose first
+progress is a check on save could still have its first post-save answer taken before that check
+begins, in roughly 1 run in 100 in the stub's tight timing. Servers that report no progress are
+unaffected.
+
+Progress is tracked per server, not per document: a check one edit starts holds answers about
+every document on that server while it runs (within each call's deadline, and the 30 s stuck
+limit). That's deliberate: cargo check (and gopls's or pyright's analysis) covers every file, so
+the other files' cached diagnostics are just as stale until it ends. The price is that a
+long-running unrelated progress (a re-index) also holds answers while it runs, never past the
+call's deadline. On the bundled ones, a follow-up question after an
+edit costs up to the 500 ms grace on gopls and rust-analyzer, and waits for cargo check on
+rust-analyzer (seconds, bounded as above).
+
 ## Alternatives considered
 
 - **A batch of only `didOpen`s doesn't count for freshness.** It fixes the case the review hit

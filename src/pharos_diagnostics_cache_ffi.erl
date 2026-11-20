@@ -52,16 +52,22 @@
          drop_uri/1, mark_synced/3, mark_failed/2, mark_closed/2,
          mark_batch/1, stamp_status/4, close_status/4, expect/4,
          expect_closed/3, expect_batch/2, forget_proc/1, lookup/4,
-         settle_left/2]).
+         settle_left/2, progress/2, progress_quiet/5]).
 
 -define(TABLE, pharos_diagnostics_cache).
 -define(SYNCED, pharos_diagnostics_synced).
 -define(EXPECTED, pharos_diagnostics_expected).
+%% #30: the `$/progress` a proc's server reports after readiness:
+%%   {{Pid, Token}, BeginSeq, BeginMs}   one per running token
+%%   {{seen, Pid}, true}                 the server has reported progress
+%%   {{sync, Pid, Uri, ServerId}, Ms}    when each document's sync was written
+-define(PROGRESS, pharos_diagnostics_progress).
 
 init() ->
     ensure_table(?TABLE),
     ensure_table(?SYNCED),
     ensure_table(?EXPECTED),
+    ensure_table(?PROGRESS),
     nil.
 
 ensure_table(Name) ->
@@ -132,6 +138,7 @@ mark_synced(Uri0, ServerId, Version)
         when is_binary(Uri0), is_binary(ServerId), is_integer(Version) ->
     Uri = key(Uri0),
     true = ets:insert(?SYNCED, {{Uri, ServerId, self()}, seq(), Version}),
+    true = ets:insert(?PROGRESS, {{sync, self(), Uri, ServerId}, now_ms()}),
     nil.
 
 %% Called by the proc as it starts writing batch `N`, before any write:
@@ -201,12 +208,61 @@ expect_closed(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
     nil.
 
 %% A proc is gone: drop every row it owned.
+%% #30. Called by the proc for each `$/progress` it reads after readiness
+%% (`Kind` is begin, report or end). A begin is stamped with the same
+%% sequence as syncs and publishes, so "began after this document's sync"
+%% is a comparison.
+progress(Token, Kind) when is_binary(Token), is_binary(Kind) ->
+    Self = self(),
+    case Kind of
+        <<"begin">> ->
+            true = ets:insert(?PROGRESS, {{Self, Token}, seq(), now_ms()}),
+            true = ets:insert(?PROGRESS, {{seen, Self}, true});
+        <<"end">> ->
+            ets:delete(?PROGRESS, {Self, Token});
+        _ ->
+            ok
+    end,
+    nil.
+
+%% #30. False while the server is still working on what this document's
+%% latest sync changed, so an answer now could carry results from before
+%% it (rust-analyzer republishes cargo check's old ones at the new
+%% version until the check it reruns on save ends). That is, either:
+%% - a progress that began after the sync is still running, and hasn't
+%%   run longer than `StuckMs` (one that never ends doesn't hold every
+%%   call);
+%% - the server reports progress and the sync is younger than `GraceMs`
+%%   (its begin can land just after the sync).
+%% True otherwise, and always for a document with no sync stamp.
+progress_quiet(Uri0, ServerId, Pid, GraceMs, StuckMs)
+        when is_binary(Uri0), is_binary(ServerId), is_integer(GraceMs), is_integer(StuckMs) ->
+    Uri = key(Uri0),
+    case ets:lookup(?SYNCED, {Uri, ServerId, Pid}) of
+        [{_, SyncSeq, _}] when is_integer(SyncSeq) ->
+            Now = now_ms(),
+            Running = [T || {{_, T}, BeginSeq, BeginMs}
+                                <- ets:match_object(?PROGRESS, {{Pid, '_'}, '_', '_'}),
+                            BeginSeq > SyncSeq, Now - BeginMs < StuckMs],
+            InGrace = ets:member(?PROGRESS, {seen, Pid}) andalso
+                case ets:lookup(?PROGRESS, {sync, Pid, Uri, ServerId}) of
+                    [{_, SyncMs}] -> Now - SyncMs < GraceMs;
+                    _ -> false
+                end,
+            Running =:= [] andalso not InGrace;
+        _ ->
+            true
+    end.
+
 forget_proc(Pid) ->
     ets:match_delete(?TABLE, {{'_', '_', Pid}, '_', '_'}),
     ets:match_delete(?SYNCED, {{'_', '_', Pid}, '_', '_'}),
     ets:match_delete(?EXPECTED, {{'_', '_', Pid}, '_'}),
     ets:delete(?SYNCED, {batch, Pid}),
     ets:delete(?EXPECTED, {batch, Pid}),
+    ets:match_delete(?PROGRESS, {{Pid, '_'}, '_', '_'}),
+    ets:delete(?PROGRESS, {seen, Pid}),
+    ets:match_delete(?PROGRESS, {{sync, Pid, '_', '_'}, '_'}),
     nil.
 
 %% fresh | carried_over | missing for the entry proc `Pid` cached, as

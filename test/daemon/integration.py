@@ -1373,6 +1373,49 @@ def t_frames_after_a_reply_are_handled(sb):
     check(took < 3, "took %.1fs" % took)
 
 
+def t_check_on_save_answers_the_new_text(sb):
+    """#30: rust-analyzer republishes cargo check's old results at the new
+    version until the check it reruns on save ends. get_diagnostics waits
+    while a progress that began after the sync is still running, so a fixed
+    file isn't answered with its old error as fresh."""
+    # Like rust-analyzer, the stub reports progress at startup too (its
+    # cache priming), so pharos knows from the first sync that it reports
+    # progress, and gives a save's check time to begin.
+    a = sb.start({"STUB_LSP_CHECK_ON_SAVE": "1500", "STUB_LSP_SYNC_SAVE": "true",
+                  "STUB_LSP_PROGRESS": "stub/priming:200"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "ok\nERROR one\n")
+    d1 = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    check("stub error on line 1" in d1, "first answer: %s" % d1[-300:])
+    stub_file(sb, "main.stub", "ok\nfixed\n")
+    t0 = time.time()
+    d2 = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    took = time.time() - t0
+    check("stub error" not in d2 and "carried_over" not in d2, "answered the old error after the fix: %s" % d2[-300:])
+    check(1.0 <= took < 6, "took %.1fs: expected to wait for the check (1.5 s)" % took)
+
+
+def t_check_that_never_ends_is_bounded(sb):
+    """#30: a check that doesn't end within the call's timeout doesn't hold
+    the answer past it, and what's cached then is answered as carried over
+    (unsure), not as fresh."""
+    # Startup progress as in check_on_save_answers_the_new_text: without
+    # it, the save's check is the server's first progress and gets no
+    # grace (the gap ADR-038's amendment records), so its begin could land
+    # after the answer was taken as fresh: 1 run in 200 (verifier).
+    a = sb.start({"STUB_LSP_CHECK_ON_SAVE": "600000", "STUB_LSP_SYNC_SAVE": "true",
+                  "STUB_LSP_PROGRESS": "stub/priming:200"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "ok\nERROR one\n")
+    a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
+    stub_file(sb, "main.stub", "ok\nfixed\n")
+    t0 = time.time()
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 2000})
+    took = time.time() - t0
+    check(took < 4, "took %.1fs: the wait passed the call's timeout" % took)
+    check("carried_over" in d, "an answer during an unfinished check must be marked: %s" % d[-300:])
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1425,6 +1468,8 @@ SCENARIOS = [
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
     ("frames_after_a_reply_are_handled", t_frames_after_a_reply_are_handled),
+    ("check_on_save_answers_the_new_text", t_check_on_save_answers_the_new_text),
+    ("check_that_never_ends_is_bounded", t_check_that_never_ends_is_bounded),
     ("pull_capability_follows_mode", t_pull_capability_follows_mode),
     ("readiness_without_progress", t_readiness_without_progress),
     ("readiness_any_token", t_readiness_any_token),

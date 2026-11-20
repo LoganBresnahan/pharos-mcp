@@ -125,6 +125,16 @@ Frames in one read (#25):
                               with the reply") in ONE write, so they reach
                               pharos in one read, as zls's often do
 
+A check on save, like rust-analyzer's cargo check (#30):
+
+  STUB_LSP_CHECK_ON_SAVE=ms   publish on didOpen as usual; on didChange
+                              republish the LAST check's diagnostics at the
+                              new version (stale); on didSave begin progress
+                              "stub/check", and `ms` later publish the
+                              current text's diagnostics and end it. Needs
+                              STUB_LSP_SYNC_SAVE so pharos sends didSave,
+                              and the client's window.workDoneProgress
+
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
 range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
@@ -200,6 +210,38 @@ def write_message(stream, msg):
 
 
 CLIENT_PROGRESS = threading.Event()
+
+
+LAST_CHECKED: dict[str, list] = {}
+
+
+def check_on_save(stdout, method, uri):
+    """STUB_LSP_CHECK_ON_SAVE: rust-analyzer's flycheck shape."""
+    delay = int(os.environ["STUB_LSP_CHECK_ON_SAVE"]) / 1000.0
+    doc = DOCS.get(uri)
+    if doc is None:
+        return
+    if method == "textDocument/didOpen":
+        LAST_CHECKED[uri] = stub_diagnostics(doc["text"])
+        write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                               "params": {"uri": uri, "version": doc["version"], "diagnostics": LAST_CHECKED[uri]}})
+    elif method == "textDocument/didChange":
+        write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                               "params": {"uri": uri, "version": doc["version"], "diagnostics": LAST_CHECKED.get(uri, [])}})
+    elif method == "textDocument/didSave" and CLIENT_PROGRESS.is_set():
+        write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
+                               "params": {"token": "stub/check", "value": {"kind": "begin", "title": "check"}}})
+
+        def finish():
+            d = DOCS.get(uri)
+            if d is None:
+                return
+            LAST_CHECKED[uri] = stub_diagnostics(d["text"])
+            write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                                   "params": {"uri": uri, "version": d["version"], "diagnostics": LAST_CHECKED[uri]}})
+            write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
+                                   "params": {"token": "stub/check", "value": {"kind": "end"}}})
+        threading.Timer(delay, finish).start()
 
 
 def after_initialized(stdout):
@@ -585,9 +627,14 @@ def main():
                                            "method": "textDocument/publishDiagnostics",
                                            "params": {"uri": uri, "diagnostics": stub_diagnostics(DOCS[uri]["text"])}})
             maybe_publish(stdout, uri)
+            if os.environ.get("STUB_LSP_CHECK_ON_SAVE"):
+                check_on_save(stdout, method, uri)
         elif method == "textDocument/didClose":
             apply_sync(method, msg.get("params") or {})
         elif method == "textDocument/didSave":
+            if os.environ.get("STUB_LSP_CHECK_ON_SAVE"):
+                uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
+                check_on_save(stdout, method, uri)
             continue
         elif method == "workspace/symbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
             write_message(stdout, handle_workspace_symbol(msg))

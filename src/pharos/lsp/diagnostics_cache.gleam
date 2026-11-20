@@ -197,3 +197,21 @@ pub fn settle_left_ms(pid: Pid) -> Int {
 /// `settle_left_ms/1` with an explicit settle window, for tests.
 @external(erlang, "pharos_diagnostics_cache_ffi", "settle_left")
 pub fn settle_left_within(pid: Pid, settle_window_ms: Int) -> Int
+
+/// #30: record a `$/progress` the calling proc read after readiness.
+/// `kind` is `begin`, `report` or `end`.
+@external(erlang, "pharos_diagnostics_cache_ffi", "progress")
+pub fn progress(token: String, kind: String) -> Nil
+
+/// #30: False while the proc `pid`'s server is still working on what
+/// `uri`'s latest sync changed: a progress that began after the sync and
+/// hasn't run past `stuck_ms` is running, or the server reports progress
+/// and the sync is younger than `grace_ms`.
+@external(erlang, "pharos_diagnostics_cache_ffi", "progress_quiet")
+pub fn progress_quiet(
+  uri: String,
+  server_id: String,
+  pid: Pid,
+  grace_ms: Int,
+  stuck_ms: Int,
+) -> Bool

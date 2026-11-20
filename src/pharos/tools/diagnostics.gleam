@@ -388,6 +388,68 @@ fn resolve_push(
   pid: Pid,
   deadline_ms: Int,
 ) -> PushEntry {
+  // #30: while the server is still working on this document's sync (a
+  // progress that began after it is running), what's cached can be from
+  // before it: rust-analyzer republishes cargo check's old results at the
+  // new version until the check it reruns on save ends. Wait for that,
+  // within the call's deadline. If the deadline comes first, an entry
+  // that looks fresh is answered as carried over (unsure), never as
+  // fresh.
+  case await_progress_quiet(file_uri, server_id, pid, deadline_ms) {
+    True -> resolve_push_now(file_uri, server_id, pid, deadline_ms)
+    False ->
+      case resolve_push_now(file_uri, server_id, pid, now_ms()) {
+        FreshEntry(params) -> CarriedEntry(params)
+        other -> other
+      }
+  }
+}
+
+/// A progress begin can land just after the sync (cargo check starts on
+/// the save that followed the change); this long a sync waits for one,
+/// on a server that has reported progress before (rust-analyzer always
+/// has, from its startup indexing).
+const progress_grace_ms = 500
+
+/// A progress running longer than this is taken as stuck, and no longer
+/// holds answers back.
+const progress_stuck_ms = 30_000
+
+/// True once nothing the server reports is still working on `file_uri`'s
+/// latest sync; False if `deadline_ms` comes first.
+fn await_progress_quiet(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  deadline_ms: Int,
+) -> Bool {
+  case
+    diagnostics_cache.progress_quiet(
+      file_uri,
+      server_id,
+      pid,
+      progress_grace_ms,
+      progress_stuck_ms,
+    )
+  {
+    True -> True
+    False ->
+      case now_ms() >= deadline_ms {
+        True -> False
+        False -> {
+          process.sleep(poll_step_ms)
+          await_progress_quiet(file_uri, server_id, pid, deadline_ms)
+        }
+      }
+  }
+}
+
+fn resolve_push_now(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  deadline_ms: Int,
+) -> PushEntry {
   case diagnostics_cache.lookup(file_uri, server_id, pid) {
     diagnostics_cache.Fresh(params) -> FreshEntry(params)
     diagnostics_cache.CarriedOver(params) ->
