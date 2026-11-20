@@ -309,15 +309,15 @@ fn hello(mut stream: &UnixStream, release: &Release) -> Result<Vec<u8>, String> 
         unsafe { libc::getppid() },
         std::process::id(),
     );
+    // Before the write: the daemon may answer and close at once (a refused
+    // hello), and macOS then refuses the setsockopt (#34).
+    set_read_timeout(stream, Some(start_timeout())).map_err(|e| e.to_string())?;
     stream
         .write_all(line.as_bytes())
         .map_err(|e| format!("hello failed: {}", e))?;
 
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
-    stream
-        .set_read_timeout(Some(start_timeout()))
-        .map_err(|e| e.to_string())?;
     let newline = loop {
         if let Some(at) = buf.iter().position(|b| *b == b'\n') {
             break at;
@@ -331,7 +331,7 @@ fn hello(mut stream: &UnixStream, release: &Release) -> Result<Vec<u8>, String> 
             Err(e) => return Err(format!("no ack from the daemon: {}", e)),
         }
     };
-    stream.set_read_timeout(None).map_err(|e| e.to_string())?;
+    set_read_timeout(stream, None).map_err(|e| e.to_string())?;
     let ack = String::from_utf8_lossy(&buf[..newline]).into_owned();
     if json::has_key(&ack, "pharos_hello_ok") {
         Ok(buf[newline + 1..].to_vec())
@@ -447,17 +447,29 @@ fn relay(stream: UnixStream, leftover: Vec<u8>) -> i32 {
 pub fn operator_request(socket: &Path, op: &str) -> Result<String, String> {
     let mut stream =
         UnixStream::connect(socket).map_err(|e| format!("{}: {}", socket.display(), e))?;
+    // Before the write: the daemon answers and closes at once, and on macOS
+    // a setsockopt after that failed `daemon status` with "Invalid
+    // argument" (#34).
+    set_read_timeout(&stream, Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
     stream
         .write_all(format!("{{\"pharos_hello\":1,\"op\":{}}}\n", json::string(op)).as_bytes())
-        .map_err(|e| e.to_string())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| e.to_string())?;
     let mut reply = String::new();
     stream
         .read_to_string(&mut reply)
         .map_err(|e| e.to_string())?;
     Ok(reply.trim_end().to_string())
+}
+
+/// `UnixStream::set_read_timeout`, taking EINVAL as "the peer has already
+/// closed": macOS refuses setsockopt on a Unix socket whose peer has shut
+/// down. A read then can't block anyway: it returns what the peer sent,
+/// then EOF (#34).
+pub(crate) fn set_read_timeout(stream: &UnixStream, timeout: Option<Duration>) -> io::Result<()> {
+    match stream.set_read_timeout(timeout) {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        other => other,
+    }
 }
 
 /// Append an auto-mode fallback to `<log dir>/fallbacks.log`, so a
@@ -546,6 +558,49 @@ mod tests {
         assert!(line.contains("\"PATH\":\"/usr/bin\""));
         assert!(line.contains("\"TOKEN\":\"a\\\"b\""));
         assert!(line.contains("\"client_pid\":7,\"shim_pid\":8"));
+    }
+
+    fn socket_path(tag: &str) -> PathBuf {
+        env::temp_dir().join(format!("pharos-shim-{}-{}.sock", tag, std::process::id()))
+    }
+
+    #[test]
+    fn read_timeout_on_a_socket_whose_peer_closed() {
+        // The peer writes its reply and closes before the timeout is set;
+        // macOS refused that setsockopt with EINVAL (#34).
+        let path = socket_path("closed");
+        let _ = fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            conn.write_all(b"{\"ok\":true}\n").unwrap();
+        });
+        let mut stream = UnixStream::connect(&path).unwrap();
+        server.join().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        set_read_timeout(&stream, Some(Duration::from_secs(5))).unwrap();
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).unwrap();
+        assert_eq!(reply, "{\"ok\":true}\n");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn operator_request_reads_a_reply_sent_and_closed_at_once() {
+        let path = socket_path("op");
+        let _ = fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut line = [0u8; 256];
+            let n = conn.read(&mut line).unwrap();
+            assert!(String::from_utf8_lossy(&line[..n]).contains("\"op\":\"status\""));
+            conn.write_all(b"{\"status\":\"running\"}\n").unwrap();
+        });
+        let reply = operator_request(&path, "status").unwrap();
+        server.join().unwrap();
+        assert_eq!(reply, "{\"status\":\"running\"}");
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

@@ -269,8 +269,7 @@ impl Session {
             params
         ))
         .map_err(RequestError::Other)?;
-        self.stream
-            .set_read_timeout(Some(wait))
+        crate::client::set_read_timeout(&self.stream, Some(wait))
             .map_err(|e| RequestError::Other(e.to_string()))?;
         let mut chunk = vec![0u8; 64 * 1024];
         loop {
