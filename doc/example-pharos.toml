@@ -285,6 +285,17 @@
 # Any server that reports indexing progress is also retried while that
 # progress runs, whatever this value.
 
+# 4c) Checks that start on save (#30).
+#
+# rust-analyzer reruns cargo check on save and, until it ends, republishes
+# the last check's diagnostics at the new version. `save_check_grace_ms` is
+# how long get_diagnostics waits after a sync for such a check to begin
+# (then it waits for the check to end). Bundled: rust-analyzer 500, others
+# 0. Set it for a server of your own that does the same:
+#
+# [languages.mylang]
+# save_check_grace_ms = 500
+
 # 5) Per-tool default_timeout_ms (M13 polish, ADR 021).
 #
 # Every LSP-bound MCP tool accepts an optional `timeout_ms` arg, and

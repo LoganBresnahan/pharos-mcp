@@ -1378,9 +1378,9 @@ def t_check_on_save_answers_the_new_text(sb):
     version until the check it reruns on save ends. get_diagnostics waits
     while a progress that began after the sync is still running, so a fixed
     file isn't answered with its old error as fresh."""
-    # Like rust-analyzer, the stub reports progress at startup too (its
-    # cache priming), so pharos knows from the first sync that it reports
-    # progress, and gives a save's check time to begin.
+    # The server is configured like rust-analyzer: a save's check gets
+    # 500 ms to begin.
+    sb.write_toml("save_check_grace_ms = 500\n")
     a = sb.start({"STUB_LSP_CHECK_ON_SAVE": "1500", "STUB_LSP_SYNC_SAVE": "true",
                   "STUB_LSP_PROGRESS": "stub/priming:200"})
     a.initialize()
@@ -1399,12 +1399,12 @@ def t_check_that_never_ends_is_bounded(sb):
     """#30: a check that doesn't end within the call's timeout doesn't hold
     the answer past it, and what's cached then is answered as carried over
     (unsure), not as fresh."""
-    # Startup progress as in check_on_save_answers_the_new_text: without
-    # it, the save's check is the server's first progress and gets no
-    # grace (the gap ADR-038's amendment records), so its begin could land
-    # after the answer was taken as fresh: 1 run in 200 (verifier).
-    a = sb.start({"STUB_LSP_CHECK_ON_SAVE": "600000", "STUB_LSP_SYNC_SAVE": "true",
-                  "STUB_LSP_PROGRESS": "stub/priming:200"})
+    # No startup progress: the save's check is the server's first. Before
+    # save_check_grace_ms its begin could land after the answer was taken
+    # as fresh, 3 runs in 600 (verifier); the grace now applies whether or
+    # not the server reported progress before.
+    sb.write_toml("save_check_grace_ms = 500\n")
+    a = sb.start({"STUB_LSP_CHECK_ON_SAVE": "600000", "STUB_LSP_SYNC_SAVE": "true"})
     a.initialize()
     uri = stub_file(sb, "main.stub", "ok\nERROR one\n")
     a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 20000})
@@ -1588,6 +1588,23 @@ def t_find_symbol_warm_miss_is_prompt(sb):
     check(took < 2, "a warm miss took %.1fs: it was retried" % took)
 
 
+def t_progress_without_save_check_answers_at_once(sb):
+    """#30 follow-up: a server that reports progress but starts no check on
+    save (gopls) has no grace, so the first question after an edit doesn't
+    wait 500 ms for a check that never comes (0.515 s against 0.003 s)."""
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push", "STUB_LSP_PROGRESS": "stub/priming:200"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "ok\nERROR one\n")
+    d1 = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 10000})
+    check("ERROR one" in d1 or "line 1" in d1, "first answer: %s" % d1[-300:])
+    stub_file(sb, "main.stub", "ok\nfine\nERROR two\n")
+    t0 = time.time()
+    d2 = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 10000})
+    took = time.time() - t0
+    check("carried_over" not in d2 and "line 2" in d2, "answer after the edit: %s" % d2[-300:])
+    check(took < 0.4, "took %.2fs: waited for a save check the server doesn't run" % took)
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1644,6 +1661,7 @@ SCENARIOS = [
     ("frames_after_a_reply_are_handled", t_frames_after_a_reply_are_handled),
     ("check_on_save_answers_the_new_text", t_check_on_save_answers_the_new_text),
     ("check_that_never_ends_is_bounded", t_check_that_never_ends_is_bounded),
+    ("progress_without_save_check_answers_at_once", t_progress_without_save_check_answers_at_once),
     ("find_symbol_null_result", t_find_symbol_null_result),
     ("find_symbol_prefers_the_workspace", t_find_symbol_prefers_the_workspace),
     ("find_symbol_says_why_it_was_narrow", t_find_symbol_says_why_it_was_narrow),

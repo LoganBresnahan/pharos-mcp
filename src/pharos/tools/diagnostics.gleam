@@ -161,12 +161,23 @@ fn attempt_single(
     Error(err) -> Error(map_session_error(err))
     Ok(lsp) -> {
       let primary = languages.primary_server(config)
-      let #(server_id, mode) = case primary {
-        Ok(server) -> #(server.id, server.diagnostics_mode)
-        Error(_) -> #("", Push)
+      let #(server_id, mode, grace_ms) = case primary {
+        Ok(server) -> #(
+          server.id,
+          server.diagnostics_mode,
+          server.save_check_grace_ms,
+        )
+        Error(_) -> #("", Push, 0)
       }
       let result = case mode {
-        Push -> Ok(push_result(file_uri, server_id, proc.pid(lsp), deadline_ms))
+        Push ->
+          Ok(push_result(
+            file_uri,
+            server_id,
+            proc.pid(lsp),
+            grace_ms,
+            deadline_ms,
+          ))
         Pull -> pull_diagnostics(lsp, file_uri, timeout_ms)
         Tsserver -> {
           let ignored = case primary {
@@ -282,7 +293,15 @@ fn server_report(
 ) -> ServerReport {
   let fetched = case server.diagnostics_mode {
     Push ->
-      case resolve_push(file_uri, server.id, proc.pid(lsp), deadline_ms) {
+      case
+        resolve_push(
+          file_uri,
+          server.id,
+          proc.pid(lsp),
+          server.save_check_grace_ms,
+          deadline_ms,
+        )
+      {
         FreshEntry(params) ->
           items_from_params(params) |> result_map(fn(i) { #(i, False) })
         CarriedEntry(params) ->
@@ -305,7 +324,15 @@ fn server_report(
         Error(reason) -> {
           log_tsserver_fallback(server.id, reason)
           // A publish carries no version: never fresh in this mode.
-          case resolve_push(file_uri, server.id, proc.pid(lsp), deadline_ms) {
+          case
+            resolve_push(
+              file_uri,
+              server.id,
+              proc.pid(lsp),
+              server.save_check_grace_ms,
+              deadline_ms,
+            )
+          {
             FreshEntry(params) | CarriedEntry(params) ->
               items_from_params(params) |> result_map(fn(i) { #(i, True) })
             NotReported -> Error("no publishDiagnostics within the timeout")
@@ -386,6 +413,7 @@ fn resolve_push(
   file_uri: String,
   server_id: String,
   pid: Pid,
+  grace_ms: Int,
   deadline_ms: Int,
 ) -> PushEntry {
   // #30: while the server is still working on this document's sync (a
@@ -395,7 +423,7 @@ fn resolve_push(
   // within the call's deadline. If the deadline comes first, an entry
   // that looks fresh is answered as carried over (unsure), never as
   // fresh.
-  case await_progress_quiet(file_uri, server_id, pid, deadline_ms) {
+  case await_progress_quiet(file_uri, server_id, pid, grace_ms, deadline_ms) {
     True -> resolve_push_now(file_uri, server_id, pid, deadline_ms)
     False ->
       case resolve_push_now(file_uri, server_id, pid, now_ms()) {
@@ -405,22 +433,24 @@ fn resolve_push(
   }
 }
 
-/// A progress begin can land just after the sync (cargo check starts on
-/// the save that followed the change); this long a sync waits for one,
-/// on a server that has reported progress before (rust-analyzer always
-/// has, from its startup indexing).
-const progress_grace_ms = 500
-
 /// A progress running longer than this is taken as stuck, and no longer
 /// holds answers back.
 const progress_stuck_ms = 30_000
 
 /// True once nothing the server reports is still working on `file_uri`'s
 /// latest sync; False if `deadline_ms` comes first.
+///
+/// `grace_ms` is the server's `save_check_grace_ms`: a progress begin can
+/// land just after the sync (cargo check starts on the save that followed
+/// the change), so a sync that young counts as not quiet yet. Servers
+/// that don't start a check on save have 0 and pay nothing (gopls paid
+/// ~0.5 s per question after an edit when every progress-reporting server
+/// got the grace).
 fn await_progress_quiet(
   file_uri: String,
   server_id: String,
   pid: Pid,
+  grace_ms: Int,
   deadline_ms: Int,
 ) -> Bool {
   case
@@ -428,7 +458,7 @@ fn await_progress_quiet(
       file_uri,
       server_id,
       pid,
-      progress_grace_ms,
+      grace_ms,
       progress_stuck_ms,
     )
   {
@@ -438,7 +468,7 @@ fn await_progress_quiet(
         True -> False
         False -> {
           process.sleep(poll_step_ms)
-          await_progress_quiet(file_uri, server_id, pid, deadline_ms)
+          await_progress_quiet(file_uri, server_id, pid, grace_ms, deadline_ms)
         }
       }
   }
@@ -528,9 +558,10 @@ fn push_result(
   file_uri: String,
   server_id: String,
   pid: Pid,
+  grace_ms: Int,
   deadline_ms: Int,
 ) -> DiagnosticsResult {
-  case resolve_push(file_uri, server_id, pid, deadline_ms) {
+  case resolve_push(file_uri, server_id, pid, grace_ms, deadline_ms) {
     FreshEntry(params) ->
       Diagnostics(
         uri: file_uri,
@@ -720,7 +751,7 @@ fn tsserver_result(
       )
     Error(reason) -> {
       log_tsserver_fallback(server_id, reason)
-      case resolve_push(file_uri, server_id, proc.pid(lsp), deadline_ms) {
+      case resolve_push(file_uri, server_id, proc.pid(lsp), 0, deadline_ms) {
         FreshEntry(params) | CarriedEntry(params) ->
           Diagnostics(
             uri: file_uri,

@@ -60,7 +60,6 @@
 -define(EXPECTED, pharos_diagnostics_expected).
 %% #30: the `$/progress` a proc's server reports after readiness:
 %%   {{Pid, Token}, BeginSeq, BeginMs}   one per running token
-%%   {{seen, Pid}, true}                 the server has reported progress
 %%   {{sync, Pid, Uri, ServerId}, Ms}    when each document's sync was written
 -define(PROGRESS, pharos_diagnostics_progress).
 
@@ -217,8 +216,7 @@ progress(Token, Kind) when is_binary(Token), is_binary(Kind) ->
     Self = self(),
     case Kind of
         <<"begin">> ->
-            true = ets:insert(?PROGRESS, {{Self, Token}, seq(), now_ms()}),
-            true = ets:insert(?PROGRESS, {{seen, Self}, true});
+            true = ets:insert(?PROGRESS, {{Self, Token}, seq(), now_ms()});
         <<"end">> ->
             ets:delete(?PROGRESS, {Self, Token});
         _ ->
@@ -233,8 +231,9 @@ progress(Token, Kind) when is_binary(Token), is_binary(Kind) ->
 %% - a progress that began after the sync is still running, and hasn't
 %%   run longer than `StuckMs` (one that never ends doesn't hold every
 %%   call);
-%% - the server reports progress and the sync is younger than `GraceMs`
-%%   (its begin can land just after the sync).
+%% - the sync is younger than `GraceMs`, the server's save_check_grace_ms
+%%   (a check's begin can land just after the sync); 0 for a server that
+%%   doesn't start a check on save.
 %% True otherwise, and always for a document with no sync stamp.
 progress_quiet(Uri0, ServerId, Pid, GraceMs, StuckMs)
         when is_binary(Uri0), is_binary(ServerId), is_integer(GraceMs), is_integer(StuckMs) ->
@@ -245,7 +244,7 @@ progress_quiet(Uri0, ServerId, Pid, GraceMs, StuckMs)
             Running = [T || {{_, T}, BeginSeq, BeginMs}
                                 <- ets:match_object(?PROGRESS, {{Pid, '_'}, '_', '_'}),
                             BeginSeq > SyncSeq, Now - BeginMs < StuckMs],
-            InGrace = ets:member(?PROGRESS, {seen, Pid}) andalso
+            InGrace = GraceMs > 0 andalso
                 case ets:lookup(?PROGRESS, {sync, Pid, Uri, ServerId}) of
                     [{_, SyncMs}] -> Now - SyncMs < GraceMs;
                     _ -> false
@@ -269,7 +268,6 @@ forget_proc(Pid) ->
     ets:delete(?SYNCED, {batch, Pid}),
     ets:delete(?EXPECTED, {batch, Pid}),
     ets:match_delete(?PROGRESS, {{Pid, '_'}, '_', '_'}),
-    ets:delete(?PROGRESS, {seen, Pid}),
     ets:match_delete(?PROGRESS, {{sync, Pid, '_', '_'}, '_'}),
     nil.
 

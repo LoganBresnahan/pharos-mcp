@@ -212,6 +212,7 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     initialize_timeout_ms: override.initialize_timeout_ms,
     warm_probe: ProbeWorkspaceSymbol(""),
     lazy_workspace_index_ms: option.unwrap(override.lazy_workspace_index_ms, 0),
+    save_check_grace_ms: option.unwrap(override.save_check_grace_ms, 0),
   )
 }
 
@@ -382,6 +383,10 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.lazy_workspace_index_ms,
       default.lazy_workspace_index_ms,
     ),
+    save_check_grace_ms: option.unwrap(
+      ovr.save_check_grace_ms,
+      default.save_check_grace_ms,
+    ),
   )
 }
 
@@ -407,6 +412,7 @@ fn server_from_override(
     initialize_timeout_ms: ovr.initialize_timeout_ms,
     warm_probe: ProbeWorkspaceSymbol(""),
     lazy_workspace_index_ms: option.unwrap(ovr.lazy_workspace_index_ms, 0),
+    save_check_grace_ms: option.unwrap(ovr.save_check_grace_ms, 0),
   )
 }
 
@@ -466,6 +472,10 @@ fn merge_primary(
     lazy_workspace_index_ms: option.unwrap(
       override.lazy_workspace_index_ms,
       primary.lazy_workspace_index_ms,
+    ),
+    save_check_grace_ms: option.unwrap(
+      override.save_check_grace_ms,
+      primary.save_check_grace_ms,
     ),
   )
 }

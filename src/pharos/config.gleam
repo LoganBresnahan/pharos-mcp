@@ -114,6 +114,9 @@ pub type ServerOverride {
     /// workspace searches empty while it indexes without reporting
     /// progress; find_symbol retries within it. 0 turns it off.
     lazy_workspace_index_ms: Option(Int),
+    /// #30. How long after a sync get_diagnostics waits for a check the
+    /// server starts on save to begin. 0: no grace.
+    save_check_grace_ms: Option(Int),
     /// Whole-blob replace of the server's `initialization_options`
     /// JSON sent at `initialize`. Stored as a TOML string containing
     /// JSON text (LSP-server upstream docs publish init options in
@@ -193,6 +196,9 @@ pub type LanguageOverride {
     /// workspace searches empty while it indexes without reporting
     /// progress; find_symbol retries within it. 0 turns it off.
     lazy_workspace_index_ms: Option(Int),
+    /// #30. How long after a sync get_diagnostics waits for a check the
+    /// server starts on save to begin. 0: no grace.
+    save_check_grace_ms: Option(Int),
     /// ADR-029. User-defined custom URI schemes for this language.
     /// Each entry merges into the bundled defaults by scheme key:
     /// user-supplied schemes that already exist replace the default
@@ -866,6 +872,7 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       value,
       "lazy_workspace_index_ms",
     ),
+    save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
     custom_uri_schemes: decode_optional_custom_uri_schemes(value),
   )
 }
@@ -964,6 +971,7 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
       value,
       "lazy_workspace_index_ms",
     ),
+    save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
     initialization_options_json: decode_optional_string(
       value,
       "initialization_options_json",

@@ -268,17 +268,23 @@ it reruns on save ends, about 2 s later. So right after an agent fixed a Rust er
 - The proc records every `$/progress` it reads, stamped with the cache's sequence.
 - `get_diagnostics` waits while a progress that began after the document's latest sync is
   running.
-- A sync on a server that reports progress waits up to 500 ms for a begin to land (cargo
-  check's comes just after the save).
+- A sync on a server configured to start a check on save waits up to its
+  `save_check_grace_ms` for that check's begin to land (cargo check's comes just after the
+  save). rust-analyzer has 500 ms; every other bundled server has 0.
 - A progress running past 30 s is taken as stuck and no longer holds answers.
 - The wait never passes the call's deadline. If the deadline comes first, the entry is answered
   marked carried over (unsure), never as fresh.
 
-The grace applies once the server has reported progress at least once. rust-analyzer always
-reports its cache priming at startup, so it's covered from its first sync. A server whose first
-progress is a check on save could still have its first post-save answer taken before that check
-begins, in roughly 1 run in 100 in the stub's tight timing. Servers that report no progress are
-unaffected.
+As first built, the grace went to every server that had reported progress at least once. That
+cost ~0.5 s on the first question after an edit on gopls (0.515 s median against 0.003 s,
+verifier), which reports progress but starts no check on save. And a server whose first progress
+was a check on save got no grace at all: its first post-save answer could be taken as fresh
+before the check began (3 runs in 600 in the stub). The grace is now a per-server setting,
+`save_check_grace_ms` (pharos.toml, per language or per server), applied whether or not the
+server has reported progress before. That removes both: gopls and the rest pay nothing, and a
+configured server is covered from its first sync. A server that starts a check on save without
+being configured can still be answered from before the check in the gap between the sync and
+the check's begin.
 
 Progress is tracked per server, not per document: a check one edit starts holds answers about
 every document on that server while it runs (within each call's deadline, and the 30 s stuck
@@ -286,8 +292,8 @@ limit). That's deliberate: cargo check (and gopls's or pyright's analysis) cover
 the other files' cached diagnostics are just as stale until it ends. The price is that a
 long-running unrelated progress (a re-index) also holds answers while it runs, never past the
 call's deadline. On the bundled ones, a follow-up question after an
-edit costs up to the 500 ms grace on gopls and rust-analyzer, and waits for cargo check on
-rust-analyzer (seconds, bounded as above).
+edit costs up to the 500 ms grace on rust-analyzer only, and waits for cargo check there
+(seconds, bounded as above).
 
 ## Alternatives considered
 
