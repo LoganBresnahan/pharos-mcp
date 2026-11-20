@@ -131,6 +131,10 @@ pub fn run(release: &Release, args: &[OsString]) -> ExitCode {
         let uri = file_uri(&path);
         match session.get_diagnostics(&uri, opts.timeout_ms) {
             Ok(reply) => results.push(classify(file, &path, &uri, &reply)),
+            // The daemon didn't answer in time (a language server still
+            // starting, say): unsure, as for any answer pharos can't vouch
+            // for, rather than an exit with the raw EAGAIN (#12).
+            Err(RequestError::Timeout(_)) => results.push(no_reply(file, &path, &uri)),
             Err(e) => {
                 eprintln!("pharos diagnostics: {}", e);
                 return ExitCode::from(1);
@@ -222,13 +226,13 @@ impl Session {
         self.send("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n")
     }
 
-    fn get_diagnostics(&mut self, uri: &str, timeout_ms: u64) -> Result<Value, String> {
+    fn get_diagnostics(&mut self, uri: &str, timeout_ms: u64) -> Result<Value, RequestError> {
         let params = format!(
             "{{\"name\":\"get_diagnostics\",\"arguments\":{{\"uri\":{},\"timeout_ms\":{}}}}}",
             json::string(uri),
             timeout_ms
         );
-        self.request(
+        self.request_or_timeout(
             "tools/call",
             &params,
             Duration::from_millis(timeout_ms) + REPLY_MARGIN,
@@ -243,6 +247,19 @@ impl Session {
 
     /// Send a request and read lines until the reply with its id.
     fn request(&mut self, method: &str, params: &str, wait: Duration) -> Result<Value, String> {
+        self.request_or_timeout(method, params, wait)
+            .map_err(|e| e.to_string())
+    }
+
+    /// `request`, telling a reply that didn't come within `wait` apart
+    /// from a broken session: the first is an unsure answer, not a failure
+    /// (#12).
+    fn request_or_timeout(
+        &mut self,
+        method: &str,
+        params: &str,
+        wait: Duration,
+    ) -> Result<Value, RequestError> {
         self.next_id += 1;
         let id = self.next_id;
         self.send(&format!(
@@ -250,10 +267,11 @@ impl Session {
             id,
             json::string(method),
             params
-        ))?;
+        ))
+        .map_err(RequestError::Other)?;
         self.stream
             .set_read_timeout(Some(wait))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| RequestError::Other(e.to_string()))?;
         let mut chunk = vec![0u8; 64 * 1024];
         loop {
             while let Some(at) = self.pending.iter().position(|b| *b == b'\n') {
@@ -263,22 +281,68 @@ impl Session {
                 if text.is_empty() {
                     continue;
                 }
-                let msg = json::parse(text).map_err(|e| format!("unreadable reply: {}", e))?;
+                let msg = json::parse(text)
+                    .map_err(|e| RequestError::Other(format!("unreadable reply: {}", e)))?;
                 if msg.get("id").and_then(Value::as_f64) == Some(id as f64) {
                     return Ok(msg);
                 }
             }
             match self.stream.read(&mut chunk) {
-                Ok(0) => return Err("the pharos daemon closed the session".into()),
+                Ok(0) => {
+                    return Err(RequestError::Other(
+                        "the pharos daemon closed the session".into(),
+                    ))
+                }
                 Ok(n) => self.pending.extend_from_slice(&chunk[..n]),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Err(RequestError::Timeout(method.to_string()))
+                }
                 Err(e) => {
-                    return Err(format!(
+                    return Err(RequestError::Other(format!(
                         "no reply from the pharos daemon for {}: {}",
                         method, e
-                    ))
+                    )))
                 }
             }
         }
+    }
+}
+
+/// Why a request got no reply.
+#[derive(Debug)]
+pub enum RequestError {
+    /// Nothing came within the wait (the read timed out).
+    Timeout(String),
+    /// The session broke, or the reply couldn't be read.
+    Other(String),
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestError::Timeout(method) => {
+                write!(f, "no reply from the pharos daemon for {} in time", method)
+            }
+            RequestError::Other(reason) => write!(f, "{}", reason),
+        }
+    }
+}
+
+/// A file whose answer didn't come in time: unsure, reason `no_reply`.
+pub fn no_reply(file: &str, path: &Path, uri: &str) -> FileResult {
+    FileResult {
+        file: file.to_string(),
+        path: path.display().to_string(),
+        uri: uri.to_string(),
+        status: "unsure",
+        reason: Some("no_reply".into()),
+        project: None,
+        diagnostics: Vec::new(),
     }
 }
 

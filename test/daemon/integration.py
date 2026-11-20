@@ -1294,6 +1294,67 @@ def t_pull_capability_follows_mode(sb):
     inits = [l for l in open(os.path.join(sb.fixture, "stub.log")) if " initialize " in l]
     pulls = sorted(l.rsplit("pull=", 1)[-1].strip() for l in inits)
     check(pulls == ["False", "True"], "expected one Push (pull=False) and one Pull (pull=True) initialize: %r" % inits)
+def readiness_toml(sb):
+    sb.write_toml('readiness_token = "stub/index"\nready_timeout_ms = 30000\n')
+
+
+def t_readiness_without_progress(sb):
+    """#12: a server that reports no progress is ready after a short grace.
+    The old wait read its remaining budget to decide the grace was over, so
+    it waited out the whole ready_timeout_ms (about 59 s for every cold
+    rust-analyzer, gopls and pyright)."""
+    readiness_toml(sb)
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    t0 = time.time()
+    check("line 0: one" in hover_line(a, stub_file(sb, "a.stub", "one\n"), 10), "hover")
+    took = time.time() - t0
+    check(took < 6, "cold hover took %.1fs: the readiness wait ran to its budget" % took)
+
+
+def t_readiness_any_token(sb):
+    """#12: progress under a token other than the configured one (rust-
+    analyzer renamed its indexing token) still holds readiness until it
+    ends, and pharos advertises window.workDoneProgress so servers report
+    it at all."""
+    readiness_toml(sb)
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_PROGRESS": "renamed/cachePriming:3000"})
+    a.initialize()
+    t0 = time.time()
+    check("line 0: two" in hover_line(a, stub_file(sb, "b.stub", "two\n"), 10), "hover")
+    took = time.time() - t0
+    check(3.0 <= took < 10, "cold hover took %.1fs: expected to wait for the progress to end (3 s), not the budget" % took)
+
+
+def t_readiness_keeps_early_publish(sb):
+    """#12: a publishDiagnostics that arrives during the readiness wait,
+    before pharos opens the file (cargo check's does), is cached, not
+    dropped."""
+    readiness_toml(sb)
+    path = os.path.join(sb.fixture, "c.stub")
+    with open(path, "w") as f:
+        f.write("three\n")
+    a = sb.start({"STUB_LSP_EARLY_PUBLISH": path})
+    a.initialize()
+    d = a.tool(10, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+    check("early publish" in d, "the early publish must be kept: %s" % d[-300:])
+
+
+def t_cli_no_reply_is_unsure(sb):
+    """#12: when the daemon can't answer within --timeout-ms (a server still
+    starting), `pharos diagnostics` reports the file unsure, reason
+    no_reply, instead of exiting with a raw EAGAIN."""
+    path = os.path.join(sb.fixture, "d.stub")
+    with open(path, "w") as f:
+        f.write("four\n")
+    t0 = time.time()
+    out = sb.cli("diagnostics", "--json", "--timeout-ms", "1000", path,
+                 extra_env={"STUB_LSP_INIT_DELAY_MS": "20000"}, timeout=60, cwd=sb.fixture)
+    took = time.time() - t0
+    check(out.returncode == 0, "exit %d: %s" % (out.returncode, out.stderr[-300:]))
+    f = json.loads(out.stdout)["files"][0]
+    check(f["status"] == "unsure" and f["reason"] == "no_reply", "expected unsure/no_reply: %s" % f)
+    check(took < 18, "took %.1fs" % took)
 
 
 def t_resync_open_cap(sb):
@@ -1348,6 +1409,10 @@ SCENARIOS = [
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
     ("pull_capability_follows_mode", t_pull_capability_follows_mode),
+    ("readiness_without_progress", t_readiness_without_progress),
+    ("readiness_any_token", t_readiness_any_token),
+    ("readiness_keeps_early_publish", t_readiness_keeps_early_publish),
+    ("cli_no_reply_is_unsure", t_cli_no_reply_is_unsure),
     ("long_runtime_dir", t_long_runtime_dir),
     ("non_ascii_home_and_server_path", t_non_ascii_home_and_server_path),
     ("non_ascii_home_default_state", t_non_ascii_home_default_state),

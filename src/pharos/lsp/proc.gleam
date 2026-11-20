@@ -162,14 +162,15 @@ pub fn start(
             let sync = sync_caps_of(initialize_result)
             // M10: drain `$/progress` notifications until the language's
             // readiness token reaches `end` (rust-analyzer's
-            // `rustAnalyzer/Indexing`, gopls's `setup`, pyright's
+            // `rustAnalyzer/cachePriming`, gopls's `setup`, pyright's
             // `Indexing`) before the proc accepts requests. Without
             // this gate, the very first hover/goto returned `null` from
             // a freshly-spawned rust-analyzer because the analyzer
             // hadn't indexed yet — server-OK response, useless to the
-            // LLM. wait_for_ready/3 returns Ok after the timeout even
-            // if no progress was seen, so a server with no readiness
-            // token (typescript-language-server) just no-ops here.
+            // LLM. wait_for_ready/3 returns Ok once the server is ready
+            // (see lifecycle: the token ends, all progress ends, or none
+            // starts within a short grace) or at the budget; a server with
+            // no readiness token (typescript-language-server) no-ops here.
             let c = case
               lifecycle.wait_for_ready(c, readiness_token, ready_timeout_ms)
             {

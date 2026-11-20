@@ -232,6 +232,16 @@ for every cache entry and every in-flight spawn. Category:
   under the `default` profile don't see it. Operators and
   agentic clients that opt in to `debug` can observe.
 
+**Amendment (2026-11-20, #12).** The `$/progress` drain waited for the configured token only,
+and its "no progress yet" grace read the remaining budget, so a server whose token didn't match
+held every cold spawn for nearly the whole `ready_timeout_ms` (about 59 s for rust-analyzer,
+gopls and pyright). pharos also didn't advertise `window.workDoneProgress`, so servers sent no
+progress at all, and rust-analyzer had renamed its token to `rustAnalyzer/cachePriming`. Now
+pharos advertises the capability. The drain tracks every progress token, and ends when the
+configured one ends, when everything that began has ended and the server has been quiet for 1 s,
+or after 1.5 s with no progress. Notifications that arrive meanwhile (a `publishDiagnostics`)
+are cached instead of dropped. The probe loop and the budget are unchanged.
+
 ## Alternatives considered
 
 - **Reject-fast with retry hint** (the option-B from

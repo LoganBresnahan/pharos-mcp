@@ -106,6 +106,18 @@ Symbols (#21):
                               answers each `function <name>` line of a
                               document (open, or read from disk)
 
+Readiness (#12):
+
+  STUB_LSP_PROGRESS=tok:ms    if the client advertised window.workDoneProgress,
+                              after `initialized` send
+                              window/workDoneProgress/create and a $/progress
+                              begin for token `tok`, and its end `ms` later
+                              (real servers report progress only to clients
+                              that can show it)
+  STUB_LSP_EARLY_PUBLISH=path after `initialized`, publish one diagnostic
+                              ("early publish") for that file, before any
+                              didOpen: cargo check's publish lands that way
+
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
 range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
@@ -180,12 +192,39 @@ def write_message(stream, msg):
         stream.flush()
 
 
+CLIENT_PROGRESS = threading.Event()
+
+
+def after_initialized(stdout):
+    spec = os.environ.get("STUB_LSP_PROGRESS", "")
+    if spec and CLIENT_PROGRESS.is_set():
+        token, _, ms = spec.rpartition(":")
+        write_message(stdout, {"jsonrpc": "2.0", "id": "progress-create",
+                               "method": "window/workDoneProgress/create", "params": {"token": token}})
+        write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
+                               "params": {"token": token, "value": {"kind": "begin", "title": "Indexing"}}})
+
+        def end():
+            write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
+                                   "params": {"token": token, "value": {"kind": "end"}}})
+        threading.Timer(int(ms) / 1000.0, end).start()
+    early = os.environ.get("STUB_LSP_EARLY_PUBLISH", "")
+    if early:
+        write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                               "params": {"uri": "file://" + early, "diagnostics": [{
+                                   "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                                   "severity": 1, "source": "stub", "message": "early publish"}]}})
+
+
 def handle_initialize(req):
     delay = int(os.environ.get("STUB_LSP_INIT_DELAY_MS", "0")) / 1000.0
     if delay:
         time.sleep(delay)
     if os.environ.get("STUB_LSP_FAIL_HANDSHAKE") == "1":
         return None
+    caps = (req.get("params") or {}).get("capabilities") or {}
+    if (caps.get("window") or {}).get("workDoneProgress"):
+        CLIENT_PROGRESS.set()
     capabilities = {
         "hoverProvider": True,
         "documentSymbolProvider": True,
@@ -520,6 +559,7 @@ def main():
                 write_message(stdout, resp)
         elif method == "initialized":
             # notification, no reply
+            after_initialized(stdout)
             continue
         elif method == "shutdown":
             write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"], "result": None})
@@ -571,7 +611,9 @@ def main():
             continue
         else:
             # Unknown method — return method-not-found if it has an id.
-            if "id" in msg:
+            # A message without a method is a reply to one of the stub's
+            # own requests (window/workDoneProgress/create): no answer.
+            if "id" in msg and method is not None:
                 write_message(stdout, {
                     "jsonrpc": "2.0",
                     "id": msg["id"],

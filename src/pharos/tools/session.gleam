@@ -1366,6 +1366,10 @@ pub fn build_client_capabilities_for(
   json.object([
     #("workspace", workspace_capabilities()),
     #("textDocument", text_document_capabilities(mode == languages.Pull)),
+    // Servers report progress (indexing, loading packages) only to a
+    // client that says it can show it. Without this, the readiness wait
+    // never saw any, and waited out its budget (#12).
+    #("window", json.object([#("workDoneProgress", json.bool(True))])),
   ])
 }
 

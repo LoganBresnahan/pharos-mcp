@@ -487,7 +487,9 @@ fn rust() -> LanguageConfig {
         workspace_configuration: None,
         methods: All,
         diagnostics_mode: Push,
-        readiness_token: Some("rustAnalyzer/Indexing"),
+        // Renamed from rustAnalyzer/Indexing (its title is still
+        // "Indexing"); seen on rust-analyzer 1.94 (#12).
+        readiness_token: Some("rustAnalyzer/cachePriming"),
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),

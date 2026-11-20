@@ -19,7 +19,10 @@
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/erlang/atom
+import gleam/int
 import gleam/json.{type Json}
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import pharos/log
@@ -145,27 +148,27 @@ fn send_initialized_notification(client: Client) -> Result(Nil, RequestError) {
   |> result.map_error(ClientFailure)
 }
 
-/// Drain inbound notifications until the server signals it has
-/// reached a stable analysis state for the given progress token, or
-/// the timeout budget is exhausted. Per ADR-012 stage 0F, this is
-/// what tools call before issuing requests sensitive to mid-indexing
-/// state changes (notably `find_references` against rust-analyzer,
-/// which raises `-32801 ContentModified` if its analysis is in
-/// flight).
+/// Wait until the server is ready to answer, before the proc accepts
+/// requests (ADR-024, M10): a freshly spawned rust-analyzer answered the
+/// first hover with `null` because it hadn't indexed yet.
 ///
-/// `maybe_token` is `None` for servers that do not emit progress
-/// (tsserver) — the function returns immediately. Otherwise it polls
-/// for messages with a short per-iteration timeout, returning early
-/// when it sees `$/progress` with `params.token == maybe_token` and
-/// `params.value.kind == "end"`. If the server has been idle (no
-/// inbound message) for several short timeouts in a row, the
-/// function also returns success — already-indexed servers do not
-/// emit any progress at all, so absence is taken as readiness.
+/// Ready means one of:
+/// - the configured `token` reports `end`;
+/// - some progress was seen, nothing is still running (every token that
+///   began has ended), and the server has been quiet for `settle_ms`;
+/// - no progress arrived within `pre_begin_grace_ms` (an idle or already
+///   indexed server sends none);
+/// - `timeout_ms` ran out ("good enough": the request surfaces its own
+///   error if not).
 ///
-/// Total wall-clock cap is `timeout_ms`. On timeout the function
-/// returns success rather than an error: a server that emitted some
-/// progress but never an `end` is best handled as "good enough" and
-/// the actual request will surface its own error if needed.
+/// Every token counts, not only the configured one: rust-analyzer renamed
+/// its indexing token to `rustAnalyzer/cachePriming`, and gopls names its
+/// tokens per run. The old wait matched only the configured name, and its
+/// grace check read the remaining budget, so with no match it waited out
+/// the whole budget: about 59 s for every cold rust-analyzer, gopls and
+/// pyright (#12). Notifications that arrive meanwhile take the normal path,
+/// so a `publishDiagnostics` sent during the wait is cached instead of
+/// dropped. Server requests are answered as usual.
 pub fn wait_for_ready(
   client: Client,
   maybe_token: Option(String),
@@ -173,64 +176,53 @@ pub fn wait_for_ready(
 ) -> Result(Client, RequestError) {
   case maybe_token {
     None -> Ok(client)
-    Some(token) -> drain_until_ready(client, token, NotYetSeen, timeout_ms)
+    Some(token) -> {
+      let start = monotonic_ms()
+      drain_until_ready(
+        client,
+        Readiness(
+          token: token,
+          start: start,
+          deadline: start + timeout_ms,
+          active: [],
+          seen: False,
+          last_change: start,
+        ),
+      )
+    }
   }
 }
 
-/// Two-phase wait. `NotYetSeen` is the pre-begin window: if no
-/// progress arrives within `pre_begin_grace_ms`, assume the server
-/// is already idle/indexed and return. Once any `$/progress` for
-/// the configured token arrives (typically `kind: "begin"`),
-/// transition to `AwaitingEnd` and stay there until either an
-/// explicit end-state arrives or the total budget expires.
-type Phase {
-  NotYetSeen
-  AwaitingEnd
+/// The readiness wait's state: which progress tokens are running, whether
+/// any was seen, and when the last one changed.
+type Readiness {
+  Readiness(
+    token: String,
+    start: Int,
+    deadline: Int,
+    active: List(String),
+    seen: Bool,
+    last_change: Int,
+  )
 }
 
 const read_window_ms: Int = 200
 
-const pre_begin_grace_ms: Int = 1000
+const pre_begin_grace_ms: Int = 1500
+
+const settle_ms: Int = 1000
 
 fn drain_until_ready(
   client: Client,
-  token: String,
-  phase: Phase,
-  remaining_ms: Int,
+  r: Readiness,
 ) -> Result(Client, RequestError) {
-  case remaining_ms <= 0 {
+  let now = monotonic_ms()
+  case now >= r.deadline || quiet_enough(r, now) {
     True -> Ok(client)
     False ->
       case client.next_message(client, read_window_ms) {
         Error(client.PortReceiveError(port.Timeout)) ->
-          case phase {
-            // No progress yet AND we've already waited at least
-            // pre_begin_grace_ms — server presumably has nothing
-            // to do, return.
-            NotYetSeen if remaining_ms <= 0 -> Ok(client)
-            NotYetSeen ->
-              case waited_pre_begin(remaining_ms) {
-                True -> Ok(client)
-                False ->
-                  drain_until_ready(
-                    client,
-                    token,
-                    NotYetSeen,
-                    remaining_ms - read_window_ms,
-                  )
-              }
-            // We've seen begin and are awaiting end. A quiet read
-            // does NOT mean idle here — the server might be deep
-            // in analysis between progress reports. Just keep
-            // burning the budget.
-            AwaitingEnd ->
-              drain_until_ready(
-                client,
-                token,
-                AwaitingEnd,
-                remaining_ms - read_window_ms,
-              )
-          }
+          drain_until_ready(client, r)
 
         Error(other) ->
           // Port closed or some other fatal transport error. Surface
@@ -242,82 +234,72 @@ fn drain_until_ready(
           case classify(body) {
             Notification(method: method, params: params)
               if method == "$/progress"
-            -> handle_progress(client, token, phase, remaining_ms, params)
+            -> on_progress(client, r, params)
+
+            Notification(method: method, params: params) -> {
+              cache_publish_diagnostics(client, method, params)
+              drain_until_ready(client, r)
+            }
 
             ServerRequest(id: id, method: method, params: params) -> {
               let _ = dispatch_server_request(client, id, method, params)
-              drain_until_ready(
-                client,
-                token,
-                phase,
-                remaining_ms - read_window_ms,
-              )
+              drain_until_ready(client, r)
             }
 
-            _ ->
-              drain_until_ready(
-                client,
-                token,
-                phase,
-                remaining_ms - read_window_ms,
-              )
+            _ -> drain_until_ready(client, r)
           }
       }
   }
 }
 
-/// Return True once we've burned enough of the budget that "no
-/// progress yet" is a reliable signal of an idle/already-indexed
-/// server. Implementation: total budget minus what's left ≥ grace.
-fn waited_pre_begin(remaining_ms: Int) -> Bool {
-  // `remaining_ms` shrinks by `read_window_ms` per iteration. The
-  // function is called only after a Timeout from next_message —
-  // i.e. we waited a full read_window_ms and got nothing. After
-  // pre_begin_grace_ms / read_window_ms timeouts in a row the
-  // pre-begin grace is up. Approximation: just check that
-  // remaining_ms is more than pre_begin_grace_ms below the start
-  // (caller passes original timeout in; we cap on (timeout - grace)).
-  // Simpler: we're past grace if read iterations consumed already
-  // exceed pre_begin_grace_ms / read_window_ms. Cannot know start
-  // budget here without threading; approximate by saying any
-  // sufficiently small remaining_ms means we've waited enough.
-  remaining_ms < 0
-  || pre_begin_grace_ms <= 0
-  // Fallback: if grace is small relative to remaining, treat as
-  // exhausted after one window.
-  || remaining_ms < pre_begin_grace_ms
-}
-
-fn handle_progress(
-  client: Client,
-  token: String,
-  phase: Phase,
-  remaining_ms: Int,
-  params: Dynamic,
-) -> Result(Client, RequestError) {
-  case decode.run(params, progress_token_and_kind_decoder()) {
-    Ok(#(t, kind)) if t == token ->
-      case kind {
-        "end" -> Ok(client)
-        "begin" ->
-          drain_until_ready(
-            client,
-            token,
-            AwaitingEnd,
-            remaining_ms - read_window_ms,
-          )
-        _ ->
-          drain_until_ready(client, token, phase, remaining_ms - read_window_ms)
-      }
-    _ -> drain_until_ready(client, token, phase, remaining_ms - read_window_ms)
+fn quiet_enough(r: Readiness, now: Int) -> Bool {
+  case r.seen {
+    False -> now - r.start >= pre_begin_grace_ms
+    True -> r.active == [] && now - r.last_change >= settle_ms
   }
 }
 
+fn on_progress(
+  client: Client,
+  r: Readiness,
+  params: Dynamic,
+) -> Result(Client, RequestError) {
+  let now = monotonic_ms()
+  case decode.run(params, progress_token_and_kind_decoder()) {
+    Ok(#(t, "end")) if t == r.token -> Ok(client)
+    Ok(#(t, kind)) -> {
+      let others = list.filter(r.active, fn(x) { x != t })
+      let active = case kind {
+        "begin" -> [t, ..others]
+        "end" -> others
+        _ -> r.active
+      }
+      drain_until_ready(
+        client,
+        Readiness(..r, active: active, seen: True, last_change: now),
+      )
+    }
+    Error(_) -> drain_until_ready(client, r)
+  }
+}
+
+/// A progress notification's token (a string or an integer, per the
+/// spec) and its `value.kind`.
 fn progress_token_and_kind_decoder() -> decode.Decoder(#(String, String)) {
-  use token <- decode.field("token", decode.string)
+  use token <- decode.field(
+    "token",
+    decode.one_of(decode.string, [decode.int |> decode.map(int.to_string)]),
+  )
   use kind <- decode.subfield(["value", "kind"], decode.string)
   decode.success(#(token, kind))
 }
+
+fn monotonic_ms() -> Int {
+  erlang_monotonic_time(atom.create("millisecond"))
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn erlang_monotonic_time(unit: atom.Atom) -> Int
 
 /// Classify one frame body and dispatch any required reply. Used
 /// by `pharos/lsp/proc`'s actor when raw Port messages arrive

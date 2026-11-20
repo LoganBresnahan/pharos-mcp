@@ -111,6 +111,14 @@ pub fn pull_diagnostics_only_for_pull_mode_servers_test() {
   |> should.be_true
 }
 
+/// #12: servers report progress (indexing, loading packages) only to a
+/// client that advertises it; without it the readiness wait saw none.
+pub fn capabilities_advertise_work_done_progress_test() {
+  serialize(session.build_client_capabilities())
+  |> nested_field(["window", "workDoneProgress"])
+  |> should.equal(True)
+}
+
 // -- Helpers ------------------------------------------------------------
 
 fn serialize(value: json.Json) -> Json {
