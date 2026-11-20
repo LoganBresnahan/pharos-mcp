@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      smoke_release:
+        description: >-
+          Run the real-server smoke against this published pharos version
+          (e.g. 0.3.5) instead of this tree's build, to see the job fail on
+          a build with known bugs. Empty: this tree.
+        required: false
+        default: ""
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -180,6 +188,89 @@ jobs:
   # sharing, spawn race, build isolation, idle exit, daemon death,
   # stdout purity, per-session isolation, surviving the spawning
   # terminal, stale/slow sockets, fd hygiene, cancel, restart.
+  # pharos against real language servers, one small project per language
+  # (TypeScript, Go, Python, Rust): cold diagnostics, the CLI, hover,
+  # definition, cold find_symbol, and diagnostics after a fix. The servers
+  # are pinned to the versions verified on 2026-11-20, so an upstream
+  # release can't turn main red overnight; bump them deliberately.
+  real-servers:
+    name: real language servers (ubuntu-latest)
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Erlang, Elixir, Gleam, and rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.1.1"
+          elixir-version: "1.19.5"
+          gleam-version: "1.17.0"
+          rebar3-version: "3.27.0"
+
+      - name: Cache Mix and Gleam build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            build
+          key: ${{ runner.os }}-prod-otp28-elixir1.19-gleam1.17-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-prod-otp28-elixir1.19-gleam1.17-mix-
+
+      - name: Pin Hex
+        run: mix local.hex 2.4.2 --force
+
+      - name: Install mix_gleam archive (LoganBresnahan/mix_gleam fork)
+        run: mix archive.install --force github LoganBresnahan/mix_gleam
+
+      - name: Build the release
+        if: ${{ !inputs.smoke_release }}
+        run: |
+          mix deps.get
+          mix release --overwrite
+          echo "REL=$PWD/_build/prod/rel/pharos" >> "$GITHUB_ENV"
+
+      - name: Use a published release instead
+        if: ${{ inputs.smoke_release }}
+        env:
+          VSN: ${{ inputs.smoke_release }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel"
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/v$VSN/pharos-$VSN-linux-x64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/rel" --strip-components=1
+          "$RUNNER_TEMP/rel/bin/pharos" --version
+          echo "REL=$RUNNER_TEMP/rel" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: TypeScript and Python servers
+        run: npm install -g typescript@6.0.3 typescript-language-server@5.1.3 pyright@1.1.409
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+          cache: false
+
+      - name: gopls
+        run: |
+          go install golang.org/x/tools/gopls@v0.21.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: rust-analyzer
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal --component rust-analyzer
+          rustup default 1.94.0
+          rust-analyzer --version
+
+      - name: Run the real-server smoke
+        timeout-minutes: 20
+        run: python3 -I test/realservers/smoke.py --release "$REL" --shim "$REL/bin/pharos"
+
   daemon-integration:
     name: daemon integration (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
