@@ -420,6 +420,16 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
       // Graceful shutdown — clear the sentinel so the next
       // writer's init does not mistake this for a crash.
       sentinel_clear()
+      // Close the file sink before stopping: it is opened raw with
+      // delayed_write, whose buffer a helper process flushes only after
+      // it notices this process is gone, so a caller that waited for the
+      // writer's exit could read the file before that flush (#18's test).
+      // Production never sends Stop: the supervised writer dies by exit
+      // signal, and whether its last lines survive that is #23.
+      case state.file_handle {
+        Some(handle) -> file_sink_close(handle)
+        None -> Nil
+      }
       actor.stop()
     }
   }
@@ -516,6 +526,9 @@ fn int_to_string(n: Int) -> String
 
 @external(erlang, "pharos_log_ffi", "file_sink_open")
 fn file_sink_open(path: String) -> Result(FileHandle, String)
+
+@external(erlang, "pharos_log_ffi", "file_sink_close")
+fn file_sink_close(handle: FileHandle) -> Nil
 
 @external(erlang, "pharos_log_ffi", "file_sink_write")
 fn file_sink_write(handle: FileHandle, line: String) -> Nil

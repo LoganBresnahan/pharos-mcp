@@ -99,15 +99,22 @@ pub fn log_calls_reach_the_registered_writers_file_test() {
     Error(Nil) -> panic as "the writer didn't stop within 10 s"
   }
 
-  let assert Ok(text) = read_text(path)
-  case
-    string.contains(text, "through the registered writer")
-    && string.contains(text, "lp-18")
-  {
-    True -> Nil
-    False -> panic as "the log line didn't reach the registered writer's file"
-  }
+  // Read, then remove the file before judging, so a failed run leaves
+  // nothing behind.
+  let text = read_text(path)
   let _ = file_delete(path)
+  case text {
+    Ok(text) ->
+      case
+        string.contains(text, "through the registered writer")
+        && string.contains(text, "lp-18")
+      {
+        True -> Nil
+        False ->
+          panic as "the log line didn't reach the registered writer's file"
+      }
+    Error(_) -> panic as "the registered writer's file couldn't be read"
+  }
 }
 
 fn burst_emit(w: writer.Writer, target: String, n: Int) -> Nil {
