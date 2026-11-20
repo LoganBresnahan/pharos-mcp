@@ -1444,6 +1444,82 @@ def t_split_frame_after_an_error_keeps_the_stream(sb):
     check("line 1: two" in h and "framing" not in h, "the stream desynced: %s" % h[-300:])
 
 
+def t_find_symbol_null_result(sb):
+    """#26: a `null` workspace/symbol result (perlnavigator, lua-ls) is no
+    matches: find_symbol still drills scope_uri, and workspace_symbols
+    answers an empty list, not a decode error or `null`."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "null"})
+    a.initialize()
+    uri = stub_file(sb, "a.stub", "function helper() {\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check('"status":"single"' in out and "decode failed" not in out, "find_symbol: %s" % out[-300:])
+    out = a.tool(11, "workspace_symbols", {"workspace_uri_hint": uri, "query": "helper"})
+    check('"matches":[]' in out.replace(" ", ""), "workspace_symbols: %s" % out[-300:])
+
+
+def t_find_symbol_prefers_the_workspace(sb):
+    """#29: with jdtls, find_symbol "helper" answered "single" with a JDK
+    class `Helper`: the server matches case-insensitively, names methods
+    `helper(int)` (so no exact match), and library results weren't ranked
+    below workspace ones. Now a parameter list is stripped for the exact
+    match, scope_uri is always drilled, and workspace files beat
+    dependencies."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "all", "STUB_LSP_SYMBOL_PARAMS": "1"})
+    a.initialize()
+    lib = os.path.join(sb.fixture, "node_modules", "lib")
+    os.makedirs(lib)
+    with open(os.path.join(lib, "dep.stub"), "w") as f:
+        f.write("function Helper() {\n}\nfunction helper() {\n}\n")
+    uri = stub_file(sb, "util.stub", "function helper() {\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check('"status":"single"' in out and "util.stub" in out and "node_modules" not in out,
+          "expected the workspace helper alone: %s" % out[-400:])
+
+
+def t_find_symbol_library_guess_is_a_near_miss(sb):
+    """#29: a match only in another case, and only outside the workspace,
+    is a near miss, not "single": a lowercase `helper` must not resolve to
+    a dependency's `Helper` class."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "all"})
+    a.initialize()
+    lib = os.path.join(sb.fixture, "node_modules", "lib")
+    os.makedirs(lib)
+    with open(os.path.join(lib, "dep.stub"), "w") as f:
+        f.write("function Helper() {\n}\n")
+    uri = stub_file(sb, "main.stub", "function other() {\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check('"status":"not_found"' in out and "Helper" in out and "near misses" in out,
+          "expected a near miss, not an answer: %s" % out[-400:])
+
+
+def t_find_symbol_library_outside_the_root(sb):
+    """#29 (verifier): a library outside the workspace root, at a path no
+    dependency-dir list names (a GOROOT, /usr/include), isn't a workspace
+    match: a case-only or partial match there is a near miss. gopls answered
+    `println` with fmt's Fprintln, Println and Sprintln as matches."""
+    lib = os.path.join(sb.dir, "goroot", "src", "fmt")
+    os.makedirs(lib)
+    with open(os.path.join(lib, "print.stub"), "w") as f:
+        f.write("function Println() {\n}\nfunction Sprintln() {\n}\n")
+    # A real GOROOT has its own go.mod: pharos can open its files.
+    open(os.path.join(sb.dir, "goroot", "stub.root"), "w").close()
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "all", "STUB_LSP_EXTRA_SYMBOL_DIR": os.path.join(sb.dir, "goroot")})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "function main() {\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "println", "scope_uri": uri})
+    check('"status":"not_found"' in out and "Println" in out, "expected near misses, not matches: %s" % out[-400:])
+
+
+def t_find_symbol_says_why_it_was_narrow(sb):
+    """#28: on a server that can't search the workspace (zls, gleam),
+    not_found means "not in scope_uri", and the answer says so."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "none"})
+    a.initialize()
+    uri = stub_file(sb, "b.stub", "function other() {\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check('"status":"not_found"' in out and "only scope_uri was searched" in out, "not_found: %s" % out[-300:])
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1500,6 +1576,11 @@ SCENARIOS = [
     ("frames_after_a_reply_are_handled", t_frames_after_a_reply_are_handled),
     ("check_on_save_answers_the_new_text", t_check_on_save_answers_the_new_text),
     ("check_that_never_ends_is_bounded", t_check_that_never_ends_is_bounded),
+    ("find_symbol_null_result", t_find_symbol_null_result),
+    ("find_symbol_prefers_the_workspace", t_find_symbol_prefers_the_workspace),
+    ("find_symbol_says_why_it_was_narrow", t_find_symbol_says_why_it_was_narrow),
+    ("find_symbol_library_outside_the_root", t_find_symbol_library_outside_the_root),
+    ("find_symbol_library_guess_is_a_near_miss", t_find_symbol_library_guess_is_a_near_miss),
     ("pull_capability_follows_mode", t_pull_capability_follows_mode),
     ("readiness_without_progress", t_readiness_without_progress),
     ("readiness_any_token", t_readiness_any_token),

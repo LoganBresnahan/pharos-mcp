@@ -182,7 +182,10 @@ pub fn resolution_multiple_json_includes_count_test() {
 
 pub fn resolution_not_found_json_includes_near_misses_test() {
   let json_text =
-    symbols.resolution_to_json(NotFound(near_misses: ["authentik", "auth"]))
+    symbols.resolution_to_json(NotFound(
+      near_misses: ["authentik", "auth"],
+      note: None,
+    ))
     |> json.to_string
   should.equal(string.contains(json_text, "\"status\":\"not_found\""), True)
   should.equal(string.contains(json_text, "\"authentik\""), True)

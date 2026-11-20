@@ -104,7 +104,15 @@ Symbols (#21):
                               a didOpen), and after it, in every file of
                               the open documents' folders. documentSymbol then
                               answers each `function <name>` line of a
-                              document (open, or read from disk)
+                              document (open, or read from disk).
+                              "null": workspace/symbol answers null (#26).
+                              "all": every file under the open documents'
+                              folders, node_modules included, matched
+                              case-insensitively, like jdtls (#29)
+  STUB_LSP_SYMBOL_PARAMS=1    documentSymbol names functions with a
+                              parameter list, "helper(int)", as jdtls does
+  STUB_LSP_WORKSPACE_SYMBOL=none  documentSymbol only: no
+                              workspaceSymbolProvider, as zls (#28)
 
 Readiness (#12):
 
@@ -289,7 +297,7 @@ def handle_initialize(req):
         "hoverProvider": True,
         "documentSymbolProvider": True,
     }
-    if os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
+    if os.environ.get("STUB_LSP_WORKSPACE_SYMBOL", "none") != "none":
         capabilities["workspaceSymbolProvider"] = True
     kind = os.environ.get("STUB_LSP_SYNC_KIND", "1")
     save = os.environ.get("STUB_LSP_SYNC_SAVE")
@@ -490,6 +498,31 @@ PROJECT_LOADED = threading.Event()
 
 
 def handle_workspace_symbol(req):
+    mode = os.environ.get("STUB_LSP_WORKSPACE_SYMBOL")
+    if mode == "null":
+        return {"jsonrpc": "2.0", "id": req["id"], "result": None}
+    if mode == "all":
+        # jdtls's shape: every file under the open documents' folders,
+        # node_modules included, matched case-insensitively.
+        query = ((req.get("params") or {}).get("query") or "").lower()
+        result = []
+        folders = {os.path.dirname(uri_path(u)) for u in DOCS}
+        if os.environ.get("STUB_LSP_EXTRA_SYMBOL_DIR"):
+            # A library outside the workspace root (a GOROOT, /usr/include).
+            folders.add(os.environ["STUB_LSP_EXTRA_SYMBOL_DIR"])
+        for folder in folders:
+            for dirpath, _, names in os.walk(folder):
+                for name in sorted(names):
+                    path = os.path.join(dirpath, name)
+                    try:
+                        text = open(path).read()
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    for i, fname, line in function_lines(text):
+                        if fname.lower() == query:
+                            rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
+                            result.append({"name": fname, "kind": 12, "location": {"uri": "file://" + path, "range": rng}})
+        return {"jsonrpc": "2.0", "id": req["id"], "result": result}
     if not DOCS:
         return {"jsonrpc": "2.0", "id": req["id"],
                 "error": {"code": 1, "message": "<syntax> TypeScript Server Error (stub)\nNo Project."}}
@@ -524,9 +557,11 @@ def handle_document_symbol(req):
         except OSError:
             text = ""
     result = []
+    params = os.environ.get("STUB_LSP_SYMBOL_PARAMS")
     for i, name, line in function_lines(text):
         rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
-        result.append({"name": name, "kind": 12, "range": rng, "selectionRange": rng, "children": []})
+        shown = name + "(int)" if params else name
+        result.append({"name": shown, "kind": 12, "range": rng, "selectionRange": rng, "children": []})
     return {"jsonrpc": "2.0", "id": req["id"], "result": result}
 
 
@@ -647,7 +682,7 @@ def main():
                 uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
                 check_on_save(stdout, method, uri)
             continue
-        elif method == "workspace/symbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
+        elif method == "workspace/symbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL", "none") != "none":
             write_message(stdout, handle_workspace_symbol(msg))
         elif method == "textDocument/documentSymbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
             write_message(stdout, handle_document_symbol(msg))

@@ -1240,6 +1240,25 @@ fn java() -> LanguageConfig {
               #("classFileContentsSupport", json.bool(True)),
             ]),
           ),
+          // workspace/symbol returns the workspace's methods only with
+          // this on; without it, find_symbol "helper" saw only a JDK
+          // class `Helper` (#29).
+          #(
+            "settings",
+            json.object([
+              #(
+                "java",
+                json.object([
+                  #(
+                    "symbols",
+                    json.object([
+                      #("includeSourceMethodDeclarations", json.bool(True)),
+                    ]),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
         ]),
         workspace_configuration: None,
         methods: All,

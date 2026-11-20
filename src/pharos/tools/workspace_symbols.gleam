@@ -58,6 +58,11 @@ pub fn handle(
   case query_once(pool, workspace_uri_hint, query, language, timeout_ms) {
     Error(err) -> Error(err)
     Ok(value) -> {
+      // A `null` result is no matches (#26): answer `[]`, not `null`.
+      let value = case decode.run(value, decode.optional(decode.dynamic)) {
+        Ok(None) -> dynamic.list([])
+        _ -> value
+      }
       let clip.ClipResult(json_text: matches_json, truncated_by: truncated_by) =
         clip.clip_array(value, limit)
       case is_empty_array(value) {

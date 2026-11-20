@@ -184,7 +184,8 @@ pub type Disambiguation {
 pub type Resolution {
   Single(SymbolMatch)
   Multiple(List(SymbolMatch))
-  NotFound(near_misses: List(String))
+  /// `note`: why the search was narrow, when it was (#28).
+  NotFound(near_misses: List(String), note: Option(String))
 }
 
 /// LLM-friendly outline of a single file. LSP's
@@ -306,14 +307,13 @@ pub fn find_symbol(
           // unsupported-capability branch — gives the LLM a usable
           // resolution against `scope_uri` rather than a misleading
           // not_found.
-          let uris =
-            ws_results
-            |> list.map(fn(s) { s.uri })
-            |> list.unique
-          case uris {
-            [] -> Ok([scope_uri])
-            _ -> Ok(uris)
-          }
+          // scope_uri is always drilled too, first: the server's
+          // workspace search can miss what the scope file defines (jdtls
+          // answered only a JDK class for `helper`, #29).
+          Ok(
+            [scope_uri, ..list.map(ws_results, fn(s) { s.uri })]
+            |> list.unique,
+          )
         }
       })
       // workspace_symbol can return URIs that the same LSP cannot
@@ -372,8 +372,53 @@ pub fn find_symbol(
       // carries a drift-detection seed for the eventual edit_at_symbol
       // call. Batched per-uri so multiple matches in one file share a
       // single read.
+      // A match in a workspace file beats one in a library or a virtual
+      // URI (jdt://, a dependency): when any workspace file matched, the
+      // others are dropped, so a JDK class can't answer "single" for a
+      // workspace method (#29).
+      // The workspace root pharos found for scope_uri: a match under it
+      // (outside its dependency dirs) is a workspace match. A library file
+      // anywhere else (GOROOT, /usr/include, a toolchain's std) isn't,
+      // whatever its path (verifier, #29).
+      let root = case session.config_for_uri(scope_uri) {
+        Ok(config) ->
+          session.resolve_workspace(pool, scope_uri, config)
+          |> option.from_result
+        Error(_) -> None
+      }
+      let is_workspace_file = fn(uri) { in_workspace(uri, root) }
+      let matches = prefer_workspace_files(matches, is_workspace_file)
+      // Only fuzzy matches (another case, a substring), and none in the
+      // workspace: those are near misses, not an answer. jdtls's
+      // case-insensitive search turned a lowercase `helper` into the JDK's
+      // `Helper` class, answered as "single" (#29).
+      let library_guesses =
+        strict == [] && !list.any(matches, fn(m) { is_workspace_file(m.uri) })
       let hashed = enrich_with_body_hashes(matches)
-      Ok(apply_policy(hashed, policy))
+      let resolution = case library_guesses, matches {
+        True, [_, ..] ->
+          NotFound(
+            near_misses: list.map(matches, fn(m) {
+              m.name <> " (" <> m.uri <> ")"
+            }),
+            note: Some(
+              "only matches in another case or a partial name, all outside the workspace: listed as near misses",
+            ),
+          )
+        _, _ -> apply_policy(hashed, policy)
+      }
+      case resolution, ws_supported {
+        // #28: "not found" from a server that can't search the workspace
+        // means "not in scope_uri", not "doesn't exist".
+        NotFound(near, _), False ->
+          Ok(NotFound(
+            near_misses: near,
+            note: Some(
+              "this server can't search the workspace for symbols, so only scope_uri was searched; pass a scope_uri in the file that defines it",
+            ),
+          ))
+        resolution, _ -> Ok(resolution)
+      }
     }
   }
 }
@@ -513,15 +558,17 @@ fn name_match_strategy_with_fuzzy(
 /// caller treats `None` as "no match, do not include this candidate."
 fn name_match_strategy(symbol_name: String, query: String) -> Option(String) {
   let is_exact = symbol_name == query
+  let is_params = strip_params(symbol_name) == query
   let is_arity = strip_arity_suffix(symbol_name) == query
   let is_kind = strip_kind_suffix(symbol_name) == query
   let is_trailing = trailing_segment(symbol_name) == query
-  case is_exact, is_arity, is_kind, is_trailing {
-    True, _, _, _ -> Some("exact")
-    _, True, _, _ -> Some("arity_strip")
-    _, _, True, _ -> Some("kind_strip")
-    _, _, _, True -> Some("trailing_segment")
-    _, _, _, _ -> None
+  case is_exact, is_params, is_arity, is_kind, is_trailing {
+    True, _, _, _, _ -> Some("exact")
+    _, True, _, _, _ -> Some("params_strip")
+    _, _, True, _, _ -> Some("arity_strip")
+    _, _, _, True, _ -> Some("kind_strip")
+    _, _, _, _, True -> Some("trailing_segment")
+    _, _, _, _, _ -> None
   }
 }
 
@@ -538,6 +585,15 @@ fn name_match_strategy_fuzzy(
     True, _ -> Some("case_insensitive")
     _, True -> Some("substring")
     _, _ -> None
+  }
+}
+
+/// "helper(int)" → "helper": jdtls (and other servers) name methods with
+/// their parameter list, so an exact query never matched them (#29).
+fn strip_params(name: String) -> String {
+  case string.split_once(name, "(") {
+    Ok(#(base, _)) -> string.trim_end(base)
+    Error(Nil) -> name
   }
 }
 
@@ -596,17 +652,60 @@ fn trailing_segment(name: String) -> String {
   }
 }
 
+/// Workspace-file matches only, when there are any; else all of them.
+fn prefer_workspace_files(
+  matches: List(SymbolMatch),
+  is_workspace_file: fn(String) -> Bool,
+) -> List(SymbolMatch) {
+  case list.filter(matches, fn(m) { is_workspace_file(m.uri) }) {
+    [] -> matches
+    workspace -> workspace
+  }
+}
+
+/// A file:// URI under the workspace root, outside the dependency dirs a
+/// project keeps inside it (node_modules, vendor, a virtualenv). With no
+/// root (a scope pharos couldn't place), any file:// URI outside those
+/// dirs and the usual package caches counts.
+fn in_workspace(uri: String, root: Option(String)) -> Bool {
+  let dependency_dirs = [
+    "/node_modules/",
+    "/vendor/",
+    "/.venv/",
+    "/site-packages/",
+  ]
+  case workspace_root.uri_to_path(uri) {
+    Error(_) -> False
+    Ok(path) -> {
+      let inside = case root {
+        Some(r) -> string.starts_with(path, r <> "/")
+        None ->
+          !list.any(
+            [
+              "/.cargo/registry/",
+              "/go/pkg/mod/",
+              "/.m2/repository/",
+              "/.gradle/caches/",
+            ],
+            fn(segment) { string.contains(path, segment) },
+          )
+      }
+      inside && !list.any(dependency_dirs, fn(d) { string.contains(path, d) })
+    }
+  }
+}
+
 fn apply_policy(
   matches: List(SymbolMatch),
   policy: Disambiguation,
 ) -> Resolution {
   case matches, policy {
-    [], _ -> NotFound(near_misses: [])
+    [], _ -> NotFound(near_misses: [], note: None)
     [single], _ -> Single(single)
     many, FirstMatch ->
       case many {
         [first, ..] -> Single(first)
-        [] -> NotFound(near_misses: [])
+        [] -> NotFound(near_misses: [], note: None)
       }
     many, ClosestScope -> closest_scope(many)
     many, StrictSingle -> Multiple(many)
@@ -624,7 +723,7 @@ fn closest_scope(matches: List(SymbolMatch)) -> Resolution {
     })
   case sorted {
     [winner, ..] -> Single(winner)
-    [] -> NotFound(near_misses: [])
+    [] -> NotFound(near_misses: [], note: None)
   }
 }
 
@@ -1185,7 +1284,13 @@ fn workspace_symbol_query(
   }
   case asked {
     Ok(raw) ->
-      decode.run(raw, decode.list(workspace_symbol_decoder()))
+      // `null` is a valid result (no matches): perlnavigator and
+      // lua-language-server send it (#26).
+      decode.run(
+        raw,
+        decode.optional(decode.list(workspace_symbol_decoder()))
+          |> decode.map(option.unwrap(_, [])),
+      )
       |> result.map_error(fn(_) {
         DecodeFailed("workspace/symbol returned an unrecognised shape")
       })
@@ -1510,13 +1615,17 @@ pub fn resolution_to_json(res: Resolution) -> json.Json {
           json.preprocessed_array(list.map(ms, symbol_match_to_json)),
         ),
       ])
-    NotFound(near_misses) ->
+    NotFound(near_misses, note) ->
       json.object([
         #("status", json.string("not_found")),
         #(
           "near_misses",
           json.preprocessed_array(list.map(near_misses, json.string)),
         ),
+        ..case note {
+          Some(text) -> [#("note", json.string(text))]
+          None -> []
+        }
       ])
   }
 }
