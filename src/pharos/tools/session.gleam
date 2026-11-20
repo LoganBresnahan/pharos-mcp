@@ -1476,7 +1476,7 @@ pub fn build_client_capabilities_with(
   watch_files: Bool,
 ) -> json.Json {
   json.object([
-    #("workspace", workspace_capabilities(watch_files)),
+    #("workspace", workspace_capabilities(watch_files, mode == languages.Pull)),
     #("textDocument", text_document_capabilities(mode == languages.Pull)),
     // Servers report progress (indexing, loading packages) only to a
     // client that says it can show it. Without this, the readiness wait
@@ -1485,7 +1485,7 @@ pub fn build_client_capabilities_with(
   ])
 }
 
-fn workspace_capabilities(watch_files: Bool) -> json.Json {
+fn workspace_capabilities(watch_files: Bool, pull: Bool) -> json.Json {
   let watched = case watch_files {
     True -> [
       #(
@@ -1521,7 +1521,14 @@ fn workspace_capabilities(watch_files: Bool) -> json.Json {
     ),
     #("configuration", json.bool(True)),
     #("symbol", json.object([#("dynamicRegistration", json.bool(False))])),
-    ..watched
+    ..list.append(watched, case pull {
+      // #49: a Pull server may ask for a re-pull; pharos pulls afresh on
+      // every question, so it can say yes.
+      True -> [
+        #("diagnostics", json.object([#("refreshSupport", json.bool(True))])),
+      ]
+      False -> []
+    })
   ])
 }
 

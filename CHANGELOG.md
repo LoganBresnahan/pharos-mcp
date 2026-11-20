@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- pharos answers a server's `workspace/diagnostic/refresh`, `workspace/semanticTokens/refresh`,
+  `workspace/inlayHint/refresh`, `workspace/codeLens/refresh`, `workspace/inlineValue/refresh`
+  and `workspace/foldingRange/refresh` requests with an empty success, as VS Code does. They were
+  refused as an unknown method, about one per edit on rust-analyzer. pharos keeps none of those
+  results, and asks afresh on every question; a server pharos pulls diagnostics from is told it
+  may ask for a diagnostics refresh (#49).
 - `find_symbol` finds a generic class on jdtls. jdtls names it with its type parameters
   (`Box<T>`, `Pair<A, B>`), so a strict match never found the project's class: `Box` answered
   the JDK's `javax.swing.Box`. Type parameters are now stripped for the strict match, in path

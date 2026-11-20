@@ -225,6 +225,13 @@ Generic names (#39):
                               STUB_LSP_WORKSPACE_SYMBOL=all, workspace/
                               symbol also finds classes, named bare
 
+Refresh requests (#49):
+
+  STUB_LSP_REFRESH=1          after each didOpen / didChange, send
+                              workspace/diagnostic/refresh (as
+                              rust-analyzer does) and log pharos's reply
+                              as "reply refresh-N ok" or "... error CODE"
+
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
 range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
@@ -679,6 +686,7 @@ PROJECT_LOADED = threading.Event()
 
 
 INITIALIZED_AT = [0.0]
+REFRESHES = [0]
 
 
 INDEX_PROGRESS_SENT: list = []
@@ -884,6 +892,11 @@ def main():
         if msg is None:
             return
         method = msg.get("method")
+        if method is None and str(msg.get("id", "")).startswith("refresh-"):
+            # #49: pharos's answer to the stub's refresh request.
+            err = msg.get("error")
+            log_line("reply %s %s" % (msg["id"], "error %s" % err.get("code") if err else "ok"))
+            continue
         log_path = os.environ.get("STUB_LSP_LOG")
         if log_path:
             with open(log_path, "a") as log:
@@ -927,6 +940,11 @@ def main():
                 threading.Timer(delay, republish).start()
             continue
         elif method in ("textDocument/didOpen", "textDocument/didChange"):
+            if os.environ.get("STUB_LSP_REFRESH"):
+                # #49: rust-analyzer asks for a re-pull after every change.
+                REFRESHES[0] += 1
+                write_message(stdout, {"jsonrpc": "2.0", "id": "refresh-%d" % REFRESHES[0],
+                                       "method": "workspace/diagnostic/refresh"})
             if method == "textDocument/didChange":
                 cu = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
                 PULL_PREV[cu] = (DOCS.get(cu, {}).get("text", ""), time.time())

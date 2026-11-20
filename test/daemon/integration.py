@@ -1548,6 +1548,21 @@ def t_config_warnings_without_lsp_tools(sb):
           "more than one copy in the daemon log")
 
 
+def t_refresh_requests_are_answered(sb):
+    """#49: rust-analyzer sends workspace/diagnostic/refresh after every
+    edit, and pharos answered each with -32601 Method not found. It's now
+    acknowledged (null), and the question still answers."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line", "STUB_LSP_REFRESH": "1"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "first\n")
+    hover_line(a, uri, 10)
+    stub_file(sb, "main.stub", "second\n")
+    check("line 0: second" in hover_line(a, uri, 11), "the question after a refresh")
+    log = open(os.path.join(sb.fixture, "stub.log")).read()
+    replies = [l for l in log.splitlines() if " reply refresh-" in l or l.startswith("reply refresh-")]
+    check(len(replies) >= 2 and all(l.endswith(" ok") for l in replies), "replies: %r" % replies)
+
+
 def t_find_symbol_bad_scope(sb):
     """#24: a scope_uri naming a directory failed as "unsupported file
     type", and one naming a missing file reached tsserver and came back as
@@ -2313,6 +2328,7 @@ SCENARIOS = [
     ("find_symbol_cold_session", t_find_symbol_cold_session),
     ("find_symbol_bad_scope", t_find_symbol_bad_scope),
     ("config_key_warnings", t_config_key_warnings),
+    ("refresh_requests_are_answered", t_refresh_requests_are_answered),
     ("config_warnings_without_lsp_tools", t_config_warnings_without_lsp_tools),
     ("watched_files_reach_the_server", t_watched_files_reach_the_server),
     ("watched_files_off_is_not_offered", t_watched_files_off_is_not_offered),

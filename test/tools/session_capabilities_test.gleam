@@ -193,3 +193,19 @@ pub fn haskell_language_server_keeps_its_own_watcher_test() {
   let assert Ok(hls) = list.find(haskell.servers, fn(s) { s.id == "hls" })
   hls.watch_files |> should.equal(languages.WatchNever)
 }
+
+// -- #49: re-pull requests are allowed for Pull servers ------------------
+
+pub fn pull_servers_are_offered_diagnostic_refresh_test() {
+  let Json(pull) =
+    serialize(session.build_client_capabilities_with(languages.Pull, True))
+  let assert Ok(True) =
+    decode.run(
+      pull,
+      decode.at(["workspace", "diagnostics", "refreshSupport"], decode.bool),
+    )
+  let Json(push) =
+    serialize(session.build_client_capabilities_with(languages.Push, True))
+  decode.run(push, decode.at(["workspace", "diagnostics"], decode.dynamic))
+  |> should.be_error
+}

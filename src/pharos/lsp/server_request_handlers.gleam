@@ -98,6 +98,8 @@ pub fn new() -> Registry {
 ///     progress notifications still flow through the Notification
 ///     classifier branch; this handler just acknowledges that the
 ///     server may use the token.
+///   - `workspace/{diagnostic,semanticTokens,inlayHint,codeLens,
+///     inlineValue,foldingRange}/refresh` → null result (#49).
 ///   - `workspace/applyEdit` → decline with
 ///     `{applied: false, failureReason: "not_supported"}`. Tools that
 ///     want to capture the edit override per-call.
@@ -109,6 +111,17 @@ pub fn defaults() -> Registry {
   |> insert("window/showMessageRequest", default_accept_noop)
   |> insert("window/workDoneProgress/create", default_accept_noop)
   |> insert("workspace/applyEdit", default_decline_apply_edit)
+  // #49: "your results changed, ask again". pharos asks afresh on every
+  // question (it keeps no pulled diagnostics, tokens or hints), so each
+  // is acknowledged and nothing else needs doing. rust-analyzer sends
+  // the diagnostic one on every edit, offered refreshSupport or not, and
+  // got -32601 Method not found.
+  |> insert("workspace/diagnostic/refresh", default_accept_noop)
+  |> insert("workspace/semanticTokens/refresh", default_accept_noop)
+  |> insert("workspace/inlayHint/refresh", default_accept_noop)
+  |> insert("workspace/codeLens/refresh", default_accept_noop)
+  |> insert("workspace/inlineValue/refresh", default_accept_noop)
+  |> insert("workspace/foldingRange/refresh", default_accept_noop)
 }
 
 pub fn insert(
