@@ -23,7 +23,11 @@ name: release
 # publishes ("being processed"), but its validation (the malware scan)
 # held the two arm64 ones for about 55 min, with no tarball and no
 # attestation. The wait step held pharos-mcp back for 15 min and then
-# failed. Once npm served all four, this run finished the release.
+# failed. Once npm served all four, this run finished the release. The wait
+# is now up to 60 min with backoff. "Re-run failed jobs" on the tag's run
+# reuses the build's artifacts, so it skips the GitHub release when that is
+# already published with the same files (#19); "re-run all jobs" rebuilds,
+# and unless the tarballs come out identical, it stops there instead.
 #
 # There is no Windows build: Windows users run pharos inside WSL (ADR-035).
 #
@@ -172,12 +176,41 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # A normal release, marked latest: releases/latest/download/install.sh is this one.
+      # A re-run of the tag's failed jobs (after a later step failed) finds
+      # the release already there. If it is published (not a draft: gh
+      # uploads to a draft first, so a cancelled attempt can leave one) and
+      # holds exactly this run's files, byte for byte, skip creating it and
+      # carry on to npm. Otherwise fail rather than publish npm packages
+      # that differ from the release (#19).
       - name: Publish the GitHub release
         if: ${{ !inputs.republish }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=${RELEASE_TAG#v}
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            why=
+            if [ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)" != false ]; then
+              why="it is a draft (an earlier attempt stopped mid-upload?)"
+            else
+              existing="$RUNNER_TEMP/existing"
+              rm -rf "$existing" && mkdir -p "$existing"
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$existing"
+              if [ "$(cd "$existing" && ls | sort)" != "$(cd dist && ls | sort)" ]; then
+                why="its assets aren't this run's: $(cd "$existing" && ls | sort | tr '\n' ' ')"
+              else
+                for f in dist/*; do
+                  cmp -s "$f" "$existing/${f#dist/}" || why="${why:+$why, }${f#dist/} differs"
+                done
+              fi
+            fi
+            if [ -z "$why" ]; then
+              echo "release $RELEASE_TAG is already published with exactly these files; skipping creation"
+              exit 0
+            fi
+            echo "::error::release $RELEASE_TAG already exists, but $why. If any of $version reached npm, don't recreate the release from a new build: fix it by hand to match npm, or finish npm with republish=$version (which refills npm from the release). If nothing reached npm, delete the release and re-run."
+            exit 1
+          fi
           prerelease=--latest
           if [[ "$version" == *-* ]]; then prerelease=--prerelease; fi
           gh release create "$RELEASE_TAG" dist/* \
@@ -280,13 +313,22 @@ jobs:
       # and the postinstall failed. Publishing the main package last, once
       # every platform version is installable, closes most of that window
       # for users.
+      #
+      # Poll with backoff (15 s doubling to 2 min) up to 60 min. 15 min was
+      # too short for 0.3.4: npm accepted darwin-arm64 at 15:21 and served
+      # it at 15:40 (#19).
       - name: Wait until npm can install every platform package
+        timeout-minutes: 75
         run: |
           version=${RELEASE_TAG#v}
-          for i in $(seq 1 60); do
+          deadline=$((SECONDS + 3600))
+          delay=15
+          i=0
+          while :; do
+            i=$((i + 1))
             missing=
             for plat in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
-              curl -fsS -H 'Accept: application/vnd.npm.install-v1+json' \
+              curl -fsS -m 30 -H 'Accept: application/vnd.npm.install-v1+json' \
                 "https://registry.npmjs.org/@pharos-mcp%2f$plat" 2>/dev/null \
                 | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin)["versions"] else 1)' "$version" \
                 || missing="$missing $plat"
@@ -301,11 +343,14 @@ jobs:
               sleep 300
               exit 0
             fi
-            echo "not installable yet:$missing (try $i)"
-            sleep 15
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::platform packages still not installable after 60 min:$missing. Once npm serves them, run release.yml with republish=$version (or re-run this job)." >&2
+              exit 1
+            fi
+            echo "not installable yet:$missing (try $i, next in ${delay}s, $(( (deadline - SECONDS) / 60 )) min left)"
+            sleep "$delay"
+            delay=$(( delay * 2 > 120 ? 120 : delay * 2 ))
           done
-          echo "platform packages still not installable after 15 min:$missing" >&2
-          exit 1
 
       - name: Publish pharos-mcp
         run: |
