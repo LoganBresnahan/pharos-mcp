@@ -1416,6 +1416,34 @@ def t_check_that_never_ends_is_bounded(sb):
     check("carried_over" in d, "an answer during an unfinished check must be marked: %s" % d[-300:])
 
 
+def t_frames_after_an_error_reply_are_kept(sb):
+    """#31: a publish in the same read as an error reply was discarded:
+    the proc continued with the client from before the request. It's kept
+    now, like one behind a success (#25)."""
+    a = sb.start({"STUB_LSP_ERROR_WITH_PUBLISH": "-32603", "STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "one\n")
+    hover_line(a, uri, 10)
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 5000})
+    check("published behind an error" in d, "the publish behind the error was lost: %s" % d[-300:])
+
+
+def t_split_frame_after_an_error_keeps_the_stream(sb):
+    """#31: with half a frame behind an error reply (ContentModified, which
+    pharos retries), dropping the read bytes desynced the stream: the next
+    request failed with a framing error. Now the publish arrives whole and
+    the next request answers."""
+    a = sb.start({"STUB_LSP_ERROR_WITH_PUBLISH": "-32801:split", "STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "one\ntwo\n")
+    hover_line(a, uri, 10)
+    time.sleep(0.6)
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 5000})
+    check("published behind an error" in d, "the split publish was lost: %s" % d[-300:])
+    h = hover_line(a, uri, 12, line=1)
+    check("line 1: two" in h and "framing" not in h, "the stream desynced: %s" % h[-300:])
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1467,6 +1495,8 @@ SCENARIOS = [
     ("diagnostics_cli_busy_tsserver", t_diagnostics_cli_busy_tsserver),
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
+    ("frames_after_an_error_reply_are_kept", t_frames_after_an_error_reply_are_kept),
+    ("split_frame_after_an_error_keeps_the_stream", t_split_frame_after_an_error_keeps_the_stream),
     ("frames_after_a_reply_are_handled", t_frames_after_a_reply_are_handled),
     ("check_on_save_answers_the_new_text", t_check_on_save_answers_the_new_text),
     ("check_that_never_ends_is_bounded", t_check_that_never_ends_is_bounded),

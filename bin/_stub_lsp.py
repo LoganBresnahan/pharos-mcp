@@ -135,6 +135,16 @@ A check on save, like rust-analyzer's cargo check (#30):
                               STUB_LSP_SYNC_SAVE so pharos sends didSave,
                               and the client's window.workDoneProgress
 
+An error reply with frames behind it (#31):
+
+  STUB_LSP_ERROR_WITH_PUBLISH=code[:split]
+                              the FIRST hover answers a JSON-RPC error with
+                              `code`, and a publishDiagnostics for that file
+                              ("published behind an error") in the same
+                              write; with ":split", the publish's last 20
+                              bytes come 0.3 s later. Later hovers answer
+                              normally
+
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
 range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
@@ -210,6 +220,7 @@ def write_message(stream, msg):
 
 
 CLIENT_PROGRESS = threading.Event()
+ERRORED_ONCE: list = []
 
 
 LAST_CHECKED: dict[str, list] = {}
@@ -640,6 +651,28 @@ def main():
             write_message(stdout, handle_workspace_symbol(msg))
         elif method == "textDocument/documentSymbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL"):
             write_message(stdout, handle_document_symbol(msg))
+        elif method == "textDocument/hover" and os.environ.get("STUB_LSP_ERROR_WITH_PUBLISH") and not ERRORED_ONCE:
+            ERRORED_ONCE.append(True)
+            spec = os.environ["STUB_LSP_ERROR_WITH_PUBLISH"]
+            code, _, split = spec.partition(":")
+            uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
+            err = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": int(code), "message": "stub_lsp: error with a publish behind it"}}
+            publish = {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                       "params": {"uri": uri, "diagnostics": [{
+                           "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                           "severity": 1, "source": "stub", "message": "published behind an error"}]}}
+            frames = b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+                              for b in (json.dumps(err).encode(), json.dumps(publish).encode()))
+            head, tail = (frames[:-20], frames[-20:]) if split == "split" else (frames, b"")
+            with WRITE_LOCK:
+                stdout.write(head)
+                stdout.flush()
+            if tail:
+                def rest(t=tail):
+                    with WRITE_LOCK:
+                        stdout.write(t)
+                        stdout.flush()
+                threading.Timer(0.3, rest).start()
         elif method == "textDocument/hover" and os.environ.get("STUB_LSP_PUBLISH_WITH_REPLY"):
             resp = handle_hover(msg)
             uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")

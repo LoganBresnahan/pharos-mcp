@@ -788,24 +788,20 @@ fn handle_request(
 ) -> actor.Next(State, Msg) {
   let lsp_id = next_id()
   track_inflight(cid, state.self_subject, lsp_id)
-  case lifecycle.request(state.client, method, params, lsp_id, timeout_ms) {
-    Ok(#(updated_client, result_value)) -> {
-      untrack_inflight(cid)
-      process.send(reply_to, Ok(result_value))
-      // Frames read along with the response (a publishDiagnostics in the
-      // same read) are still buffered: handle them now. A quiet server
-      // sends nothing more to wake the port, and the publish sat unparsed
-      // while get_diagnostics waited out its timeout (#25).
-      actor.continue(drain_buffered_frames(
-        State(..state, client: updated_client),
-      ))
-    }
-    Error(err) -> {
-      untrack_inflight(cid)
-      process.send(reply_to, Error(err))
-      actor.continue(state)
-    }
-  }
+  // The client comes back with an error reply too: what was read behind
+  // it (a publish, half a frame) is in its buffer, and is drained like a
+  // success's (#25, #31).
+  let #(updated_client, outcome) =
+    lifecycle.request_keeping_client(
+      state.client,
+      method,
+      params,
+      lsp_id,
+      timeout_ms,
+    )
+  untrack_inflight(cid)
+  process.send(reply_to, outcome)
+  actor.continue(drain_buffered_frames(State(..state, client: updated_client)))
 }
 
 fn handle_request_raw(
@@ -818,32 +814,17 @@ fn handle_request_raw(
 ) -> actor.Next(State, Msg) {
   let lsp_id = next_id()
   track_inflight(cid, state.self_subject, lsp_id)
-  case
-    lifecycle.request_raw_params(
+  let #(updated_client, outcome) =
+    lifecycle.request_raw_params_keeping_client(
       state.client,
       method,
       params_text,
       lsp_id,
       timeout_ms,
     )
-  {
-    Ok(#(updated_client, result_value)) -> {
-      untrack_inflight(cid)
-      process.send(reply_to, Ok(result_value))
-      // Frames read along with the response (a publishDiagnostics in the
-      // same read) are still buffered: handle them now. A quiet server
-      // sends nothing more to wake the port, and the publish sat unparsed
-      // while get_diagnostics waited out its timeout (#25).
-      actor.continue(drain_buffered_frames(
-        State(..state, client: updated_client),
-      ))
-    }
-    Error(err) -> {
-      untrack_inflight(cid)
-      process.send(reply_to, Error(err))
-      actor.continue(state)
-    }
-  }
+  untrack_inflight(cid)
+  process.send(reply_to, outcome)
+  actor.continue(drain_buffered_frames(State(..state, client: updated_client)))
 }
 
 /// Insert an `(mcp_id → (self_subject, lsp_id))` row into the

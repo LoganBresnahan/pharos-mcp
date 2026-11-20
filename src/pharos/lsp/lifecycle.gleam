@@ -106,6 +106,22 @@ pub fn request(
   wait_for_response(client, request_id, timeout_ms)
 }
 
+/// `request`, returning the client whatever the outcome, so a caller
+/// that keeps the client (the proc) doesn't drop what was read behind an
+/// error reply (#31).
+pub fn request_keeping_client(
+  client: Client,
+  method: String,
+  params: Json,
+  request_id: Int,
+  timeout_ms: Int,
+) -> #(Client, Result(Dynamic, RequestError)) {
+  case send_method_request(client, method, params, request_id) {
+    Error(err) -> #(client, Error(err))
+    Ok(Nil) -> wait_for_response_keeping(client, request_id, timeout_ms)
+  }
+}
+
 fn send_initialize_request(
   client: Client,
   id: Int,
@@ -414,6 +430,20 @@ pub fn request_raw_params(
   wait_for_response(client, request_id, timeout_ms)
 }
 
+/// `request_raw_params`, returning the client whatever the outcome (#31).
+pub fn request_raw_params_keeping_client(
+  client: Client,
+  method: String,
+  params_json: String,
+  request_id: Int,
+  timeout_ms: Int,
+) -> #(Client, Result(Dynamic, RequestError)) {
+  case send_raw_method_request(client, method, params_json, request_id) {
+    Error(err) -> #(client, Error(err))
+    Ok(Nil) -> wait_for_response_keeping(client, request_id, timeout_ms)
+  }
+}
+
 fn send_raw_method_request(
   client: Client,
   method: String,
@@ -505,49 +535,58 @@ fn wait_for_response(
   expected_id: Int,
   timeout_ms: Int,
 ) -> Result(#(Client, Dynamic), RequestError) {
-  use #(body, client) <- result.try(
-    client.next_message(client, timeout_ms)
-    |> result.map_error(ClientFailure),
-  )
+  let #(client, outcome) =
+    wait_for_response_keeping(client, expected_id, timeout_ms)
+  result.map(outcome, fn(value) { #(client, value) })
+}
 
-  case classify(body) {
-    ResponseOk(id: id, result: result_value) if id == expected_id ->
-      Ok(#(client, result_value))
+/// `wait_for_response`, returning the client with an error reply too: the
+/// frames read behind the error (a publish, half a frame) live in that
+/// client's buffer. Continuing with the client from before the request
+/// dropped them, losing publishes and, with a split frame, desyncing the
+/// stream (#31). A port timeout or transport failure returns the client
+/// as it was, since nothing was read into it.
+fn wait_for_response_keeping(
+  client: Client,
+  expected_id: Int,
+  timeout_ms: Int,
+) -> #(Client, Result(Dynamic, RequestError)) {
+  case client.next_message(client, timeout_ms) {
+    Error(err) -> #(client, Error(ClientFailure(err)))
+    Ok(#(body, client)) ->
+      case classify(body) {
+        ResponseOk(id: id, result: result_value) if id == expected_id -> #(
+          client,
+          Ok(result_value),
+        )
 
-    ResponseErr(id: id, code: code, message: message) if id == expected_id ->
-      Error(ServerError(code, message))
+        ResponseErr(id: id, code: code, message: message)
+          if id == expected_id
+        -> #(client, Error(ServerError(code, message)))
 
-    ResponseOk(..) | ResponseErr(..) ->
-      // Wrong id — almost certainly a stale or out-of-order response.
-      // Keep looping; the matching one should arrive.
-      wait_for_response(client, expected_id, timeout_ms)
+        ResponseOk(..) | ResponseErr(..) ->
+          // Wrong id — almost certainly a stale or out-of-order response.
+          // Keep looping; the matching one should arrive.
+          wait_for_response_keeping(client, expected_id, timeout_ms)
 
-    ServerRequest(id: id, method: method, params: params) -> {
-      let _ = dispatch_server_request(client, id, method, params)
-      wait_for_response(client, expected_id, timeout_ms)
-    }
+        ServerRequest(id: id, method: method, params: params) -> {
+          let _ = dispatch_server_request(client, id, method, params)
+          wait_for_response_keeping(client, expected_id, timeout_ms)
+        }
 
-    Notification(method: method, params: params) -> {
-      // Side-effect: cache publishDiagnostics so subsequent
-      // get_diagnostics calls can return immediately even when the
-      // server does not re-emit (it publishes when it has something
-      // new to say). Stage 2 second-pass C; ADR-038. Other notifications drain unchanged. Stage 0F's
-      // wait_for_ready/3 is the place to consume $/progress
-      // selectively when a tool needs to wait for indexing.
-      cache_publish_diagnostics(client, method, params)
-      wait_for_response(client, expected_id, timeout_ms)
-    }
+        Notification(method: method, params: params) -> {
+          // Side-effect: cache publishDiagnostics so subsequent
+          // get_diagnostics calls can return immediately even when the
+          // server does not re-emit (ADR-038).
+          cache_publish_diagnostics(client, method, params)
+          wait_for_response_keeping(client, expected_id, timeout_ms)
+        }
 
-    DecodeFailure(reason) -> Error(ResponseDecodeError(reason))
+        DecodeFailure(reason) -> #(client, Error(ResponseDecodeError(reason)))
+      }
   }
 }
 
-/// Look up a handler for the inbound server-initiated request and
-/// send its reply. If no handler is registered, reply with the
-/// spec-default `-32601` (Method not found) per ADR-012 decision 2.
-/// Either way, the original `wait_for_response` loop continues — the
-/// server's request has been answered (or rejected); the response we
-/// were originally waiting for should still arrive.
 fn dispatch_server_request(
   client: Client,
   id: LspId,
