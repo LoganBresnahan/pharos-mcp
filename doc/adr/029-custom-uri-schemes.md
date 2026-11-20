@@ -92,7 +92,7 @@ Concretely:
 optional `custom_uri_schemes` map:
 
 ```toml
-[language.java]
+[languages.java]
 custom_uri_schemes.jdt.fetch_method = "java/classFileContents"
 custom_uri_schemes.jdt.fetch_response_field = "contents"
 ```

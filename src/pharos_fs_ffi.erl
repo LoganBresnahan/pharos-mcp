@@ -9,7 +9,17 @@
 %% Returns Gleam-friendly tagged tuples shaped as Result(t, e).
 
 -module(pharos_fs_ffi).
--export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1, days_since_iso8601/1, setenv/2, name_to_binary/1, binary_to_name/1]).
+-export([same_file/2, is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1, days_since_iso8601/1, setenv/2, name_to_binary/1, binary_to_name/1]).
+
+%% True when both paths name one existing file (same device and inode),
+%% however they're spelt: symlinks, `//`, a trailing `/.`. The project
+%% config walk uses it to skip the global config file (#32).
+same_file(A, B) ->
+    case {file:read_file_info(A), file:read_file_info(B)} of
+        {{ok, FA}, {ok, FB}} ->
+            element(10, FA) =:= element(10, FB) andalso element(12, FA) =:= element(12, FB);
+        _ -> false
+    end.
 
 is_regular_file(Path) ->
     filelib:is_regular(Path).

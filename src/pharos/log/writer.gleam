@@ -311,6 +311,20 @@ pub fn emit(log_entry: LogEntry) -> Nil {
   }
 }
 
+/// True when `emit` would reach a running writer (its sinks), false when
+/// it would fall back to direct stderr. pharos.toml's warnings use it to
+/// log once per sink (#32).
+pub fn running() -> Bool {
+  case lookup_subject() {
+    Error(_) -> False
+    Ok(subject) ->
+      case process.subject_owner(subject) {
+        Error(_) -> False
+        Ok(_) -> True
+      }
+  }
+}
+
 /// Cast an entry to this writer, not the registered one, and without
 /// `emit`'s mailbox-depth guard. For tests that drive a writer they
 /// started: `emit` goes to whichever writer registered last, and any

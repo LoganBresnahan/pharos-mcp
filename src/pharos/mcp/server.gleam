@@ -338,6 +338,23 @@ fn tools_list_response(id: Id) -> String {
 /// (`pharos/config.tools`) becomes its instantiated JSON; the rest
 /// drop out before `tools/list` ever sees them.
 fn allowed_tool_definitions() -> List(Json) {
+  tool_definitions()
+  |> list.filter_map(fn(pair) {
+    let #(name, builder) = pair
+    case tool_registry.is_allowed(name) {
+      True -> Ok(builder())
+      False -> Error(Nil)
+    }
+  })
+}
+
+/// The name of every tool pharos registers, filtered or not.
+/// `pharos/tools/names.all` must list the same names (#32).
+pub fn registered_tool_names() -> List(String) {
+  list.map(tool_definitions(), fn(pair) { pair.0 })
+}
+
+fn tool_definitions() -> List(#(String, fn() -> Json)) {
   let curated = [
     #("echo", echo_tool_definition),
     #("get_diagnostics", get_diagnostics_tool_definition),
@@ -384,13 +401,6 @@ fn allowed_tool_definitions() -> List(Json) {
     #("memory_audit", memory_audit_tool_definition),
   ]
   list.append(curated, debug.named_definitions())
-  |> list.filter_map(fn(pair) {
-    let #(name, builder) = pair
-    case tool_registry.is_allowed(name) {
-      True -> Ok(builder())
-      False -> Error(Nil)
-    }
-  })
 }
 
 /// Schema entry for the optional `timeout_ms` argument shared by

@@ -11,8 +11,8 @@
 ////        --print-default-config    — print the canonical TOML
 ////                                    starter file and exit
 ////   2. Load Config from `pharos/config` (defaults overlaid by
-////      `~/.config/pharos/pharos.toml`, `.pharos.toml` walked up
-////      from cwd, then `PHAROS_*` env vars).
+////      `~/.config/pharos/pharos.toml`, `.pharos.toml` or `pharos.toml`
+////      walked up from cwd, then `PHAROS_*` env vars).
 ////   3. Build the supervised tree from the resolved Config.
 ////   4. Block until shutdown.
 ////
@@ -220,6 +220,9 @@ fn do_boot() -> Result(Pid, String) {
     Error(_) -> Error("root_supervisor.start returned an error")
     Ok(started) -> {
       register_root_supervisor(started.pid)
+      // #32: the config check at boot ran before the log writer, so its
+      // warnings reached stderr only; again now, through the writer.
+      config.recheck()
       // ADR-030 I1: spawn the linked heartbeat process AFTER the
       // root supervisor is up. Wiring it here (not in main/0) means
       // both `mix start` and the release path get the
@@ -771,17 +774,19 @@ Flags
 Configuration sources (precedence: lower wins under higher)
   1. Compiled-in defaults
   2. ~/.config/pharos/pharos.toml             (global)
-  3. .pharos.toml walked up from cwd          (project)
+  3. .pharos.toml or pharos.toml, walked up   (project)
+     from cwd; .pharos.toml wins beside both
   4. PHAROS_* environment variables           (override)
 
 See doc/example-pharos.toml in the source repo for the full schema."
 }
 
-const default_config_template: String = "# pharos configuration. Drop this file at
+pub const default_config_template: String = "# pharos configuration. Drop this file at
 #   ~/.config/pharos/pharos.toml
 # (global) or
-#   ./.pharos.toml
-# (project; walked up from cwd, beats global). Either is fully
+#   ./.pharos.toml or ./pharos.toml
+# (project; the nearest directory up from cwd with either, beats
+# global; .pharos.toml wins where both are). Either is fully
 # optional — pharos boots cleanly with no config file at all.
 #
 # Every key here is at its compiled-in default. Delete keys you do
@@ -879,10 +884,6 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # (recon-backed). Off by default because raw module/function
 # tracing has scheduler side effects.
 # trace_calls_enabled = false
-
-# [bridge]
-# port — VSCode bridge listener port for the M7 extension.
-# port = 31_337
 
 # [languages.<id>] — per-language overrides. Two override shapes
 # are accepted; mix freely.

@@ -14,6 +14,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- pharos.toml values that used to do harm are ignored, with a warning, and the default stays
+  (#32):
+  - an unknown `diagnostics_mode` keeps the bundled mode (it was read as push, which left a
+    pull or tsserver server's diagnostics waiting on publishes that never came);
+  - a `tools` list in which no entry names a tool, category or preset keeps the earlier
+    setting, `"default"` unless an earlier file set one (it exposed no tools at all; an
+    explicit `tools = []` still does);
+  - an `initialize_timeout_ms` of 0 or less keeps the bundled timeout (the handshake timed
+    out at once, so the server never started);
+  - a `[tool_config]` `default_timeout_ms` of 0 or less keeps the tool's built-in default
+    (every call timed out at once);
+  - a negative `idle_stop_secs` keeps the bundled idle limit, as a negative
+    `PHAROS_LSP_IDLE_SECS` already did (the server was never stopped);
+  - an empty entry in `file_extensions` is dropped (it claimed every file for that language).
+- The project config may be named `pharos.toml` as well as `.pharos.toml`: the nearest
+  directory up from the working directory holding either is read. Where both are,
+  `.pharos.toml` is read and `pharos.toml` is ignored with a warning. A plain `pharos.toml`
+  used to be ignored without a word. The nearest directory with either name wins, so a
+  `sub/pharos.toml` now beats a `parent/.pharos.toml` it used to be skipped for. The global file stays `~/.config/pharos/pharos.toml`,
+  and the project walk never reads it as a project file. A `.pharos.toml` in the global
+  directory (never read) now warns (#32).
+- `[bridge] port` is gone from the example config and `--print-default-config`: nothing reads
+  it, since the editor-extension listener isn't built. A config that sets it still loads, with
+  a warning.
+- pharos.toml warns, once per file content, on stderr and in the daemon's log, about: a key it
+  doesn't know (with the likely key it misspells); a value of the wrong type; a value it can't
+  use as meant (an unknown `transport` or `diagnostics_mode`, a timeout of 0 or less, an empty
+  `command`, an empty file extension, a `log.filter` clause it skips), saying what pharos does
+  with it; an unknown tool or language in `[tool_config]` or entry in `tools`; and a missing
+  key a table needs (a new language's `command` and `file_extensions`, a `[[servers]]` entry's
+  `id`, a URI scheme's `fetch_method`); a key in the wrong table (`methods` belongs in
+  `[[languages.<id>.servers]]`). How the file applies is unchanged; these used to pass
+  without a word. Older names it still reads, such as `readiness_timeout_ms`, don't warn
+  (#32).
 
 ## [0.3.5] — 2026-11-19
 

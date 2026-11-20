@@ -61,6 +61,7 @@
     trace_filter_cache_is_on/0,
     config_store/1,
     config_load/0,
+    first_config_check/3,
     session_overrides_store/1,
     session_overrides_load/0,
     argv/0,
@@ -1005,6 +1006,23 @@ config_load() ->
         {ok, Cfg}
     catch
         error:badarg -> {error, nil}
+    end.
+
+%% #32. True the first time this VM checks a config file's keys with
+%% these contents and this state of the log writer, so a daemon resolving
+%% the config for every session warns about a stray key once before the
+%% writer starts (stderr: the boot log) and once after (the daemon log and
+%% the ring), and again only after the file changes.
+%% A new persistent_term key costs no global GC (only replacing or
+%% erasing one does), and there is one per distinct file content with a
+%% problem in it. Two sessions racing here may both warn; harmless.
+first_config_check(Path, Bytes, WriterUp) ->
+    Key = {pharos_config_checked, Path, erlang:phash2(Bytes), WriterUp},
+    case persistent_term:get(Key, false) of
+        true -> false;
+        false ->
+            persistent_term:put(Key, true),
+            true
     end.
 
 %% Session-scoped tool_config overrides (ADR 021 layer 4). The

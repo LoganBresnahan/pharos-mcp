@@ -62,6 +62,21 @@ pub fn parse_spec(spec: String) -> Filter {
   }
 }
 
+/// The clauses of `spec` that `parse_spec` skips because they don't
+/// parse (an unknown level, an empty target), as written. pharos.toml's
+/// check reports them (#32).
+pub fn unparsed_clauses(spec: String) -> List(String) {
+  string.split(string.trim(spec), ",")
+  |> list.map(string.trim)
+  |> list.filter(fn(clause) {
+    clause != ""
+    && case parse_clause(clause) {
+      ParseSkip -> True
+      _ -> False
+    }
+  })
+}
+
 type ClauseResult {
   ParseDefault(Level)
   ParseOverride(Override)

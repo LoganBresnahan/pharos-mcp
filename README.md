@@ -361,7 +361,9 @@ Pharos reads configuration in this precedence order (later wins):
 
 1. Compiled-in defaults (no config required)
 2. `~/.config/pharos/pharos.toml` — global per-user
-3. `./.pharos.toml` — per-project; walked up from cwd
+3. `./.pharos.toml` or `./pharos.toml` — per-project: the nearest directory up from cwd
+   holding either. Where both are, `.pharos.toml` is read and `pharos.toml` is ignored, with
+   a warning
 4. `PHAROS_*` environment variables — final override
 
 To start customising, dump the canonical TOML with comments:

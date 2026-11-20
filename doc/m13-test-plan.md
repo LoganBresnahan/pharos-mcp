@@ -362,6 +362,11 @@ therefore release.
 
 ### Phase 12 — `[tools.<name>] default_timeout_ms` config override
 
+> Note (2026-11-20): as built, the table is `[tool_config.<name>]`
+> (`[tool_config.<name>.<lang>]` per language); `tools` is the top-level
+> tool filter. The plan below keeps its original wording. A pharos.toml
+> using `[tools.<name>]` now gets a warning (#32).
+
 Today, three timeout layers exist:
 
 1. Per-call `timeout_ms` — passed as a tool argument.

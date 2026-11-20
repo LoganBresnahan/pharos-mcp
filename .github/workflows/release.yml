@@ -133,6 +133,12 @@ jobs:
     needs: build
     if: ${{ !cancelled() && ((startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success') || inputs.republish) }}
     runs-on: ubuntu-22.04
+    # Covers the npm wait below (75 min at most) plus the rest, so a hung
+    # upload or publish can't hold the runner for GitHub's 6 h default. A
+    # timeout mid-publish is recoverable: re-running the failed jobs finds
+    # the GitHub release already published with this run's files and goes
+    # on to npm (#19), and republish=<version> refills npm from the release.
+    timeout-minutes: 100
     env:
       RELEASE_TAG: ${{ inputs.republish && format('v{0}', inputs.republish) || github.ref_name }}
     permissions:

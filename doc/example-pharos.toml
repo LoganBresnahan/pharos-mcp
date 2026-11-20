@@ -2,7 +2,11 @@
 #
 #   ~/.config/pharos/pharos.toml      (global)
 # or
-#   ./.pharos.toml                    (project; walked up from cwd)
+#   ./.pharos.toml or ./pharos.toml   (project; walked up from cwd)
+#
+# The project file is the nearest directory up from the working
+# directory holding either name. Where both are, `.pharos.toml` is read
+# and `pharos.toml` is ignored with a warning.
 #
 # Either is fully optional — pharos boots cleanly with no config file
 # at all. Project-level overrides global; environment variables
@@ -97,10 +101,6 @@
 # (recon-backed). Off by default because raw module/function
 # tracing has scheduler side effects.
 # trace_calls_enabled = false
-
-# [bridge]
-# port — VSCode bridge listener port for the M7 extension.
-# port = 31337
 
 # [languages.<id>] — per-language overrides. Two override shapes
 # are accepted; mix freely.
@@ -294,7 +294,32 @@
 # 0. Set it for a server of your own that does the same:
 #
 # [languages.mylang]
+# command = "mylang-lsp"
+# file_extensions = [".my"]
 # save_check_grace_ms = 500
+
+# 4d) Per-server workarounds for how a server takes edits (#38).
+#
+# These two exist for one server's quirks and are bundled on for
+# ruby-lsp only; leave them alone unless your own server shows the same
+# trouble.
+#
+# `full_change_as_range` sends each edit as a ranged replace of the
+# whole document, from the start to the end of the text sent last,
+# instead of the range-less whole-text form (ruby-lsp mishandles the
+# range-less form and keeps the old text). Bundled: ruby-lsp true,
+# others false.
+#
+# `pull_after_change_ms` waits this long between sending an edit and
+# pulling diagnostics (textDocument/diagnostic), for a server that can
+# answer a pull before it applies the edit just sent. At most half the
+# call's timeout. Bundled: ruby-lsp 50, others 0.
+#
+# [languages.mylang]
+# command = "mylang-lsp"
+# file_extensions = [".my"]
+# full_change_as_range = true
+# pull_after_change_ms = 50
 
 # 5) Per-tool default_timeout_ms (M13 polish, ADR 021).
 #

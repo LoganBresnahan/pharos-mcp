@@ -24,6 +24,11 @@ jobs:
   shim:
     name: shim (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Job time limits: a hang can't hold a runner for GitHub's 6 h default.
+    # Sized from the last 80 runs (2026-11-20, longest successful job):
+    # shim 1.3 min, build & test 1.7, daemon integration 5.3 (macOS), with
+    # room for a cold cache and a slow runner.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -67,6 +72,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     name: build & test
+    timeout-minutes: 20
     env:
       MIX_ENV: test
     steps:
@@ -280,6 +286,7 @@ jobs:
   daemon-integration:
     name: daemon integration (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

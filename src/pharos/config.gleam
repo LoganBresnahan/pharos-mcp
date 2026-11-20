@@ -5,7 +5,10 @@
 ////
 ////   1. defaults (compiled into this module)
 ////   2. global TOML at `~/.config/pharos/pharos.toml`
-////   3. project TOML at `./.pharos.toml` (walked up from cwd)
+////   3. project TOML: `.pharos.toml` or `pharos.toml`, in the nearest
+////      directory walking up from cwd that has either (`.pharos.toml` wins
+////      when both are there; the global file is never read as a project
+////      file)
 ////   4. environment variables (`PHAROS_*`)
 ////   5. CLI flags (only `--version` / `--help` /
 ////      `--print-default-config` — every runtime knob is env or TOML)
@@ -20,7 +23,9 @@
 ////   2. Set its default in `defaults/0`.
 ////   3. Add a TOML key in `apply_toml/2`.
 ////   4. Add an env override in `apply_env/1`.
-////   5. Document in `doc/example-pharos.toml` and the README.
+////   5. List the key in `pharos/config_keys`, or every use of it warns
+////      as unknown (#32).
+////   6. Document in `doc/example-pharos.toml` and the README.
 
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
@@ -30,11 +35,14 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import pharos/config_keys
 import pharos/env
 import pharos/log
 import pharos/log/entry as log_entry
 import pharos/log/rotate as log_rotate
+import pharos/log/writer
 import pharos/lsp/languages.{type CustomUriScheme}
+import pharos/tools/names as tool_names
 
 // -- Types ----------------------------------------------------------------
 
@@ -344,9 +352,11 @@ pub fn load() -> Config {
 /// own cwd and env; a session context (ADR-034) is this over the
 /// session's. Same code either way, so the two cannot drift.
 pub fn resolve(cwd: String, getenv: fn(String) -> Option(String)) -> Config {
+  warn_dotted_global(cwd, getenv)
   defaults()
   |> overlay_global_toml(getenv)
-  |> overlay_project_toml(cwd)
+  |> overlay_project_toml(cwd, getenv)
+  |> warn_unknown_tool_languages
   |> apply_env(getenv)
 }
 
@@ -464,6 +474,82 @@ fn is_default_essential(name: String) -> Bool {
   }
 }
 
+/// The languages config read so far defines, each with the server ids
+/// it defines for it: what `config_keys` takes as already known (#32).
+fn earlier_servers(config: Config) -> List(#(String, List(String))) {
+  dict.to_list(config.languages)
+  |> list.map(fn(pair) {
+    let #(id, override) = pair
+    #(id, case override.servers {
+      Some(servers) ->
+        list.filter_map(servers, fn(s) { option.to_result(s.id, Nil) })
+      None -> []
+    })
+  })
+}
+
+/// #32: the `[tool_config.<tool>.<lang>]` blocks whose language neither
+/// pharos bundles nor any config file defines, once every file is read
+/// (a language the project file adds may be named in the global one):
+/// `#(key, language, likely misspelling)`.
+pub fn unknown_tool_languages(
+  config: Config,
+) -> List(#(String, String, Option(String))) {
+  let known =
+    list.append(
+      dict.keys(languages.default_registry()),
+      dict.keys(config.languages),
+    )
+  dict.to_list(config.tool_config)
+  |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+  |> list.flat_map(fn(pair) {
+    let #(tool, tc) = pair
+    dict.keys(tc.languages)
+    |> list.sort(string.compare)
+    |> list.filter_map(fn(lang) {
+      case list.contains(known, lang) {
+        True -> Error(Nil)
+        False ->
+          Ok(#(
+            "tool_config." <> tool <> "." <> lang,
+            lang,
+            config_keys.closest(lang, known),
+          ))
+      }
+    })
+  })
+}
+
+fn warn_unknown_tool_languages(config: Config) -> Config {
+  list.each(unknown_tool_languages(config), fn(found) {
+    let #(key, lang, suggestion) = found
+    case first_config_check(key, <<"tool language">>, writer.running()) {
+      False -> Nil
+      True ->
+        log.fields_at(
+          "pharos/config",
+          log_entry.Warn,
+          "config names an unknown language",
+          [
+            #("key", key),
+            #("name", lang),
+            ..option_field("did_you_mean", suggestion)
+          ],
+        )
+    }
+  })
+  config
+}
+
+/// #32: checks the config files again, discarding the result, so their
+/// warnings reach the log writer's sinks (the daemon log, the ring) once
+/// it is up. The first check, at boot, runs before the writer starts and
+/// reaches stderr only. Call once the writer runs.
+pub fn recheck() -> Nil {
+  let _ = resolve(cwd(), env.get)
+  Nil
+}
+
 // -- Global TOML overlay --------------------------------------------------
 
 fn overlay_global_toml(
@@ -484,6 +570,58 @@ fn overlay_global_toml(
   }
 }
 
+/// #32. The global file is `pharos.toml`; a `.pharos.toml` beside where
+/// it would be is never read as the global file (the dotted name is the
+/// project file's). Warns about one, unless the project walk takes it (a
+/// cwd in that directory), or PHAROS_CONFIG_FILE names the global file.
+fn warn_dotted_global(
+  cwd: String,
+  getenv: fn(String) -> Option(String),
+) -> Nil {
+  case dotted_global_ignored(cwd, getenv) {
+    None -> Nil
+    Some(#(dotted, path)) ->
+      case first_config_check(dotted, <<"misnamed">>, writer.running()) {
+        False -> Nil
+        True ->
+          log.fields_at(
+            "pharos/config",
+            log_entry.Warn,
+            "config file not read: the global file is pharos.toml",
+            [#("ignored", dotted), #("expected_at", path)],
+          )
+      }
+  }
+}
+
+/// The `.pharos.toml` in the global config directory that nothing
+/// reads, with where the global file is expected: when there is no
+/// `pharos.toml` beside it, PHAROS_CONFIG_FILE doesn't name the global
+/// file, and the project walk from `cwd` doesn't take it.
+pub fn dotted_global_ignored(
+  cwd: String,
+  getenv: fn(String) -> Option(String),
+) -> Option(#(String, String)) {
+  let global = case getenv("PHAROS_CONFIG_FILE") {
+    Some(set) if set != "" -> None
+    _ -> xdg_config_path(getenv)
+  }
+  case global {
+    None -> None
+    Some(path) -> {
+      let dotted = dirname(path) <> "/.pharos.toml"
+      let taken = case find_project_config(cwd, getenv) {
+        #(Some(found), _) -> same_file(found, dotted)
+        #(None, _) -> False
+      }
+      case path_exists(dotted) && !path_exists(path) && !taken {
+        True -> Some(#(dotted, path))
+        False -> None
+      }
+    }
+  }
+}
+
 fn xdg_config_path(getenv: fn(String) -> Option(String)) -> Option(String) {
   case getenv("XDG_CONFIG_HOME") {
     Some(xdg) if xdg != "" -> Some(xdg <> "/pharos/pharos.toml")
@@ -497,35 +635,82 @@ fn xdg_config_path(getenv: fn(String) -> Option(String)) -> Option(String) {
 
 // -- Project TOML overlay -------------------------------------------------
 
-fn overlay_project_toml(config: Config, cwd: String) -> Config {
-  case find_project_toml(cwd) {
+fn overlay_project_toml(
+  config: Config,
+  cwd: String,
+  getenv: fn(String) -> Option(String),
+) -> Config {
+  let #(found, ignored) = find_project_config(cwd, getenv)
+  list.each(ignored, fn(pair) {
+    let #(path, instead) = pair
+    case first_config_check(path, <<"shadowed">>, writer.running()) {
+      False -> Nil
+      True ->
+        log.fields_at(
+          "pharos/config",
+          log_entry.Warn,
+          "config file ignored: the other project file name in its directory is read instead",
+          [#("ignored", path), #("read", instead)],
+        )
+    }
+  })
+  case found {
     None -> config
     Some(path) -> overlay_path(config, path, "project config")
   }
 }
 
-/// Walk up from `start_dir` looking for `.pharos.toml`. Returns the
-/// first match. Stops at filesystem root (`dirname(d) == d`).
-fn find_project_toml(start_dir: String) -> Option(String) {
+/// #32. The project config: the nearest directory, walking up from
+/// `start_dir` to the filesystem root, holding `.pharos.toml` or
+/// `pharos.toml`. In a directory with both, `.pharos.toml` is read and
+/// `pharos.toml` is returned as ignored, `#(ignored, read)`. The global
+/// file (`PHAROS_CONFIG_FILE`, else the XDG one) is never taken as a
+/// project file, so a project under `~/.config/pharos`, or a walk passing
+/// it, doesn't read it twice.
+pub fn find_project_config(
+  start_dir: String,
+  getenv: fn(String) -> Option(String),
+) -> #(Option(String), List(#(String, String))) {
+  let global = case getenv("PHAROS_CONFIG_FILE") {
+    Some(path) if path != "" -> Some(path)
+    _ -> xdg_config_path(getenv)
+  }
+  let usable = fn(path) {
+    path_exists(path)
+    && case global {
+      Some(g) -> !same_file(path, g)
+      None -> True
+    }
+  }
   case start_dir {
-    "" -> None
-    dir -> walk_up(dir, dir)
+    "" -> #(None, [])
+    dir -> walk_up(dir, dir, usable)
   }
 }
 
-fn walk_up(current: String, previous: String) -> Option(String) {
-  let candidate = current <> "/.pharos.toml"
-  case path_exists(candidate) {
-    True -> Some(candidate)
-    False -> {
+fn walk_up(
+  current: String,
+  previous: String,
+  usable: fn(String) -> Bool,
+) -> #(Option(String), List(#(String, String))) {
+  let dotted = current <> "/.pharos.toml"
+  let plain = current <> "/pharos.toml"
+  case usable(dotted), usable(plain) {
+    True, True -> #(Some(dotted), [#(plain, dotted)])
+    True, False -> #(Some(dotted), [])
+    False, True -> #(Some(plain), [])
+    False, False -> {
       let parent = dirname(current)
       case parent == current || parent == previous {
-        True -> None
-        False -> walk_up(parent, current)
+        True -> #(None, [])
+        False -> walk_up(parent, current, usable)
       }
     }
   }
 }
+
+@external(erlang, "pharos_fs_ffi", "same_file")
+fn same_file(a: String, b: String) -> Bool
 
 @external(erlang, "pharos_fs_ffi", "cwd")
 fn cwd() -> String
@@ -547,18 +732,108 @@ fn overlay_path(config: Config, path: String, label: String) -> Config {
       ])
       config
     }
-    Ok(parsed) -> {
+    Ok(#(bytes, parsed)) -> {
       log.fields_at("pharos/config", log_entry.Info, "loaded " <> label, [
         #("path", path),
       ])
+      warn_unknown_keys(path, bytes, parsed, earlier_servers(config))
       apply_toml(config, parsed)
     }
   }
 }
 
-fn read_toml(path: String) -> Result(Dynamic, String) {
+/// #32. One warning per stray key, wrongly typed or invalid value,
+/// unknown tool or language name, or missing required key; how the file
+/// applies doesn't change. The config is
+/// resolved at boot and again for every session (ADR-034), so a file's
+/// warnings are logged once per pharos process for each content it has
+/// (an edited file warns afresh) and each state of the log writer. At
+/// boot the writer isn't up, so they go to stderr (a daemon's boot log);
+/// `recheck/0`, once it is up, logs them again through it, so they reach
+/// the log file and `runtime_log_tail` too. A daemon's writer has no
+/// stderr sink unless PHAROS_LOG_STDERR turns it on, so its boot log
+/// holds one copy; in direct mode with the stderr sink on (the default),
+/// stderr shows each warning twice, before and after the writer starts.
+fn warn_unknown_keys(
+  path: String,
+  bytes: BitArray,
+  parsed: Dynamic,
+  earlier: List(#(String, List(String))),
+) -> Nil {
+  case config_keys.check(parsed, earlier) {
+    [] -> Nil
+    problems ->
+      case first_config_check(path, bytes, writer.running()) {
+        False -> Nil
+        True ->
+          list.each(problems, fn(problem) {
+            let #(message, fields) = case problem {
+              config_keys.UnknownKey(key, suggestion) -> #(
+                "unknown config key, ignored",
+                [#("key", key), ..option_field("did_you_mean", suggestion)],
+              )
+              config_keys.WrongType(key, expected, got) -> #(
+                "config value has the wrong type, ignored",
+                [#("key", key), #("expected", expected), #("got", got)],
+              )
+              config_keys.UnknownName(key, name, kind, suggestion) -> #(
+                "config names an unknown " <> kind,
+                [
+                  #("key", key),
+                  #("name", name),
+                  ..option_field("did_you_mean", suggestion)
+                ],
+              )
+              config_keys.BadValue(key, value, expected, effect) -> #(
+                "config value is invalid",
+                [
+                  #("key", key),
+                  #("value", value),
+                  #("expected", expected),
+                  #("effect", effect),
+                ],
+              )
+              config_keys.MissingKey(key, missing, effect) -> #(
+                "config table lacks a key it needs",
+                [#("key", key), #("missing", missing), #("effect", effect)],
+              )
+              config_keys.MisplacedKey(key, belongs) -> #(
+                "config key is in the wrong table, ignored",
+                [#("key", key), #("belongs_in", belongs)],
+              )
+              config_keys.NotUsed(key, why) -> #("config key does nothing yet", [
+                #("key", key),
+                #("why", why),
+              ])
+            }
+            log.fields_at("pharos/config", log_entry.Warn, message, [
+              #("path", path),
+              ..fields
+            ])
+          })
+      }
+  }
+}
+
+fn option_field(
+  name: String,
+  value: Option(String),
+) -> List(#(String, String)) {
+  case value {
+    Some(v) -> [#(name, v)]
+    None -> []
+  }
+}
+
+/// True the first time this process checks `path` with these contents
+/// while the log writer is (or isn't) running.
+@external(erlang, "pharos_runtime_ffi", "first_config_check")
+fn first_config_check(path: String, bytes: BitArray, writer_up: Bool) -> Bool
+
+fn read_toml(path: String) -> Result(#(BitArray, Dynamic), String) {
   use bytes <- result.try(read_bytes(path))
-  toml_parse(bytes)
+  use parsed <- result.try(toml_parse(bytes))
+  Ok(#(bytes, parsed))
 }
 
 @external(erlang, "pharos_fs_ffi", "read_file")
@@ -634,7 +909,7 @@ fn apply_section_tool_config(config: Config, parsed: Dynamic) -> Config {
 /// themselves carry `default_timeout_ms`; further nesting is
 /// permitted by the type but not exercised today.
 fn decode_tool_config(value: Dynamic) -> ToolConfig {
-  let default_timeout_ms = decode_optional_int(value, "default_timeout_ms")
+  let default_timeout_ms = decode_positive_int(value, "default_timeout_ms")
   let languages = case
     decode.run(value, decode.dict(decode.string, decode.dynamic))
   {
@@ -676,9 +951,20 @@ fn apply_top_transport(config: Config, parsed: Dynamic) -> Config {
   }
 }
 
+/// #32: a list in which no entry names a tool, category or preset is
+/// ignored, keeping the earlier value ("default" unless an earlier file
+/// set it): it would expose no tools at all. An explicit `tools = []`
+/// still does exactly that.
 fn apply_top_tools(config: Config, parsed: Dynamic) -> Config {
   case decode_field(parsed, "tools", decode.list(decode.string)) {
-    Ok(entries) -> Config(..config, tools: ToolFilter(entries: entries))
+    Ok([]) -> Config(..config, tools: ToolFilter(entries: []))
+    Ok(entries) -> {
+      let known = list.append(tool_names.all(), tool_names.filter_aliases())
+      case list.any(entries, list.contains(known, _)) {
+        True -> Config(..config, tools: ToolFilter(entries: entries))
+        False -> config
+      }
+    }
     Error(_) -> config
   }
 }
@@ -850,7 +1136,7 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     id: decode_optional_string(value, "id"),
     command: decode_optional_string(value, "command"),
     args: decode_optional_string_list(value, "args"),
-    file_extensions: decode_optional_string_list(value, "file_extensions"),
+    file_extensions: decode_extensions(value),
     document_language_ids: decode_optional_string_table(
       value,
       "document_language_ids",
@@ -862,8 +1148,14 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       "dependency_cache_fragments",
     ),
     env_keys: decode_optional_string_list(value, "env_keys"),
-    idle_stop_secs: decode_optional_int(value, "idle_stop_secs"),
-    diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
+    idle_stop_secs: decode_optional_int(value, "idle_stop_secs")
+      |> option.then(fn(n) {
+        case n >= 0 {
+          True -> Some(n)
+          False -> None
+        }
+      }),
+    diagnostics_mode: decode_diagnostics_mode(value),
     readiness_token: decode_optional_string(value, "readiness_token"),
     servers: decode_optional_servers_list(value),
     initialization_options_json: decode_optional_string(
@@ -875,7 +1167,7 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       "workspace_configuration_json",
     ),
     ready_timeout_ms: decode_ready_timeout_ms(value),
-    initialize_timeout_ms: decode_optional_int(value, "initialize_timeout_ms"),
+    initialize_timeout_ms: decode_positive_int(value, "initialize_timeout_ms"),
     lazy_workspace_index_ms: decode_optional_int(
       value,
       "lazy_workspace_index_ms",
@@ -943,6 +1235,50 @@ fn decode_custom_uri_scheme_body(value: Dynamic) -> Option(CustomUriScheme) {
   }
 }
 
+/// #32: empty entries are dropped (one would claim every file); a list
+/// with nothing else in it is ignored, so the bundled extensions stay,
+/// rather than leaving the language none. An explicit `[]` stays `[]`.
+fn decode_extensions(value: Dynamic) -> Option(List(String)) {
+  case decode_optional_string_list(value, "file_extensions") {
+    Some(extensions) ->
+      case list.filter(extensions, fn(ext) { ext != "" }), extensions {
+        [], [_, ..] -> None
+        kept, _ -> Some(kept)
+      }
+    None -> None
+  }
+}
+
+/// #32: a mode `registry` doesn't recognise is ignored, so the bundled
+/// mode stays (it used to be read as push).
+fn decode_diagnostics_mode(value: Dynamic) -> Option(String) {
+  case decode_optional_string(value, "diagnostics_mode") {
+    Some(mode) ->
+      case
+        list.contains(
+          [
+            "push", "Push", "PUSH", "pull", "Pull", "PULL", "tsserver",
+            "Tsserver", "TSSERVER",
+          ],
+          mode,
+        )
+      {
+        True -> Some(mode)
+        False -> None
+      }
+    None -> None
+  }
+}
+
+/// #32: a timeout of 0 or less is ignored, so the default stays (it used
+/// to time out at once).
+fn decode_positive_int(value: Dynamic, key: String) -> Option(Int) {
+  case decode_optional_int(value, key) {
+    Some(n) if n > 0 -> Some(n)
+    _ -> None
+  }
+}
+
 /// ADR-024 rename: `readiness_timeout_ms` → `ready_timeout_ms`.
 /// Accept either TOML key with the new name winning so existing
 /// user configs do not break silently.
@@ -973,10 +1309,10 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
     command: decode_optional_string(value, "command"),
     args: decode_optional_string_list(value, "args"),
     methods: decode_optional_string_list(value, "methods"),
-    diagnostics_mode: decode_optional_string(value, "diagnostics_mode"),
+    diagnostics_mode: decode_diagnostics_mode(value),
     readiness_token: decode_optional_string(value, "readiness_token"),
     ready_timeout_ms: decode_ready_timeout_ms(value),
-    initialize_timeout_ms: decode_optional_int(value, "initialize_timeout_ms"),
+    initialize_timeout_ms: decode_positive_int(value, "initialize_timeout_ms"),
     lazy_workspace_index_ms: decode_optional_int(
       value,
       "lazy_workspace_index_ms",

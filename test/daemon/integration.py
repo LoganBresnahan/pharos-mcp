@@ -1233,6 +1233,122 @@ def t_non_ascii_c_locale(sb):
     spawn path decoded UTF-8 anyway, so a server under a non-ASCII path
     wasn't found. Conversions now follow file:native_name_encoding()."""
     non_ascii_daemon(sb, {"LC_ALL": "C", "LANG": "C"})
+def t_config_key_warnings(sb):
+    """#32: a stray pharos.toml key, a wrongly typed value or an invalid one
+    used to pass without a word. Each now warns, naming the key (and the
+    likely key it misspells), once in the daemon log and once in the ring
+    runtime_log_tail reads, where people look, as well as in the boot log
+    when the daemon's own boot read the file. A second session on the same
+    file adds no copy; an edited file warns afresh."""
+    sb.write_toml('ready_timeout_msx = 1\nsave_check_grace_ms = "soon"\n'
+                  'lazy_workspace_index_ms = -1\n')
+    logdir = os.path.join(sb.state, "pharos", "log")
+
+    def daemon_log():
+        logs = [f for f in os.listdir(logdir)
+                if f.startswith("daemon-") and f.endswith(".log") and not f.endswith(".boot.log")]
+        check(len(logs) == 1, "expected one daemon log, found %s" % logs)
+        return open(os.path.join(logdir, logs[0]), errors="replace").read()
+
+    def count(needle):
+        return daemon_log().count(needle) if os.path.isdir(logdir) else 0
+
+    def lines(needle):
+        return [line for line in daemon_log().splitlines() if needle in line]
+
+    stray, wrong = "key=languages.stub.ready_timeout_msx", "key=languages.stub.save_check_grace_ms"
+    bad = "key=languages.stub.lazy_workspace_index_ms"
+    a = sb.start({"PHAROS_TOOLS": "default,runtime_log_tail"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    wait_until(lambda: all(count(k) > 0 for k in (stray, wrong, bad)), 10,
+               "the three warnings in the daemon log")
+    first = (count(stray), count(wrong), count(bad))
+    check(first == (1, 1, 1), "each warning once in the daemon log: %s" % (first,))
+    check(all("did_you_mean=ready_timeout_ms" in l for l in lines(stray)),
+          "no suggestion: %s" % lines(stray))
+    check(all('expected="an integer"' in l and 'got="a string"' in l for l in lines(wrong)),
+          "the wrong-type warning doesn't say the types: %s" % lines(wrong))
+    check(all("value=-1" in l and 'effect="read as 0 (off)"' in l for l in lines(bad)),
+          "the invalid-value warning doesn't say what pharos does: %s" % lines(bad))
+    ring = a.tool(11, "runtime_log_tail", {"n": 500, "filter": "ready_timeout_msx"})
+    check(ring.count("ready_timeout_msx") == 1, "runtime_log_tail: %s" % ring[-400:])
+
+    b = sb.start()
+    b.initialize()
+    hover_line(b, sb.uri, 10)
+    again = (count(stray), count(wrong), count(bad))
+    check(again == first, "a second session on the same file warned again: %s" % (again,))
+
+    sb.write_toml('ready_timeout_msy = 1\n')
+    c = sb.start()
+    c.initialize()
+    wait_until(lambda: count("key=languages.stub.ready_timeout_msy") == 1, 10,
+               "the edited file's warning")
+    check(count(stray) == 1, "the old warning came back: %d" % count(stray))
+
+
+def t_project_config_names(sb):
+    """#32: the project config is .pharos.toml or pharos.toml, in the
+    nearest directory up from the session's cwd that has either. A
+    pharos.toml beside a .pharos.toml is ignored, with one warning in the
+    daemon log; a nearer pharos.toml wins over a farther .pharos.toml."""
+    logdir = os.path.join(sb.state, "pharos", "log")
+
+    def daemon_log():
+        logs = [f for f in os.listdir(logdir)
+                if f.startswith("daemon-") and f.endswith(".log") and not f.endswith(".boot.log")]
+        return "".join(open(os.path.join(logdir, f), errors="replace").read() for f in logs)
+
+    beside = os.path.join(sb.fixture, "pharos.toml")
+    with open(beside, "w") as f:
+        f.write("# shadowed by .pharos.toml\n")
+    a = sb.start()
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    needle = "ignored=" + beside
+    wait_until(lambda: os.path.isdir(logdir) and needle in daemon_log(), 10, "the ignored-file warning")
+    b = sb.start()
+    b.initialize()
+    check(daemon_log().count(needle) == 1, "warned %d times" % daemon_log().count(needle))
+
+    # A nearer plain pharos.toml is the project config for a session there.
+    sub = os.path.join(sb.fixture, "sub")
+    os.makedirs(sub)
+    nearer = os.path.join(sub, "pharos.toml")
+    with open(os.path.join(sb.fixture, ".pharos.toml")) as f:
+        body = f.read()
+    with open(nearer, "w") as f:
+        f.write(body)
+    c = sb.start(cwd=sub)
+    c.initialize()
+    hover_line(c, sb.uri, 11)
+    wait_until(lambda: ('msg="loaded project config" path=%s' % nearer) in daemon_log(), 10,
+               "the nearer pharos.toml loaded")
+
+
+def t_config_warnings_without_lsp_tools(sb):
+    """#32 F4: a daemon whose sessions call only non-LSP tools still has
+    its config warnings in the daemon log (where runtime_log_tail reads),
+    not only in its boot log: the boot-time check runs again once the log
+    writer is up."""
+    sb.write_toml('ready_timeout_msz = 1\n')
+    a = sb.start()
+    a.initialize()
+    check("pong" in a.tool(10, "echo", {"message": "pong"}), "echo failed")
+    logdir = os.path.join(sb.state, "pharos", "log")
+
+    def daemon_log():
+        logs = [f for f in os.listdir(logdir)
+                if f.startswith("daemon-") and f.endswith(".log") and not f.endswith(".boot.log")]
+        return "".join(open(os.path.join(logdir, f), errors="replace").read() for f in logs)
+
+    wait_until(lambda: os.path.isdir(logdir) and "key=languages.stub.ready_timeout_msz" in daemon_log(),
+               10, "the warning in the daemon log")
+    check(daemon_log().count("key=languages.stub.ready_timeout_msz") == 1,
+          "more than one copy in the daemon log")
+
+
 def t_find_symbol_bad_scope(sb):
     """#24: a scope_uri naming a directory failed as "unsupported file
     type", and one naming a missing file reached tsserver and came back as
@@ -1890,6 +2006,9 @@ SCENARIOS = [
     ("apply_edit_failure_is_an_error", t_apply_edit_failure_is_an_error),
     ("find_symbol_cold_session", t_find_symbol_cold_session),
     ("find_symbol_bad_scope", t_find_symbol_bad_scope),
+    ("config_key_warnings", t_config_key_warnings),
+    ("config_warnings_without_lsp_tools", t_config_warnings_without_lsp_tools),
+    ("project_config_names", t_project_config_names),
 ]
 
 
