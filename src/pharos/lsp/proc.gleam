@@ -343,6 +343,15 @@ fn describe_client_error(err: client.Error) -> String {
 
 fn describe_lifecycle_error(err: lifecycle.RequestError) -> String {
   case err {
+    // The server quit before answering: its own reason (a missing
+    // dependency, a project it refuses) is in its error output, which
+    // pharos doesn't capture, so say where that went (#36).
+    lifecycle.ClientFailure(client.PortReceiveError(port.PortClosed(status))) ->
+      "the language server exited with status "
+      <> int_to_text(status)
+      <> " before answering; its error output, which usually says why, "
+      <> "went to "
+      <> stderr_destination()
     lifecycle.ClientFailure(_) -> "client transport failure"
     lifecycle.ResponseDecodeError(reason) -> "response decode: " <> reason
     lifecycle.ServerError(code, message) ->
@@ -970,3 +979,6 @@ fn sync_caps_of(initialize_result: Dynamic) -> SyncCaps {
     Error(_) -> doc_sync.caps_from_capabilities(dynamic.nil())
   }
 }
+
+@external(erlang, "pharos_runtime_ffi", "stderr_destination")
+fn stderr_destination() -> String

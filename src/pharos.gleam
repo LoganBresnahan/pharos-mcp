@@ -188,7 +188,19 @@ fn do_boot() -> Result(Pid, String) {
   // stderr quiet unless asked.
   let cfg = case daemon_args {
     None -> cfg
-    Some(args) -> daemon_log_config(cfg, args)
+    Some(args) -> {
+      // The shim points the daemon's stdout and stderr at this file, and
+      // language servers inherit it: name it when one exits during its
+      // handshake (#36).
+      case log_rotate.log_cache_dir() {
+        "" -> Nil
+        dir ->
+          stderr_destination_store(
+            dir <> "/daemon-" <> args.build <> "-" <> args.key <> ".boot.log",
+          )
+      }
+      daemon_log_config(cfg, args)
+    }
   }
 
   let supervisor_config =
@@ -945,3 +957,6 @@ const default_config_template: String = "# pharos configuration. Drop this file 
 # [tool_config.workspace_symbols.go]
 # default_timeout_ms = 90000
 "
+
+@external(erlang, "pharos_runtime_ffi", "stderr_destination_store")
+fn stderr_destination_store(text: String) -> Nil

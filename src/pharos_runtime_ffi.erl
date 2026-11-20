@@ -17,6 +17,8 @@
 
 -module(pharos_runtime_ffi).
 -export([
+    stderr_destination_store/1,
+    stderr_destination/0,
     list_processes/1,
     process_info_for/1,
     parse_pid/1,
@@ -1352,3 +1354,14 @@ latin1_warned_p() ->
 mark_latin1_warned() ->
     persistent_term:put(?LATIN1_WARN_KEY, true),
     nil.
+
+%% #36. Where this VM's stderr goes, and with it every language server's
+%% (they inherit fd 2): the daemon's boot log, set at daemon start, or
+%% the client's stderr otherwise. Named in the error when a server exits
+%% during its handshake, since its own reason is written there.
+stderr_destination_store(Text) when is_binary(Text) ->
+    persistent_term:put(pharos_stderr_destination, Text),
+    nil.
+
+stderr_destination() ->
+    persistent_term:get(pharos_stderr_destination, <<"pharos's stderr">>).

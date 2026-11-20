@@ -17,6 +17,7 @@ scenarios.
 import argparse
 import json
 import os
+import re
 import select
 import shutil
 import signal
@@ -1642,6 +1643,21 @@ def t_progress_without_save_check_answers_at_once(sb):
     check(took < 0.4, "took %.2fs: waited for a save check the server doesn't run" % took)
 
 
+def t_server_exit_at_initialize_says_why(sb):
+    """#36: a server that exits during its handshake was reported only as
+    "client transport failure". Its own reason is written to its stderr,
+    which pharos doesn't capture: the error now gives the exit status and
+    names where that output went, the daemon's boot log."""
+    a = sb.start({"STUB_LSP_EXIT_AT_INITIALIZE": "78"})
+    a.initialize()
+    out = hover_line(a, sb.uri, 10)
+    check("exited with status 78" in out, "no exit status in the error: %s" % out[-300:])
+    m = re.search(r"went to (\S+\.boot\.log)", out)
+    check(m is not None, "the error doesn't name the boot log: %s" % out[-300:])
+    with open(m.group(1)) as f:
+        check("refusing to start (test)" in f.read(), "the server's reason isn't in %s" % m.group(1))
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1695,6 +1711,7 @@ SCENARIOS = [
     ("document_language_id", t_document_language_id),
     ("frames_after_an_error_reply_are_kept", t_frames_after_an_error_reply_are_kept),
     ("reply_split_across_a_timeout", t_reply_split_across_a_timeout),
+    ("server_exit_at_initialize_says_why", t_server_exit_at_initialize_says_why),
     ("readiness_split_publish_is_kept", t_readiness_split_publish_is_kept),
     ("split_frame_after_an_error_keeps_the_stream", t_split_frame_after_an_error_keeps_the_stream),
     ("frames_after_a_reply_are_handled", t_frames_after_a_reply_are_handled),

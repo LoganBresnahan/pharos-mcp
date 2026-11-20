@@ -12,6 +12,11 @@ Behavior is controlled via env vars:
                               "content_modified" (return -32801 first
                               call, then real content on retry)
   STUB_LSP_FAIL_HANDSHAKE=0   if 1, never reply to initialize
+  STUB_LSP_EXIT_AT_INITIALIZE=code
+                              write "stub_lsp: refusing to start (test)" to
+                              stderr and exit with `code` instead of
+                              answering initialize, as ruby-lsp does in an
+                              unbundled project (#36)
   STUB_LSP_LOG=path           append "<pid> <method>" for every message;
                               initialize logs "processId=<n> pull=<bool>",
                               whether pull diagnostics were advertised
@@ -329,6 +334,10 @@ def handle_initialize(req):
         time.sleep(delay)
     if os.environ.get("STUB_LSP_FAIL_HANDSHAKE") == "1":
         return None
+    if os.environ.get("STUB_LSP_EXIT_AT_INITIALIZE"):
+        sys.stderr.write("stub_lsp: refusing to start (test)\n")
+        sys.stderr.flush()
+        os._exit(int(os.environ["STUB_LSP_EXIT_AT_INITIALIZE"]))
     caps = (req.get("params") or {}).get("capabilities") or {}
     if (caps.get("window") or {}).get("workDoneProgress"):
         CLIENT_PROGRESS.set()
