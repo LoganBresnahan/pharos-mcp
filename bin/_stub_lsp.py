@@ -17,6 +17,10 @@ Behavior is controlled via env vars:
                               stderr and exit with `code` instead of
                               answering initialize, as ruby-lsp does in an
                               unbundled project (#36)
+  STUB_LSP_FALSE_BUT_SERVES=1 advertise implementationProvider and
+                              renameProvider as false, but answer
+                              textDocument/implementation anyway (with a
+                              Location at 0:0 of the file), as zls does (#37)
   STUB_LSP_LOG=path           append "<pid> <method>" for every message;
                               initialize logs "processId=<n> pull=<bool>",
                               whether pull diagnostics were advertised
@@ -347,6 +351,9 @@ def handle_initialize(req):
     }
     if os.environ.get("STUB_LSP_WORKSPACE_SYMBOL", "none") != "none":
         capabilities["workspaceSymbolProvider"] = True
+    if os.environ.get("STUB_LSP_FALSE_BUT_SERVES"):
+        capabilities["implementationProvider"] = False
+        capabilities["renameProvider"] = False
     kind = os.environ.get("STUB_LSP_SYNC_KIND", "1")
     save = os.environ.get("STUB_LSP_SYNC_SAVE")
     if kind != "omit":
@@ -816,6 +823,10 @@ def main():
         elif method == "textDocument/hover":
             resp = handle_hover(msg)
             write_message(stdout, resp)
+        elif method == "textDocument/implementation" and os.environ.get("STUB_LSP_FALSE_BUT_SERVES"):
+            uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
+            write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"], "result": [{"uri": uri, "range": {
+                "start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}}]})
         elif method == "workspace/executeCommand":
             args = (msg.get("params") or {}).get("arguments") or []
             project_delay = int(os.environ.get("STUB_LSP_TSSERVER_PROJECT_DELAY_MS", "0")) / 1000.0

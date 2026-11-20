@@ -1837,7 +1837,7 @@ fn call_hierarchy_prepare_tool_definition() -> Json {
         "LSP textDocument/prepareCallHierarchy. Returns "
         <> "CallHierarchyItem[]. Pass items back to "
         <> "call_hierarchy_incoming_calls / outgoing_calls. "
-        <> "Returns -32601 if server didn't advertise "
+        <> "An unsupported error if the server doesn't advertise "
         <> "callHierarchyProvider. "
         <> "Positions are 0-based; character is UTF-16 code units.",
       ),
@@ -2037,7 +2037,7 @@ fn type_hierarchy_prepare_tool_definition() -> Json {
         "LSP textDocument/prepareTypeHierarchy. Returns "
         <> "TypeHierarchyItem[]. Pass items to "
         <> "type_hierarchy_supertypes / subtypes. Server support "
-        <> "sparse — many return -32601. "
+        <> "sparse — many answer unsupported. "
         <> "Positions are 0-based; character is UTF-16 code units.",
       ),
     ),
@@ -2189,8 +2189,8 @@ fn inlay_hints_tool_definition() -> Json {
       "description",
       json.string(
         "LSP textDocument/inlayHint. Range-scoped. Returns "
-        <> "InlayHint[] or null. Returns -32601 if server didn't "
-        <> "advertise inlayHintProvider. "
+        <> "InlayHint[] or null. An unsupported error if the server "
+        <> "doesn't advertise inlayHintProvider. "
         <> "Positions/ranges are 0-based; character is UTF-16 code units.",
       ),
     ),

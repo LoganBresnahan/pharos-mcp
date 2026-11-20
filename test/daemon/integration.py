@@ -1658,6 +1658,57 @@ def t_server_exit_at_initialize_says_why(sb):
         check("refusing to start (test)" in f.read(), "the server's reason isn't in %s" % m.group(1))
 
 
+def t_unadvertised_methods_say_unsupported(sb):
+    """#37: a tool whose method the server doesn't advertise is answered
+    at once, as an error naming the server, the method and the missing
+    capability. Before, ungated tools sent it anyway: gleam timed out after
+    20 s ("may still be indexing"), perlnavigator's code_actions came back
+    []. The stub advertises only hover and documentSymbol."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "zero\n")
+    pos = {"uri": uri, "line": 0, "character": 0, "timeout_ms": 5000}
+    rng = {"uri": uri, "start_line": 0, "start_character": 0, "end_line": 1, "end_character": 0, "timeout_ms": 5000}
+    cases = [("find_references", pos, "textDocument/references", "referencesProvider"),
+             ("goto_implementation", pos, "textDocument/implementation", "implementationProvider"),
+             ("goto_type_definition", pos, "textDocument/typeDefinition", "typeDefinitionProvider"),
+             ("goto_definition", pos, "textDocument/definition", "definitionProvider"),
+             ("signature_help", pos, "textDocument/signatureHelp", "signatureHelpProvider"),
+             ("code_actions", rng, "textDocument/codeAction", "codeActionProvider"),
+             ("format_document", {"uri": uri, "timeout_ms": 5000}, "textDocument/formatting", "documentFormattingProvider"),
+             ("rename_preview", dict(pos, new_name="one"), "textDocument/rename", "renameProvider"),
+             ("workspace_symbols", {"query": "zero", "workspace_uri_hint": uri, "timeout_ms": 5000}, "workspace/symbol", "workspaceSymbolProvider")]
+    for i, (name, args, method, cap) in enumerate(cases):
+        t0 = time.time()
+        r = a.call(30 + i, "tools/call", {"name": name, "arguments": args}, 30)
+        took = time.time() - t0
+        check("result" in r, "%s: %r" % (name, r))
+        text, is_error = r["result"]["content"][0]["text"], r["result"].get("isError")
+        check(is_error, "%s: not an error: %s" % (name, text[:200]))
+        want = "this language server (stub) doesn't support %s: it doesn't advertise %s" % (method, cap)
+        check(want in text, "%s: %s" % (name, text[:300]))
+        check(took < 2, "%s took %.1fs" % (name, took))
+    h = hover_line(a, uri, 50)
+    check("line 0: zero" in h, "hover (advertised) broke: %s" % h[-200:])
+
+
+def t_false_but_serves_passes_through(sb):
+    """#37: a server may advertise a capability as false and serve the
+    method anyway (zls's implementation). The tools gated since #37 refuse
+    only an absent capability, so that answer still comes through; the
+    tools gated before #37 still refuse false, as they always did."""
+    a = sb.start({"STUB_LSP_FALSE_BUT_SERVES": "1", "STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "zero\n")
+    pos = {"uri": uri, "line": 0, "character": 0, "timeout_ms": 5000}
+    out = a.tool(10, "goto_implementation", pos)
+    check("main.stub" in out and "doesn't support" not in out, "false-but-serves was blocked: %s" % out[-300:])
+    r = a.call(11, "tools/call", {"name": "rename_preview", "arguments": dict(pos, new_name="one")}, 30)
+    text = r["result"]["content"][0]["text"]
+    check(r["result"].get("isError") and "doesn't support textDocument/rename" in text,
+          "rename_preview (gated before #37) should still refuse false: %s" % text[-300:])
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1712,6 +1763,8 @@ SCENARIOS = [
     ("frames_after_an_error_reply_are_kept", t_frames_after_an_error_reply_are_kept),
     ("reply_split_across_a_timeout", t_reply_split_across_a_timeout),
     ("server_exit_at_initialize_says_why", t_server_exit_at_initialize_says_why),
+    ("unadvertised_methods_say_unsupported", t_unadvertised_methods_say_unsupported),
+    ("false_but_serves_passes_through", t_false_but_serves_passes_through),
     ("readiness_split_publish_is_kept", t_readiness_split_publish_is_kept),
     ("split_frame_after_an_error_keeps_the_stream", t_split_frame_after_an_error_keeps_the_stream),
     ("frames_after_a_reply_are_handled", t_frames_after_a_reply_are_handled),

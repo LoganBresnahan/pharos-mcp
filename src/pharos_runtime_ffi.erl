@@ -83,6 +83,8 @@
     lsp_capabilities_store/2,
     lsp_capabilities_lookup/1,
     lsp_started_store/1,
+    lsp_server_id_store/2,
+    lsp_server_id/1,
     lsp_age_ms/1,
     latin1_to_utf8/1,
     latin1_warned_p/0,
@@ -126,6 +128,27 @@ lsp_started_store(Pid) when is_pid(Pid) ->
         _ ->
             ets:insert(?LSP_CAPABILITIES_TABLE, {{started, Pid}, erlang:monotonic_time(millisecond)}),
             nil
+    end.
+
+%% #37: the registry id of the server proc `Pid` runs (keyed
+%% `{server_id, Pid}`), for messages that name it without a call into the
+%% proc, which may be busy with a request.
+lsp_server_id_store(Pid, Id) when is_pid(Pid), is_binary(Id) ->
+    case ets:info(?LSP_CAPABILITIES_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:insert(?LSP_CAPABILITIES_TABLE, {{server_id, Pid}, Id}),
+            nil
+    end.
+
+lsp_server_id(Pid) when is_pid(Pid) ->
+    case ets:info(?LSP_CAPABILITIES_TABLE) of
+        undefined -> <<"">>;
+        _ ->
+            case ets:lookup(?LSP_CAPABILITIES_TABLE, {server_id, Pid}) of
+                [{_, Id}] -> Id;
+                [] -> <<"">>
+            end
     end.
 
 lsp_age_ms(Pid) when is_pid(Pid) ->

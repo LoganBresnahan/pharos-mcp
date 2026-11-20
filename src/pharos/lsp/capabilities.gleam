@@ -23,6 +23,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Pid}
 import gleam/option.{type Option}
+import gleam/string
 import pharos/lsp/proc.{type Proc}
 
 /// Decision result for `supports/2`.
@@ -38,6 +39,44 @@ pub type Support {
   /// the request optimistically — same behaviour as before the
   /// capability gate existed.
   Unknown
+}
+
+/// #37: like `check`, but Unsupported only when the capability is
+/// absent (or null): an explicit `false` counts as supported. For tools
+/// gated since #37, which sent every request before: some servers say
+/// false and serve the method anyway (zls's implementationProvider), and
+/// a gate must not take away an answer that worked.
+pub fn check_absent(lsp: Proc, lsp_method: String) -> Support {
+  case lookup_by_pid(proc.pid(lsp)) {
+    Error(_) -> Unknown
+    Ok(capabilities) ->
+      case capability_path(lsp_method) {
+        option.None -> Supported
+        option.Some(path) ->
+          case present(capabilities, path) {
+            True -> Supported
+            False -> Unsupported
+          }
+      }
+  }
+}
+
+/// The value at `path` exists and isn't null.
+fn present(value: Dynamic, path: List(String)) -> Bool {
+  case path {
+    [] ->
+      case decode.run(value, decode.optional(decode.dynamic)) {
+        Ok(option.Some(_)) -> True
+        _ -> False
+      }
+    [key, ..rest] ->
+      case
+        decode.run(value, decode.field(key, decode.dynamic, decode.success))
+      {
+        Ok(nested) -> present(nested, rest)
+        Error(_) -> False
+      }
+  }
 }
 
 /// Look up the capability record for a Proc and decide whether
@@ -82,6 +121,15 @@ pub fn supports_method(capabilities: Dynamic, lsp_method: String) -> Bool {
       // capability check is worth the per-call cost.
       True
     option.Some(path) -> walk_path(capabilities, path)
+  }
+}
+
+/// #37: the capability `lsp_method` needs, as a dotted path ("" if pharos
+/// doesn't gate it), for the message an ungated method can't produce.
+pub fn capability_name(lsp_method: String) -> String {
+  case capability_path(lsp_method) {
+    option.Some(path) -> string.join(path, ".")
+    option.None -> ""
   }
 }
 

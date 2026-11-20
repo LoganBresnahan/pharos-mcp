@@ -159,6 +159,7 @@ pub fn start(
             // becomes Unknown at the gate, which falls back to the
             // old optimistic-dispatch path.
             store_capabilities_for_self(initialize_result)
+            lsp_server_id_store(process.self(), server_id)
             let sync = sync_caps_of(initialize_result)
             // M10: drain `$/progress` notifications until the language's
             // readiness token reaches `end` (rust-analyzer's
@@ -357,6 +358,8 @@ fn describe_lifecycle_error(err: lifecycle.RequestError) -> String {
     lifecycle.ServerError(code, message) ->
       "server error " <> int_to_text(code) <> ": " <> message
     lifecycle.ActorCallPanic(reason) -> "actor.call panic: " <> reason
+    lifecycle.Unsupported(_, method, capability) ->
+      "unsupported: " <> method <> " (no " <> capability <> ")"
   }
 }
 
@@ -597,6 +600,18 @@ fn store_capabilities_for_self(initialize_result: Dynamic) -> Nil {
 
 @external(erlang, "pharos_runtime_ffi", "lsp_started_store")
 fn lsp_started_store(pid: Pid) -> Nil
+
+@external(erlang, "pharos_runtime_ffi", "lsp_server_id_store")
+fn lsp_server_id_store(pid: Pid, id: String) -> Nil
+
+/// #37: the registry id of the server `proc` runs ("" if unknown),
+/// without a call into the proc.
+pub fn server_id(proc: Proc) -> String {
+  lsp_server_id(pid(proc))
+}
+
+@external(erlang, "pharos_runtime_ffi", "lsp_server_id")
+fn lsp_server_id(pid: Pid) -> String
 
 /// Milliseconds since the proc `proc` became ready (a large number if
 /// unknown). #27: find_symbol retries an empty workspace search while a

@@ -99,6 +99,17 @@ pub fn run(workspace_path: String) -> Nil {
           client.close(client)
         }
 
+        // initialize is never capability-gated; here for exhaustiveness.
+        Error(lifecycle.Unsupported(_, method, _)) -> {
+          log.fields_at(
+            "pharos",
+            log_entry.Critical,
+            "smoke: initialize reported an unsupported method",
+            [#("method", method)],
+          )
+          client.close(client)
+        }
+
         Ok(#(client, capabilities)) -> {
           log.info("smoke: initialize OK")
           log.fields_at("pharos", log_entry.Info, "smoke: server capabilities", [

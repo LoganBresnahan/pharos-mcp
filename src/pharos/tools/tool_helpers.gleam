@@ -61,7 +61,29 @@ pub fn describe_request_error(err: lifecycle.RequestError) -> String {
       "lsp actor call panicked (likely cached lsp_proc died before this "
       <> "call dispatched; retry should re-spawn): "
       <> reason
+    lifecycle.Unsupported(server_id, method, capability) ->
+      describe_unsupported(server_id, method, capability)
   }
+}
+
+/// #37: one message for every tool whose method the server doesn't
+/// advertise. It's an error (isError), so an agent doesn't read an empty
+/// answer or a timeout as the server's verdict on the code.
+pub fn describe_unsupported(
+  server_id: String,
+  method: String,
+  capability: String,
+) -> String {
+  let who = case server_id {
+    "" -> "this language server"
+    id -> "this language server (" <> id <> ")"
+  }
+  who
+  <> " doesn't support "
+  <> method
+  <> ": it doesn't advertise "
+  <> capability
+  <> ", so pharos didn't send the request"
 }
 
 fn describe_client_error(err: client.Error) -> String {
@@ -103,11 +125,39 @@ pub fn with_capability_gate(
   method: String,
   body: fn() -> Result(a, lifecycle.RequestError),
 ) -> Result(a, lifecycle.RequestError) {
-  case capabilities.check(lsp, method) {
+  with_capability_gate_on(AbsentOrFalse, lsp, method, body)
+}
+
+/// When a capability gate refuses a method (#37).
+pub type GateOn {
+  /// Only when the server doesn't mention the capability at all. For the
+  /// tools gated since #37, which sent every request before: some servers
+  /// advertise `false` and serve the method anyway (zls answers
+  /// textDocument/implementation with implementationProvider: false), and
+  /// the gate must not take away an answer that worked.
+  Absent
+  /// When it's absent, null or false: the tools gated before #37 keep
+  /// refusing exactly what they refused.
+  AbsentOrFalse
+}
+
+/// `with_capability_gate`, choosing what counts as "doesn't advertise".
+pub fn with_capability_gate_on(
+  gate_on: GateOn,
+  lsp: Proc,
+  method: String,
+  body: fn() -> Result(a, lifecycle.RequestError),
+) -> Result(a, lifecycle.RequestError) {
+  let support = case gate_on {
+    Absent -> capabilities.check_absent(lsp, method)
+    AbsentOrFalse -> capabilities.check(lsp, method)
+  }
+  case support {
     capabilities.Unsupported ->
-      Error(lifecycle.ServerError(
-        -32_601,
-        "method " <> method <> " not advertised by server capabilities",
+      Error(lifecycle.Unsupported(
+        server_id: proc.server_id(lsp),
+        method: method,
+        capability: capabilities.capability_name(method),
       ))
     _ -> body()
   }

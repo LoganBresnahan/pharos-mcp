@@ -1528,6 +1528,9 @@ fn probe_call_inner(
     // fixtures, M14 Pass 1c–4 dogfood: 12 attempts × 25s = full
     // 300s exhausted, 1/22 cells for erlang).
     Error(lifecycle.ServerError(_code, _message)) -> Ok(Nil)
+    // proc.request isn't capability-gated; here for exhaustiveness. A
+    // gated probe method would mean the server is up and answered.
+    Error(lifecycle.Unsupported(..)) -> Ok(Nil)
     // Successful response — Ok regardless of body shape (null,
     // empty array, populated). LSP is ready.
     Ok(_value) -> Ok(Nil)

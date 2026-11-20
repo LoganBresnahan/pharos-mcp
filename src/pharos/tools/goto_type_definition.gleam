@@ -46,9 +46,18 @@ pub fn handle(
 
   case
     session.with_session_and_retry(pool, file_uri, fn(lsp) {
-      session.request_with_content_modified_retry(fn() {
-        proc.request(lsp, "textDocument/typeDefinition", params, timeout_ms)
-      })
+      // A method the server doesn't advertise is answered "unsupported"
+      // at once, not sent (#37).
+      tool_helpers.with_capability_gate_on(
+        tool_helpers.Absent,
+        lsp,
+        "textDocument/typeDefinition",
+        fn() {
+          session.request_with_content_modified_retry(fn() {
+            proc.request(lsp, "textDocument/typeDefinition", params, timeout_ms)
+          })
+        },
+      )
     })
   {
     Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))

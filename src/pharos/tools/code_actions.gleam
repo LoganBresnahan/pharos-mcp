@@ -88,12 +88,44 @@ pub fn handle(
         list.map(servers, fn(entry) {
           let #(server_id, lsp) = entry
           let result =
-            session.request_with_content_modified_retry(fn() {
-              proc.request(lsp, "textDocument/codeAction", params, timeout_ms)
-            })
+            tool_helpers.with_capability_gate_on(
+              tool_helpers.Absent,
+              lsp,
+              "textDocument/codeAction",
+              fn() {
+                session.request_with_content_modified_retry(fn() {
+                  proc.request(
+                    lsp,
+                    "textDocument/codeAction",
+                    params,
+                    timeout_ms,
+                  )
+                })
+              },
+            )
           #(server_id, result)
         })
-      Ok(merge_responses(responses))
+      // Merging drops failed servers; if none of them supports code
+      // actions, an empty merge would read as "no actions here": say it's
+      // unsupported instead (#37).
+      case
+        list.find_map(responses, fn(entry) {
+          case entry.1 {
+            Error(lifecycle.Unsupported(..) as err) -> Ok(err)
+            _ -> Error(Nil)
+          }
+        }),
+        list.all(responses, fn(entry) {
+          case entry.1 {
+            Error(lifecycle.Unsupported(..)) -> True
+            _ -> False
+          }
+        })
+      {
+        Ok(err), True ->
+          Error(RequestFailed(tool_helpers.describe_request_error(err)))
+        _, _ -> Ok(merge_responses(responses))
+      }
     }
   }
 }

@@ -51,9 +51,17 @@ pub fn handle(
       file_uri,
       "textDocument/formatting",
       fn(lsp) {
-        session.request_with_content_modified_retry(fn() {
-          proc.request(lsp, "textDocument/formatting", params, timeout_ms)
-        })
+        // Unadvertised: answered "unsupported" at once, not sent (#37).
+        tool_helpers.with_capability_gate_on(
+          tool_helpers.Absent,
+          lsp,
+          "textDocument/formatting",
+          fn() {
+            session.request_with_content_modified_retry(fn() {
+              proc.request(lsp, "textDocument/formatting", params, timeout_ms)
+            })
+          },
+        )
       },
     )
   {

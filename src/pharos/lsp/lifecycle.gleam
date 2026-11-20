@@ -46,6 +46,9 @@ pub type RequestError {
   /// tool worker exits abnormally and (under HTTP transport) mist
   /// returns 500 to the client. M14 follow-up.
   ActorCallPanic(reason: String)
+  /// #37: the server didn't advertise the capability `method` needs, so
+  /// pharos didn't send it. `server_id` names the server ("" if unknown).
+  Unsupported(server_id: String, method: String, capability: String)
 }
 
 /// Backwards-compat alias — initialize was the first user of the

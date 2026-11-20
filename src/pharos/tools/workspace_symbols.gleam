@@ -129,9 +129,17 @@ fn query_once(
   let params = json.object([#("query", json.string(query))])
 
   let body = fn(lsp) {
-    session.request_with_content_modified_retry(fn() {
-      proc.request(lsp, "workspace/symbol", params, timeout_ms)
-    })
+    // Unadvertised: answered "unsupported" at once, not sent (#37).
+    tool_helpers.with_capability_gate_on(
+      tool_helpers.Absent,
+      lsp,
+      "workspace/symbol",
+      fn() {
+        session.request_with_content_modified_retry(fn() {
+          proc.request(lsp, "workspace/symbol", params, timeout_ms)
+        })
+      },
+    )
   }
 
   let request_result = case language {
