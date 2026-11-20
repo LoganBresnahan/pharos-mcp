@@ -1054,7 +1054,10 @@ def t_uri_escapes_cli(sb):
     escape (`%25`) as well as a space, `#` and a non-ASCII character. The
     daemon decodes every uri argument, so the CLI must escape the path, or
     `%25` reads as `%` and names another folder. Relative and absolute
-    paths both work, and the printed uri is the canonical one."""
+    paths both work, and the printed uri is the canonical one. A relative
+    path resolves against the working directory as the OS reports it (on
+    macOS /tmp is /private/tmp), which the hook relies on: its root is a
+    real path too."""
     proj = os.path.join(sb.fixture, "a b#c%25d-\u00e9")
     os.makedirs(proj)
     open(os.path.join(proj, "stub.root"), "w").close()
@@ -1062,13 +1065,14 @@ def t_uri_escapes_cli(sb):
     with open(path, "w") as f:
         f.write("ok\nERROR one\n")
     env = {"STUB_LSP_DIAGNOSTICS": "push"}
-    for arg, cwd in (("main.stub", proj), (path, sb.fixture)):
+    real = os.path.join(os.path.realpath(proj), "main.stub")
+    for arg, cwd, want in (("main.stub", proj, real), (path, sb.fixture, path)):
         out = sb.cli("diagnostics", "--json", arg, extra_env=env, timeout=60, cwd=cwd)
         check(out.returncode == 0, "%s: exit %d: %s" % (arg, out.returncode, out.stderr[-400:]))
         f = json.loads(out.stdout)["files"][0]
         check(f["status"] == "ok" and any("stub error on line 1" in d["message"] for d in f["diagnostics"]),
               "%s: %s" % (arg, out.stdout[-400:]))
-        check(f["path"] == path and f["uri"] == "file://" + quote(path, safe="/"),
+        check(f["path"] == want and f["uri"] == "file://" + quote(want, safe="/"),
               "%s: path and canonical uri: %s" % (arg, f))
 def t_apply_edit_failure_is_an_error(sb):
     """#22: apply_workspace_edit marks the result an error when a file
