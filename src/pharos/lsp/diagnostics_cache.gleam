@@ -215,3 +215,8 @@ pub fn progress_quiet(
   grace_ms: Int,
   stuck_ms: Int,
 ) -> Bool
+
+/// #27: True while the proc `pid`'s server has a progress running (it's
+/// indexing) that began less than `stuck_ms` ago.
+@external(erlang, "pharos_diagnostics_cache_ffi", "progress_active")
+pub fn progress_active(pid: Pid, stuck_ms: Int) -> Bool

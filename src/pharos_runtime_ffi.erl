@@ -80,6 +80,8 @@
     lsp_capabilities_init/0,
     lsp_capabilities_store/2,
     lsp_capabilities_lookup/1,
+    lsp_started_store/1,
+    lsp_age_ms/1,
     latin1_to_utf8/1,
     latin1_warned_p/0,
     mark_latin1_warned/0
@@ -111,6 +113,27 @@ lsp_capabilities_store(Pid, Capabilities) when is_pid(Pid) ->
         _ ->
             ets:insert(?LSP_CAPABILITIES_TABLE, {Pid, Capabilities}),
             nil
+    end.
+
+%% #27: when the proc `Pid` became ready, in the capability table (keyed
+%% `{started, Pid}`, beside its capabilities); and how long ago that was,
+%% or a large number if unknown.
+lsp_started_store(Pid) when is_pid(Pid) ->
+    case ets:info(?LSP_CAPABILITIES_TABLE) of
+        undefined -> nil;
+        _ ->
+            ets:insert(?LSP_CAPABILITIES_TABLE, {{started, Pid}, erlang:monotonic_time(millisecond)}),
+            nil
+    end.
+
+lsp_age_ms(Pid) when is_pid(Pid) ->
+    case ets:info(?LSP_CAPABILITIES_TABLE) of
+        undefined -> 1 bsl 40;
+        _ ->
+            case ets:lookup(?LSP_CAPABILITIES_TABLE, {started, Pid}) of
+                [{_, At}] -> erlang:monotonic_time(millisecond) - At;
+                [] -> 1 bsl 40
+            end
     end.
 
 lsp_capabilities_lookup(Pid) when is_pid(Pid) ->

@@ -211,6 +211,7 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     ready_timeout_ms: override.ready_timeout_ms,
     initialize_timeout_ms: override.initialize_timeout_ms,
     warm_probe: ProbeWorkspaceSymbol(""),
+    lazy_workspace_index_ms: option.unwrap(override.lazy_workspace_index_ms, 0),
   )
 }
 
@@ -377,6 +378,10 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       Some(_) -> ovr.initialize_timeout_ms
     },
     warm_probe: default.warm_probe,
+    lazy_workspace_index_ms: option.unwrap(
+      ovr.lazy_workspace_index_ms,
+      default.lazy_workspace_index_ms,
+    ),
   )
 }
 
@@ -401,6 +406,7 @@ fn server_from_override(
     ready_timeout_ms: ovr.ready_timeout_ms,
     initialize_timeout_ms: ovr.initialize_timeout_ms,
     warm_probe: ProbeWorkspaceSymbol(""),
+    lazy_workspace_index_ms: option.unwrap(ovr.lazy_workspace_index_ms, 0),
   )
 }
 
@@ -457,6 +463,10 @@ fn merge_primary(
       Some(_) -> override.initialize_timeout_ms
     },
     warm_probe: primary.warm_probe,
+    lazy_workspace_index_ms: option.unwrap(
+      override.lazy_workspace_index_ms,
+      primary.lazy_workspace_index_ms,
+    ),
   )
 }
 

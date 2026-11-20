@@ -142,6 +142,12 @@ A check on save, like rust-analyzer's cargo check (#30):
                               current text's diagnostics and end it. Needs
                               STUB_LSP_SYNC_SAVE so pharos sends didSave,
                               and the client's window.workDoneProgress
+  STUB_LSP_INDEX_DELAY_MS=ms  workspace/symbol answers [] until `ms` after
+                              `initialized` (a cold index, #27)
+  STUB_LSP_INDEX_PROGRESS=1   with STUB_LSP_INDEX_DELAY_MS: at the first
+                              didOpen, begin a progress "stub/index" that
+                              ends when the index is ready (clangd's
+                              background index starts with the first file)
 
 An error reply with frames behind it (#31):
 
@@ -497,7 +503,31 @@ def function_lines(text):
 PROJECT_LOADED = threading.Event()
 
 
+INITIALIZED_AT = [0.0]
+
+
+INDEX_PROGRESS_SENT: list = []
+
+
+def start_index_progress(stdout):
+    left = INITIALIZED_AT[0] + int(os.environ.get("STUB_LSP_INDEX_DELAY_MS", "0")) / 1000.0 - time.time()
+    write_message(stdout, {"jsonrpc": "2.0", "id": "index-create",
+                           "method": "window/workDoneProgress/create", "params": {"token": "stub/index"}})
+    write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
+                           "params": {"token": "stub/index", "value": {"kind": "begin", "title": "Indexing"}}})
+
+    def end():
+        write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
+                               "params": {"token": "stub/index", "value": {"kind": "end"}}})
+    threading.Timer(max(left, 0.0), end).start()
+
+
 def handle_workspace_symbol(req):
+    delay = int(os.environ.get("STUB_LSP_INDEX_DELAY_MS", "0")) / 1000.0
+    if delay and time.time() - INITIALIZED_AT[0] < delay:
+        # Still indexing: an empty answer, as clangd, HLS and bash-ls give
+        # on a cold session (#27).
+        return {"jsonrpc": "2.0", "id": req["id"], "result": []}
     mode = os.environ.get("STUB_LSP_WORKSPACE_SYMBOL")
     if mode == "null":
         return {"jsonrpc": "2.0", "id": req["id"], "result": None}
@@ -655,12 +685,17 @@ def main():
         elif method == "initialized":
             # notification, no reply
             after_initialized(stdout)
+            INITIALIZED_AT[0] = time.time()
             continue
         elif method == "shutdown":
             write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"], "result": None})
         elif method == "exit":
             return
         elif method in ("textDocument/didOpen", "textDocument/didChange"):
+            if (method == "textDocument/didOpen" and os.environ.get("STUB_LSP_INDEX_PROGRESS")
+                    and not INDEX_PROGRESS_SENT):
+                INDEX_PROGRESS_SENT.append(True)
+                start_index_progress(stdout)
             p = msg.get("params") or {}
             old = DOCS.get((p.get("textDocument") or {}).get("uri"), {}).get("text")
             uri = apply_sync(method, p)

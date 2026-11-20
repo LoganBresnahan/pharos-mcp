@@ -181,6 +181,9 @@ pub fn start(
             // reach are handled here, not left until the port next wakes
             // (#25).
             let c = drain_client(c)
+            // #27: when the session became ready, so tools can tell a
+            // cold session (a server still indexing) from a warm one.
+            lsp_started_store(process.self())
             // Custom selector accepts both:
             //   - Subject(Msg) messages (Request/RequestRaw/etc.)
             //   - Anything else (Port data + exit_status) wrapped as
@@ -582,6 +585,19 @@ fn store_capabilities_for_self(initialize_result: Dynamic) -> Nil {
     Error(_) -> Nil
   }
 }
+
+@external(erlang, "pharos_runtime_ffi", "lsp_started_store")
+fn lsp_started_store(pid: Pid) -> Nil
+
+/// Milliseconds since the proc `proc` became ready (a large number if
+/// unknown). #27: find_symbol retries an empty workspace search while a
+/// session is this young.
+pub fn age_ms(proc: Proc) -> Int {
+  lsp_age_ms(pid(proc))
+}
+
+@external(erlang, "pharos_runtime_ffi", "lsp_age_ms")
+fn lsp_age_ms(pid: Pid) -> Int
 
 @external(erlang, "pharos_runtime_ffi", "lsp_capabilities_store")
 fn lsp_capabilities_store(pid: Pid, capabilities: Dynamic) -> Nil

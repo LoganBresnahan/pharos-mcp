@@ -25,7 +25,10 @@
 import gleam/bit_array
 import gleam/crypto
 import gleam/dict.{type Dict}
+import gleam/dynamic
 import gleam/dynamic/decode
+import gleam/erlang/atom
+import gleam/erlang/process
 import gleam/int
 import gleam/json
 import gleam/list
@@ -33,7 +36,9 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import pharos/lsp/capabilities
+import pharos/lsp/diagnostics_cache
 import pharos/lsp/languages
+import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/lsp/tsserver_diagnostics
@@ -1224,6 +1229,88 @@ type ReferenceLocation {
 /// project before asking workspace/symbol (#21).
 const project_load_timeout_ms = 5000
 
+const cold_retry_step_ms = 1000
+
+/// The most a find_symbol spends retrying a cold session's search: a real
+/// deadline, each retry getting what's left of it.
+const cold_retry_cap_ms = 15_000
+
+/// A progress running longer than this is taken as stuck, not indexing.
+const indexing_stuck_ms = 30_000
+
+/// Run `ask` (given the timeout each attempt may use). While the server is
+/// still indexing and the answer is empty, null or an internal error
+/// (-32603), ask again every second, each attempt getting only what's left
+/// of min(the call's timeout, `cold_retry_cap_ms`). "Still indexing" means
+/// the server has a progress running (big projects), or its session is
+/// younger than the server's `lazy_workspace_index_ms` (clangd, HLS,
+/// lua-language-server, bash-language-server, next-ls index small projects
+/// without reporting any). Any other empty answer is
+/// taken as it is, so a typo or a missing symbol answers at once (#27).
+fn retry_while_cold(
+  lsp: proc.Proc,
+  started: Int,
+  timeout_ms: Int,
+  cold_window_ms: Int,
+  ask: fn(Int) -> Result(dynamic.Dynamic, lifecycle.RequestError),
+) -> Result(dynamic.Dynamic, lifecycle.RequestError) {
+  retry_loop(
+    lsp,
+    started,
+    int.min(timeout_ms, cold_retry_cap_ms),
+    cold_window_ms,
+    ask,
+    timeout_ms,
+  )
+}
+
+/// One attempt with `attempt_timeout`; a retry gets only what's left of
+/// `budget`, so the last attempt can't run a fresh full timeout past it.
+fn retry_loop(
+  lsp: proc.Proc,
+  started: Int,
+  budget: Int,
+  cold_window_ms: Int,
+  ask: fn(Int) -> Result(dynamic.Dynamic, lifecycle.RequestError),
+  attempt_timeout: Int,
+) -> Result(dynamic.Dynamic, lifecycle.RequestError) {
+  let result = ask(attempt_timeout)
+  let worth_retrying = case result {
+    Ok(value) -> is_empty_result(value)
+    Error(lifecycle.ServerError(code: -32_603, ..)) -> True
+    Error(_) -> False
+  }
+  let still_indexing =
+    diagnostics_cache.progress_active(proc.pid(lsp), indexing_stuck_ms)
+    || proc.age_ms(lsp) < cold_window_ms
+  let elapsed = monotonic_ms() - started
+  case
+    worth_retrying && still_indexing && elapsed + cold_retry_step_ms < budget
+  {
+    True -> {
+      process.sleep(cold_retry_step_ms)
+      let left = budget - { monotonic_ms() - started }
+      retry_loop(lsp, started, budget, cold_window_ms, ask, int.max(left, 1))
+    }
+    False -> result
+  }
+}
+
+fn is_empty_result(value: dynamic.Dynamic) -> Bool {
+  case decode.run(value, decode.optional(decode.list(decode.dynamic))) {
+    Ok(None) -> True
+    Ok(Some([])) -> True
+    _ -> False
+  }
+}
+
+fn monotonic_ms() -> Int {
+  erlang_monotonic_time(atom.create("millisecond"))
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn erlang_monotonic_time(unit: atom.Atom) -> Int
+
 fn workspace_symbol_query(
   pool: Pool,
   scope_uri: String,
@@ -1231,7 +1318,8 @@ fn workspace_symbol_query(
   timeout_ms: Int,
 ) -> Result(List(WorkspaceSymbolRow), SymbolsError) {
   let params = json.object([#("query", json.string(query))])
-  let ask = fn(load_project: Bool) {
+  let started = monotonic_ms()
+  let ask = fn(load_project: Bool, cold_window_ms: Int) {
     fn(lsp) {
       case load_project {
         // Right after the didOpen, navto sees only the opened file's
@@ -1251,9 +1339,18 @@ fn workspace_symbol_query(
         False -> Nil
       }
       tool_helpers.with_capability_gate(lsp, "workspace/symbol", fn() {
-        session.request_with_content_modified_retry(fn() {
-          proc.request(lsp, "workspace/symbol", params, timeout_ms)
-        })
+        let request = fn(attempt_timeout) {
+          session.request_with_content_modified_retry(fn() {
+            proc.request(lsp, "workspace/symbol", params, attempt_timeout)
+          })
+        }
+        case load_project {
+          // Tsserver mode has loaded the project (projectInfo above): its
+          // answer is the answer, no retry (#27).
+          True -> request(timeout_ms)
+          False ->
+            retry_while_cold(lsp, started, timeout_ms, cold_window_ms, request)
+        }
       })
     }
   }
@@ -1266,21 +1363,24 @@ fn workspace_symbol_query(
   // #24).
   let asked = case session.config_for_uri(scope_uri) {
     Ok(config) -> {
-      let load_project = case
+      let #(load_project, cold_window_ms) = case
         languages.primary_server_for_method(config, "workspace/symbol")
       {
-        Ok(server) -> server.diagnostics_mode == languages.Tsserver
-        Error(_) -> False
+        Ok(server) -> #(
+          server.diagnostics_mode == languages.Tsserver,
+          server.lazy_workspace_index_ms,
+        )
+        Error(_) -> #(False, 0)
       }
       session.with_session_and_retry_for_method(
         pool,
         scope_uri,
         "workspace/symbol",
-        ask(load_project),
+        ask(load_project, cold_window_ms),
       )
     }
     Error(_) ->
-      session.with_workspace_session_and_retry(pool, scope_uri, ask(False))
+      session.with_workspace_session_and_retry(pool, scope_uri, ask(False, 0))
   }
   case asked {
     Ok(raw) ->

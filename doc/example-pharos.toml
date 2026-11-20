@@ -268,6 +268,23 @@
 # Both fields work in flat (`[languages.<id>]` patches the primary
 # server) and per-server (`[[languages.<id>.servers]]`) shapes.
 
+# 4b) Lazy workspace indexers (#27).
+#
+# Some servers index the project after the first file opens without
+# reporting progress, and answer workspace/symbol empty until they're
+# done. `lazy_workspace_index_ms` is how long after the session is ready
+# that can happen; find_symbol retries an empty search within it (at most
+# 15 s per call). Bundled: clangd 2000, haskell-language-server 3000,
+# lua-language-server 3000, perlnavigator 3000, bash-language-server 20000, next-ls 20000;
+# others 0 (off). Raise it for a big project, or set it for your own
+# server:
+#
+# [languages.cpp]
+# lazy_workspace_index_ms = 5000
+#
+# Any server that reports indexing progress is also retried while that
+# progress runs, whatever this value.
+
 # 5) Per-tool default_timeout_ms (M13 polish, ADR 021).
 #
 # Every LSP-bound MCP tool accepts an optional `timeout_ms` arg, and

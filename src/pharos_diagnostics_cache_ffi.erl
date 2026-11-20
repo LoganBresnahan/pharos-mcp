@@ -52,7 +52,8 @@
          drop_uri/1, mark_synced/3, mark_failed/2, mark_closed/2,
          mark_batch/1, stamp_status/4, close_status/4, expect/4,
          expect_closed/3, expect_batch/2, forget_proc/1, lookup/4,
-         settle_left/2, progress/2, progress_quiet/5]).
+         settle_left/2, progress/2, progress_quiet/5,
+         progress_active/2]).
 
 -define(TABLE, pharos_diagnostics_cache).
 -define(SYNCED, pharos_diagnostics_synced).
@@ -253,6 +254,13 @@ progress_quiet(Uri0, ServerId, Pid, GraceMs, StuckMs)
         _ ->
             true
     end.
+
+%% #27. True while proc `Pid`'s server has a progress running (indexing,
+%% loading packages) that began less than `StuckMs` ago.
+progress_active(Pid, StuckMs) when is_integer(StuckMs) ->
+    Now = now_ms(),
+    lists:any(fun({_, _, BeginMs}) -> Now - BeginMs < StuckMs end,
+              ets:match_object(?PROGRESS, {{Pid, '_'}, '_', '_'})).
 
 forget_proc(Pid) ->
     ets:match_delete(?TABLE, {{'_', '_', Pid}, '_', '_'}),

@@ -1520,6 +1520,74 @@ def t_find_symbol_says_why_it_was_narrow(sb):
     check('"status":"not_found"' in out and "only scope_uri was searched" in out, "not_found: %s" % out[-300:])
 
 
+def _cold_find(sb, env, toml=""):
+    # The helper is defined in another file, so only workspace/symbol can
+    # find it: find_symbol drills scope_uri's own symbols first.
+    sb.write_toml('diagnostics_mode = "push"\n' + toml)
+    a = sb.start(dict({"STUB_LSP_WORKSPACE_SYMBOL": "all"}, **env))
+    a.initialize()
+    stub_file(sb, "a.stub", "function helper() {\n  return 1;\n}\n")
+    uri = stub_file(sb, "b.stub", "helper();\n")
+    return a, uri
+
+
+def t_find_symbol_cold_index_while_indexing(sb):
+    """#27: a server that indexes in the background (clangd, HLS) answers a
+    cold session's first searches empty. While its indexing progress runs,
+    an empty search is asked again, so the symbol is found."""
+    a, uri = _cold_find(sb, {"STUB_LSP_INDEX_DELAY_MS": "4000", "STUB_LSP_INDEX_PROGRESS": "1"})
+    t0 = time.time()
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    took = time.time() - t0
+    check('"status":"single"' in out, "cold find_symbol: %s" % out[-300:])
+    check(took < 10, "took %.1fs" % took)
+
+
+def t_find_symbol_cold_index_lazy_flag(sb):
+    """#27: a server that indexes without reporting progress (clangd, HLS,
+    bash-ls, next-ls) has a lazy_workspace_index_ms window; an empty search
+    in it is retried."""
+    a, uri = _cold_find(sb, {"STUB_LSP_INDEX_DELAY_MS": "3000"}, "lazy_workspace_index_ms = 20000\n")
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check('"status":"single"' in out, "cold find_symbol, lazy flag: %s" % out[-300:])
+
+
+def t_find_symbol_cold_miss_is_prompt(sb):
+    """#27 (verifier-two): a first-call typo on a server with no window that
+    isn't indexing answers at once. Rev 1 retried every miss in a
+    session's first 20 s, about 14 s each."""
+    a, uri = _cold_find(sb, {})
+    t0 = time.time()
+    out = a.tool(10, "find_symbol", {"name_path": "absent_zz9", "scope_uri": uri})
+    took = time.time() - t0
+    check('"status":"not_found"' in out, "cold miss: %s" % out[-200:])
+    check(took < 2, "a first-call miss took %.1fs: it was retried" % took)
+
+
+def t_find_symbol_lazy_retry_is_a_deadline(sb):
+    """#27: a server with a long window that never indexes gives up within the cap
+    (15 s), not 15 s plus a full request timeout."""
+    a, uri = _cold_find(sb, {"STUB_LSP_INDEX_DELAY_MS": "600000"}, "lazy_workspace_index_ms = 20000\n")
+    t0 = time.time()
+    out = a.tool(10, "find_symbol", {"name_path": "absent_zz9", "scope_uri": uri})
+    took = time.time() - t0
+    check('"status":"not_found"' in out, "never-indexing: %s" % out[-200:])
+    check(took < 16.5, "took %.1fs" % took)
+
+
+def t_find_symbol_warm_miss_is_prompt(sb):
+    """#27: once a session is older than its window, a miss answers
+    at once, not after retries."""
+    a, uri = _cold_find(sb, {}, "lazy_workspace_index_ms = 20000\n")
+    a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    time.sleep(21)
+    t0 = time.time()
+    out = a.tool(11, "find_symbol", {"name_path": "absent", "scope_uri": uri})
+    took = time.time() - t0
+    check('"status":"not_found"' in out, "warm miss: %s" % out[-200:])
+    check(took < 2, "a warm miss took %.1fs: it was retried" % took)
+
+
 def t_resync_open_cap(sb):
     """At most 32 documents stay open per server; the least recently asked
     about is closed."""
@@ -1581,6 +1649,11 @@ SCENARIOS = [
     ("find_symbol_says_why_it_was_narrow", t_find_symbol_says_why_it_was_narrow),
     ("find_symbol_library_outside_the_root", t_find_symbol_library_outside_the_root),
     ("find_symbol_library_guess_is_a_near_miss", t_find_symbol_library_guess_is_a_near_miss),
+    ("find_symbol_cold_index_while_indexing", t_find_symbol_cold_index_while_indexing),
+    ("find_symbol_cold_index_lazy_flag", t_find_symbol_cold_index_lazy_flag),
+    ("find_symbol_cold_miss_is_prompt", t_find_symbol_cold_miss_is_prompt),
+    ("find_symbol_lazy_retry_is_a_deadline", t_find_symbol_lazy_retry_is_a_deadline),
+    ("find_symbol_warm_miss_is_prompt", t_find_symbol_warm_miss_is_prompt),
     ("pull_capability_follows_mode", t_pull_capability_follows_mode),
     ("readiness_without_progress", t_readiness_without_progress),
     ("readiness_any_token", t_readiness_any_token),

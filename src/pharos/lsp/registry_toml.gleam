@@ -155,6 +155,8 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
       server.initialize_timeout_ms,
       "90000",
     ),
+    "lazy_workspace_index_ms = "
+      <> int.to_string(server.lazy_workspace_index_ms),
     render_init_options(server.initialization_options),
     render_workspace_config(server.workspace_configuration),
   ]
