@@ -2959,9 +2959,7 @@ fn decode_workspace_symbols_arguments(
 
 pub fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
   case err {
-    diagnostics.NotAFileUri(uri) ->
-      "uri must be a local file:// URI (file:///path or file://localhost/path) — got: "
-      <> uri
+    diagnostics.NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
     diagnostics.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     diagnostics.SpawnFailed(reason) -> "LSP spawn failed: " <> reason

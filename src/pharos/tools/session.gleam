@@ -946,9 +946,7 @@ fn prepare_all_with_selector(
 /// internal fallback used by `prepare_all_for_method`.
 fn describe_session_error(err: SessionError) -> String {
   case err {
-    NotAFileUri(uri) ->
-      "uri must be a local file:// URI (file:///path or file://localhost/path) — got: "
-      <> uri
+    NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
     WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     SpawnFailed(reason) -> "LSP spawn failed: " <> reason
@@ -1115,6 +1113,16 @@ fn server_initialize_timeout_ms(server: languages.ServerConfig) -> Int {
 // -- Internals ----------------------------------------------------------
 
 fn lookup_config(uri: String) -> Result(LanguageConfig, SessionError) {
+  // A file:// URI that isn't local (another host, no path) says so,
+  // rather than "unsupported file type" from the extension check.
+  use Nil <- result.try(case string.starts_with(uri, "file://") {
+    True ->
+      case workspace_root.uri_to_path(uri) {
+        Ok(_) -> Ok(Nil)
+        Error(_) -> Error(NotAFileUri(uri))
+      }
+    False -> Ok(Nil)
+  })
   registry.for_uri(uri)
   |> result.map_error(fn(err) {
     case err {

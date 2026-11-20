@@ -1211,11 +1211,12 @@ def non_ascii_daemon(sb, extra_env):
     logs = os.path.join(home, ".local", "state", "pharos", "log")
     check(os.path.isdir(logs) and os.listdir(logs), "logs under the non-ASCII HOME: %r" % (os.listdir(home),))
     instances = os.path.join(home, ".local", "share", "pharos", "instances")
+    check(os.path.isdir(instances) and os.listdir(instances),
+          "the instance dir must exist under the non-ASCII HOME: %r" % (os.listdir(home),))
     pid = sb.daemon_pid()
     check(sb.cli("daemon", "stop").returncode == 0, "daemon stop")
     wait_until(lambda: not alive(pid), 15, "the daemon to exit")
-    check(not os.path.isdir(instances) or os.listdir(instances) == [],
-          "the instance dir must be removed at stop: %r" % os.listdir(instances))
+    check(os.listdir(instances) == [], "the instance dir must be removed at stop: %r" % os.listdir(instances))
 
 
 def t_non_ascii_home_default_state(sb):
@@ -1258,7 +1259,23 @@ def t_find_symbol_bad_scope(sb):
     text, err = ask(13, "file://localhost" + os.path.join(sb.fixture, "a.stub"))
     check(not err and '"status":"single"' in text, "file://localhost scope: %r %s" % (err, text))
     text, err = ask(14, "file://elsewhere" + os.path.join(sb.fixture, "a.stub"))
-    check(err is True and "not a local file:// URI" in text, "a remote host: %r %s" % (err, text))
+    check(err is True and "names the host `elsewhere`" in text and "file:///absolute/path" in text,
+          "a remote host must teach the fix: %r %s" % (err, text))
+    # A relative path reads as a host (RFC 8089); the message says how to
+    # write it. A bare file:// says it has no path, not "unsupported file
+    # type".
+    text, err = ask(15, "file://a.stub")
+    check(err is True and "names the host `a.stub`" not in text, "file://a.stub (no slash after it): %r %s" % (err, text))
+    text, err = ask(16, "file://src/a.stub")
+    check(err is True and "names the host `src`" in text, "a relative path: %r %s" % (err, text))
+    text, err = ask(17, "file://")
+    check(err is True and "has no path" in text and "unsupported file type" not in text,
+          "a bare file://: %r %s" % (err, text))
+    # file://// is the same file, the same server: no second LSP.
+    text, err = ask(18, "file:///" + os.path.join(sb.fixture, "a.stub"))
+    check(not err and '"status":"single"' in text, "file:////abs: %r %s" % (err, text))
+    lsps = sb.status()["lsps"]
+    check(len(lsps) == 1, "file:////abs must reuse the one server: %r" % lsps)
 
 
 def t_resync_open_cap(sb):

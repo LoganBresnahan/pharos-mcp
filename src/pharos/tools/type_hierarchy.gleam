@@ -135,7 +135,7 @@ fn item_uri_decoder() -> decode.Decoder(String) {
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {
-    session.NotAFileUri(uri) -> "not a local file:// URI: " <> uri
+    session.NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
     session.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri

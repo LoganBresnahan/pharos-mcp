@@ -14,6 +14,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
+import pharos/workspace_root
 
 // Cold rust-analyzer + concurrent worker queueing through the proc
 // actor (post-didOpen drain serialization, M11 polish B1) makes the
@@ -63,7 +64,7 @@ pub fn handle(
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {
-    session.NotAFileUri(uri) -> "not a local file:// URI: " <> uri
+    session.NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
     session.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri

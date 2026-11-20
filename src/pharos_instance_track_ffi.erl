@@ -284,7 +284,10 @@ process_comm(Pid) when is_integer(Pid), Pid > 0 ->
             %% Fall back to ps for non-Linux platforms.
             Cmd = "ps -p " ++ integer_to_list(Pid) ++ " -o comm= 2>/dev/null",
             Out = os:cmd(Cmd),
-            list_to_binary(string:trim(Out))
+            %% macOS prints the executable's full path here, as decoded
+            %% characters: a non-ASCII server path needs the native
+            %% conversion, not list_to_binary (#20 follow-up).
+            pharos_fs_ffi:name_to_binary(string:trim(Out))
     end;
 process_comm(_) ->
     <<>>.
@@ -573,7 +576,7 @@ proc_start(Stat) ->
 
 ps_lstart(Pid) ->
     Out = os:cmd("ps -o lstart= -p " ++ integer_to_list(Pid) ++ " 2>/dev/null"),
-    list_to_binary(string:trim(Out)).
+    pharos_fs_ffi:name_to_binary(string:trim(Out)).
 
 %% Application stop: reap whatever this instance still records, at
 %% once and with the short timings, before the VM halts. Reapers still

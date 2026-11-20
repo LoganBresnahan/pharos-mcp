@@ -86,3 +86,18 @@ pub fn which_finds_a_server_under_a_non_ascii_path_test() {
 pub fn shell_commands_keep_non_ascii_text_test() {
   shell("printf %s 'café 漢'") |> should.equal("café 漢")
 }
+
+@external(erlang, "pharos_fs_ffi", "binary_to_name")
+fn binary_to_name(b: String) -> Charlist
+
+@external(erlang, "pharos_fs_ffi", "name_to_binary")
+fn name_to_binary(name: Charlist) -> String
+
+/// What process_comm and ps_lstart's macOS `ps` fallbacks rely on: the
+/// characters os:cmd returns convert back to the bytes they spell.
+/// Linux reads /proc instead, so the fallbacks can't run here.
+pub fn names_round_trip_through_the_native_encoding_test() {
+  let path = "/Applications/Éditeur 漢/bin/server"
+  path |> binary_to_name |> name_to_binary |> should.equal(path)
+  charlist.from_string(path) |> name_to_binary |> should.equal(path)
+}

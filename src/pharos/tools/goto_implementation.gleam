@@ -15,6 +15,7 @@ import pharos/lsp/proc
 import pharos/tools/clip
 import pharos/tools/session
 import pharos/tools/tool_helpers
+import pharos/workspace_root
 
 // Bumped from 5s to 30s for parity with hover/document_symbols.
 // The proc actor serializes concurrent requests; tighter timeouts
@@ -77,7 +78,7 @@ pub fn handle(
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {
-    session.NotAFileUri(uri) -> "not a local file:// URI: " <> uri
+    session.NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
     session.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri

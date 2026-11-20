@@ -66,6 +66,10 @@ pub fn uri_to_path(uri: String) -> Result(String, DiscoveryError) {
 /// (in any case), else Error.
 fn local_path(rest: String) -> Result(String, Nil) {
   case rest {
+    // `file:////tmp/a` is an empty authority and the path `//tmp/a`,
+    // which names /tmp/a. Keep one leading slash, so it routes to the
+    // same workspace and server as `file:///tmp/a`.
+    "//" <> more -> local_path("/" <> more)
     "/" <> _ -> Ok(rest)
     _ ->
       case string.split_once(rest, "/") {
@@ -75,6 +79,24 @@ fn local_path(rest: String) -> Result(String, Nil) {
             False -> Error(Nil)
           }
         Error(Nil) -> Error(Nil)
+      }
+  }
+}
+
+/// Why `uri` isn't a local file URI, and what to send instead. For an
+/// error message: agents write `file://src/a.ts` meaning a relative path,
+/// and RFC 8089 reads `src` as a host.
+pub fn describe_not_local(uri: String) -> String {
+  case string.starts_with(uri, "file://") {
+    False -> "not a local file:// URI: " <> uri
+    True ->
+      case string.split_once(string.drop_start(uri, 7), "/") {
+        Ok(#(host, _)) if host != "" ->
+          uri
+          <> " names the host `"
+          <> host
+          <> "`, not a local file: use file:///absolute/path (or file://localhost/absolute/path)"
+        _ -> uri <> " has no path: use file:///absolute/path"
       }
   }
 }

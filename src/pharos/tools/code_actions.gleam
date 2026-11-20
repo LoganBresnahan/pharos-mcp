@@ -26,6 +26,7 @@ import pharos/lsp/pool.{type Pool}
 import pharos/lsp/proc
 import pharos/tools/session
 import pharos/tools/tool_helpers
+import pharos/workspace_root
 
 pub const default_timeout_ms: Int = 30_000
 
@@ -144,7 +145,7 @@ fn encode_dynamic_list(items: List(Dynamic)) -> String
 
 fn describe_session_error(err: session.SessionError) -> String {
   case err {
-    session.NotAFileUri(uri) -> "not a local file:// URI: " <> uri
+    session.NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
     session.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri

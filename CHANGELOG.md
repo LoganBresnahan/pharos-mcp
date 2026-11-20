@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A `file://` URI with a host other than `localhost` is refused as not local, as RFC 8089
+  reads it. That includes a relative `file://src/a.ts`, which reads as the host `src`, where
+  0.3.5 resolved it against the working directory. The error says what to send instead:
+  `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
+  to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+
 ## [0.3.5] — 2026-11-19
 
 ### Fixed

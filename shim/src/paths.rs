@@ -79,7 +79,10 @@ impl DaemonPaths {
         let dir = if wanted.as_os_str().len() <= MAX_SOCKET_PATH {
             preferred
         } else {
-            name = format!("{}-r{}", name, fnv8(preferred.as_os_str().as_bytes()));
+            // Hash the dir as Path::components sees it, so `dir`, `dir/`,
+            // `a//b` and `a/./b` share one daemon, as a short dir does.
+            let normal: PathBuf = preferred.components().collect();
+            name = format!("{}-r{}", name, fnv8(normal.as_os_str().as_bytes()));
             let dir = fallback_runtime_dir();
             if absolute_env("PHAROS_RUNTIME_DIR").is_some() {
                 eprintln!(
@@ -262,6 +265,15 @@ mod tests {
             socket_for(&format!("{}/a", "/x".repeat(60))).socket,
             a.socket
         );
+        // Spelling doesn't matter: a trailing slash, `//` and `/./`.
+        let long = "/x".repeat(60);
+        for spelling in [
+            format!("{}/a/", long),
+            format!("{}//a", long),
+            format!("{}/./a", long),
+        ] {
+            assert_eq!(socket_for(&spelling).socket, a.socket, "{}", spelling);
+        }
         let short = socket_for("/tmp/r14");
         assert_eq!(
             short.socket,

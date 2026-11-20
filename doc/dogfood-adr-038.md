@@ -308,4 +308,3 @@ holds only when the socket path fits (about 100 bytes). A deeper scratch dir sen
 in the daemon key differed (this report's runs had their own `XDG_STATE_HOME`, so they were
 isolated). Since #14, the fallback socket's name carries a hash of the requested dir, and the shim
 says on stderr that it fell back.
-

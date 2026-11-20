@@ -182,3 +182,25 @@ pub fn uri_to_path_refuses_another_host_test() {
   workspace_root.uri_to_path("file://")
   |> should.equal(Error(workspace_root.NotAFileUri("file://")))
 }
+
+// -- teaching messages and file://// (0.3.6 follow-up) ----------------------
+
+pub fn describe_not_local_teaches_the_fix_test() {
+  workspace_root.describe_not_local("file://src/a.ts")
+  |> should.equal(
+    "file://src/a.ts names the host `src`, not a local file: use file:///absolute/path (or file://localhost/absolute/path)",
+  )
+  workspace_root.describe_not_local("file://")
+  |> should.equal("file:// has no path: use file:///absolute/path")
+  workspace_root.describe_not_local("file://localhost")
+  |> should.equal("file://localhost has no path: use file:///absolute/path")
+  workspace_root.describe_not_local("untitled:///x")
+  |> should.equal("not a local file:// URI: untitled:///x")
+}
+
+pub fn extra_leading_slashes_collapse_test() {
+  workspace_root.uri_to_path("file:////tmp/a.ts")
+  |> should.equal(Ok("/tmp/a.ts"))
+  workspace_root.canonical_uri("file:///////tmp/a.ts")
+  |> should.equal("file:///tmp/a.ts")
+}
