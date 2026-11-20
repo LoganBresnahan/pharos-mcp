@@ -215,6 +215,16 @@ Watched files (ADR-043):
                               document after STUB_LSP_DEP_DELAY_MS (default
                               300), at its current version (gopls's way)
 
+Generic names (#39):
+
+  STUB_LSP_SYMBOL_GENERICS=1  documentSymbol names as jdtls does: a
+                              `class NAME` line is a class `NAME<T>`
+                              holding the `function` lines up to a `}` in
+                              column 0, named `fn(T)`, and a `constructor`
+                              line as a constructor `NAME(T)`; with
+                              STUB_LSP_WORKSPACE_SYMBOL=all, workspace/
+                              symbol also finds classes, named bare
+
 With STUB_LSP_LOG set, didOpen / didChange / didSave / didClose log a
 line like "<pid> textDocument/didChange main.stub v=3 changes=1
 range=False sha=1a2b3c4d", so a test can check exactly what pharos sent
@@ -717,6 +727,12 @@ def handle_workspace_symbol(req):
                         if fname.lower() == query:
                             rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
                             result.append({"name": fname, "kind": 12, "location": {"uri": "file://" + path, "range": rng}})
+                    for i, line in enumerate(text.split("\n")):
+                        # Classes too, named bare as jdtls's workspace/symbol does.
+                        if line.startswith("class ") and line[6:].split()[0].split("{")[0].lower() == query:
+                            rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
+                            result.append({"name": line[6:].split()[0].split("{")[0], "kind": 5,
+                                           "location": {"uri": "file://" + path, "range": rng}})
         return {"jsonrpc": "2.0", "id": req["id"], "result": result}
     if not DOCS:
         return {"jsonrpc": "2.0", "id": req["id"],
@@ -753,11 +769,39 @@ def handle_document_symbol(req):
             text = ""
     result = []
     params = os.environ.get("STUB_LSP_SYMBOL_PARAMS")
+    if os.environ.get("STUB_LSP_SYMBOL_GENERICS"):
+        return {"jsonrpc": "2.0", "id": req["id"], "result": generic_symbols(text)}
     for i, name, line in function_lines(text):
         rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
         shown = name + "(int)" if params else name
         result.append({"name": shown, "kind": 12, "range": rng, "selectionRange": rng, "children": []})
     return {"jsonrpc": "2.0", "id": req["id"], "result": result}
+
+
+def generic_symbols(text):
+    """#39, jdtls's naming: a `class NAME` line opens a class symbol named
+    `NAME<T>` holding the `function` lines up to a `}` in column 0, each
+    named with its parameter list (`get(T)`)."""
+    out, current = [], None
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
+        if line.startswith("class "):
+            name = line[len("class "):].split()[0].split("{")[0]
+            current = {"name": name + "<T>", "kind": 5, "range": dict(rng), "selectionRange": rng, "children": []}
+            out.append(current)
+        elif line.strip() == "constructor" and current is not None:
+            base = current["name"].split("<")[0]
+            current["children"].append({"name": base + "(T)", "kind": 9, "range": rng,
+                                        "selectionRange": rng, "children": []})
+        elif line.startswith("}") and current is not None:
+            current["range"]["end"] = {"line": i, "character": 1}
+            current = None
+        else:
+            for j, fname, fline in function_lines(line):
+                sym = {"name": fname + "(T)", "kind": 6, "range": rng, "selectionRange": rng, "children": []}
+                (current["children"] if current is not None else out).append(sym)
+    return out
 
 
 def handle_hover(req):

@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- `find_symbol` finds a generic class on jdtls. jdtls names it with its type parameters
+  (`Box<T>`, `Pair<A, B>`), so a strict match never found the project's class: `Box` answered
+  the JDK's `javax.swing.Box`. Type parameters are now stripped for the strict match, in path
+  segments and from a query of `Box<T>` too, on jdtls only (`generic_names_carry_params`): other
+  servers name generics bare and keep angle brackets in real names (clangd's `operator<=>`). A
+  class's or enum's own constructor (`Pair(A, B)`) no longer answers beside it (#39).
 - A file that changed on disk reaches the server in the form its sync kind asks for: a server
   that syncs Incrementally gets a replace ranged over the whole document, a Full one the whole
   text as before. Through 0.3.5 every server got the range-less form, which LSP defines for the

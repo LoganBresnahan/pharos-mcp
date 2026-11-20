@@ -1811,6 +1811,50 @@ def t_find_symbol_prefers_the_workspace(sb):
           "expected the workspace helper alone: %s" % out[-400:])
 
 
+def t_find_symbol_generic_class(sb):
+    """#39: jdtls names a generic class with its type parameters (`Box<T>`),
+    so a strict `Box` never matched the project's class: find_symbol found
+    only the JDK's. The type parameters are stripped for the strict match,
+    for the last name and for path segments, and from a query of `Box<T>`,
+    only for a server flagged `generic_names_carry_params` (jdtls; clangd
+    keeps brackets in real names, `operator<=>`)."""
+    sb.write_toml("generic_names_carry_params = true\n")
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "all", "STUB_LSP_SYMBOL_GENERICS": "1"})
+    a.initialize()
+    lib = os.path.join(sb.fixture, "node_modules", "jdk")
+    os.makedirs(lib)
+    with open(os.path.join(lib, "Box.stub"), "w") as f:
+        f.write("class Box {\n  function width() {\n  }\n}\n")
+    uri = stub_file(sb, "Box.stub", "class Box {\n  function get() {\n  }\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "Box", "scope_uri": uri})
+    check('"status":"single"' in out and "Box.stub" in out and "node_modules" not in out
+          and '"matched_via":"type_params_strip"' in out,
+          "expected the workspace class, matched strictly: %s" % out[-500:])
+    out = a.tool(11, "find_symbol", {"name_path": "Box/get", "scope_uri": uri})
+    check('"status":"single"' in out and "substring" not in out and "case_insensitive" not in out,
+          "Box/get should match strictly: %s" % out[-500:])
+    # A class and its own constructor share the name: the class is the answer.
+    pair = stub_file(sb, "Pair.stub", "class Pair {\n  constructor\n}\n")
+    out = a.tool(12, "find_symbol", {"name_path": "Pair", "scope_uri": pair})
+    check('"status":"single"' in out and '"kind":5' in out,
+          "expected the class Pair alone, not its constructor too: %s" % out[-500:])
+    # The query's own type parameters (jdtls's display name).
+    out = a.tool(13, "find_symbol", {"name_path": "Box<T>", "scope_uri": uri})
+    check('"status":"single"' in out and "Box.stub" in out and "node_modules" not in out,
+          "a query of Box<T>: %s" % out[-500:])
+
+
+def t_find_symbol_generic_names_need_the_flag(sb):
+    """#39: without `generic_names_carry_params` (every server but jdtls), a
+    name's angle brackets are part of it: `Box` doesn't strictly match
+    `Box<T>`."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "all", "STUB_LSP_SYMBOL_GENERICS": "1"})
+    a.initialize()
+    uri = stub_file(sb, "Box.stub", "class Box {\n  function get() {\n  }\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "Box", "scope_uri": uri})
+    check("type_params_strip" not in out, "stripped without the flag: %s" % out[-500:])
+
+
 def t_find_symbol_library_guess_is_a_near_miss(sb):
     """#29: a match only in another case, and only outside the workspace,
     is a near miss, not "single": a lowercase `helper` must not resolve to
@@ -2245,6 +2289,8 @@ SCENARIOS = [
     ("find_symbol_says_why_it_was_narrow", t_find_symbol_says_why_it_was_narrow),
     ("find_symbol_library_outside_the_root", t_find_symbol_library_outside_the_root),
     ("find_symbol_library_guess_is_a_near_miss", t_find_symbol_library_guess_is_a_near_miss),
+    ("find_symbol_generic_class", t_find_symbol_generic_class),
+    ("find_symbol_generic_names_need_the_flag", t_find_symbol_generic_names_need_the_flag),
     ("find_symbol_cold_index_while_indexing", t_find_symbol_cold_index_while_indexing),
     ("find_symbol_cold_index_lazy_flag", t_find_symbol_cold_index_lazy_flag),
     ("find_symbol_cold_miss_is_prompt", t_find_symbol_cold_miss_is_prompt),

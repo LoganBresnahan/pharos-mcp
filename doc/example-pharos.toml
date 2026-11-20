@@ -321,6 +321,13 @@
 # file_extensions = [".my"]
 # full_change_as_range = false
 # pull_after_change_ms = 50
+#
+# `generic_names_carry_params` says the server names a generic type with
+# its type parameters in documentSymbol (`Box<T>`, `<T> wrap`), so
+# find_symbol also matches `Box` (and a query of `Box<T>`) with them
+# stripped. Bundled: jdtls true, others false: they name generics bare and
+# may use angle brackets in real names (`operator<=>`, `Pair<int, int>`).
+# generic_names_carry_params = true
 
 # 4e) Files changed on disk (ADR-043, #10).
 #

@@ -277,9 +277,28 @@ pub fn find_symbol(
 ) -> Result(Resolution, SymbolsError) {
   let NamePath(parts) = name_path
   use Nil <- result.try(check_scope(scope_uri))
+  // #39: a server that names generic types with their type parameters
+  // (jdtls's `Box<T>`) has them stripped for the match, and from the
+  // query's own name for its workspace search. No other server: they
+  // keep angle brackets for real name parts (clangd's `operator<=>`).
+  let generic = case session.config_for_uri(scope_uri) {
+    Ok(config) ->
+      case languages.primary_server(config) {
+        Ok(server) -> server.generic_names_carry_params
+        Error(_) -> False
+      }
+    Error(_) -> False
+  }
+  let name_match_strategy = name_match_strategy_for(generic)
+  let name_match_strategy_with_fuzzy =
+    name_match_strategy_with_fuzzy_for(generic)
   case parts {
     [] -> Error(InvalidNamePath("empty path post-construction"))
     [head, ..rest] -> {
+      let search_head = case generic {
+        True -> strip_type_params(head)
+        False -> head
+      }
       // ADR-026 fallback: when the server's InitializeResult does
       // not advertise `workspaceSymbolProvider` (e.g. gleam_lsp),
       // skip the cross-file workspace query and drill `scope_uri`
@@ -294,7 +313,7 @@ pub fn find_symbol(
           use ws_results <- result.try(workspace_symbol_query(
             pool,
             scope_uri,
-            head,
+            search_head,
             default_timeout_ms,
           ))
           // Each workspace_symbol result is a `(name, kind,
@@ -392,7 +411,9 @@ pub fn find_symbol(
         Error(_) -> None
       }
       let is_workspace_file = fn(uri) { in_workspace(uri, root) }
-      let matches = prefer_workspace_files(matches, is_workspace_file)
+      let matches =
+        prefer_workspace_files(matches, is_workspace_file)
+        |> drop_own_constructors
       // Only fuzzy matches (another case, a substring), and none in the
       // workspace: those are near misses, not an answer. jdtls's
       // case-insensitive search turned a lowercase `helper` into the JDK's
@@ -527,14 +548,23 @@ fn drill(
 }
 
 /// Tier-1 + tier-2 chained. Tier 2 fires only on tier-1 None.
-fn name_match_strategy_with_fuzzy(
-  symbol_name: String,
-  query: String,
-) -> Option(String) {
-  case name_match_strategy(symbol_name, query) {
-    Some(s) -> Some(s)
-    None -> name_match_strategy_fuzzy(symbol_name, query)
+fn name_match_strategy_with_fuzzy_for(
+  generic: Bool,
+) -> fn(String, String) -> Option(String) {
+  fn(symbol_name, query) {
+    case name_match_strategy(symbol_name, query, generic) {
+      Some(s) -> Some(s)
+      None -> name_match_strategy_fuzzy(symbol_name, query)
+    }
   }
+}
+
+/// Tier 1 for a server: `generic` when it names generic types with their
+/// type parameters (`generic_names_carry_params`, jdtls).
+fn name_match_strategy_for(
+  generic: Bool,
+) -> fn(String, String) -> Option(String) {
+  fn(symbol_name, query) { name_match_strategy(symbol_name, query, generic) }
 }
 
 /// Compare a documentSymbol name against a name_path segment with
@@ -542,6 +572,10 @@ fn name_match_strategy_with_fuzzy(
 ///
 /// **Tier 1 (high confidence, returns specific strategy):**
 ///   - `"exact"` — string equality. Always tried first.
+///   - `"params_strip"` — `helper(int)` matches `helper` (jdtls, #29).
+///   - `"type_params_strip"` — `Box<T>` matches `Box`, and a query of
+///     `Box<T>` matches it too: only for a server that names generics
+///     with their parameters (`generic`, jdtls, #39).
 ///   - `"arity_strip"` — `main/1` matches `main` (Erlang/Elixir
 ///     function conventions).
 ///   - `"kind_strip"` — `KafkaClient class` matches `KafkaClient`
@@ -561,19 +595,27 @@ fn name_match_strategy_with_fuzzy(
 ///
 /// Returns `Some(strategy)` on a hit, `None` otherwise. Drill's
 /// caller treats `None` as "no match, do not include this candidate."
-fn name_match_strategy(symbol_name: String, query: String) -> Option(String) {
+fn name_match_strategy(
+  symbol_name: String,
+  query: String,
+  generic: Bool,
+) -> Option(String) {
   let is_exact = symbol_name == query
   let is_params = strip_params(symbol_name) == query
+  let is_generic =
+    generic
+    && strip_type_params(strip_params(symbol_name)) == strip_type_params(query)
   let is_arity = strip_arity_suffix(symbol_name) == query
   let is_kind = strip_kind_suffix(symbol_name) == query
   let is_trailing = trailing_segment(symbol_name) == query
-  case is_exact, is_params, is_arity, is_kind, is_trailing {
-    True, _, _, _, _ -> Some("exact")
-    _, True, _, _, _ -> Some("params_strip")
-    _, _, True, _, _ -> Some("arity_strip")
-    _, _, _, True, _ -> Some("kind_strip")
-    _, _, _, _, True -> Some("trailing_segment")
-    _, _, _, _, _ -> None
+  case is_exact, is_params, is_generic, is_arity, is_kind, is_trailing {
+    True, _, _, _, _, _ -> Some("exact")
+    _, True, _, _, _, _ -> Some("params_strip")
+    _, _, True, _, _, _ -> Some("type_params_strip")
+    _, _, _, True, _, _ -> Some("arity_strip")
+    _, _, _, _, True, _ -> Some("kind_strip")
+    _, _, _, _, _, True -> Some("trailing_segment")
+    _, _, _, _, _, _ -> None
   }
 }
 
@@ -599,6 +641,37 @@ fn strip_params(name: String) -> String {
   case string.split_once(name, "(") {
     Ok(#(base, _)) -> string.trim_end(base)
     Error(Nil) -> name
+  }
+}
+
+/// "Box<T>" → "Box", "Pair<A, B>" → "Pair", "<T> wrap" → "wrap": jdtls
+/// names a generic class with its type parameters, so a strict query
+/// never matched the project's class and found only the JDK's (#39). A
+/// generic method's "map(U) <U>" is handled by `strip_params` first.
+/// typescript-language-server, pyright, clangd, gopls and rust-analyzer
+/// name generic types bare (measured 2026-11-20), so this applies only
+/// to a server flagged `generic_names_carry_params`. An `operator…` name
+/// is never stripped: its brackets are the name (`operator<=>`,
+/// `operator std::vector<int>`).
+pub fn strip_type_params(name: String) -> String {
+  case string.starts_with(name, "operator") {
+    True -> name
+    False -> strip_type_params_of(name)
+  }
+}
+
+fn strip_type_params_of(name: String) -> String {
+  let name = case string.starts_with(name, "<") {
+    True ->
+      case string.split_once(name, "> ") {
+        Ok(#(_, rest)) -> rest
+        Error(Nil) -> name
+      }
+    False -> name
+  }
+  case string.ends_with(name, ">"), string.split_once(name, "<") {
+    True, Ok(#(base, _)) if base != "" -> string.trim_end(base)
+    _, _ -> name
   }
 }
 
@@ -655,6 +728,30 @@ fn trailing_segment(name: String) -> String {
         Error(_) -> name
       }
   }
+}
+
+/// A constructor matched inside a class (or struct) that matched too is the
+/// same thing asked for: jdtls names a class `Pair<A, B>` and its
+/// constructor `Pair(A, B)`, and `find_symbol Pair` answered both (#39).
+/// The class stays. An enum (10) is a container too: jdtls names a Java
+/// enum's constructor after it.
+fn drop_own_constructors(matches: List(SymbolMatch)) -> List(SymbolMatch) {
+  let containers =
+    list.filter(matches, fn(m) { m.kind == 5 || m.kind == 23 || m.kind == 10 })
+  list.filter(matches, fn(m) {
+    m.kind != 9
+    || !list.any(containers, fn(c) {
+      c.uri == m.uri && within(m.range, c.range)
+    })
+  })
+}
+
+fn within(inner: Range, outer: Range) -> Bool {
+  position_le(outer.start, inner.start) && position_le(inner.end, outer.end)
+}
+
+fn position_le(a: Position, b: Position) -> Bool {
+  a.line < b.line || { a.line == b.line && a.character <= b.character }
 }
 
 /// Workspace-file matches only, when there are any; else all of them.
