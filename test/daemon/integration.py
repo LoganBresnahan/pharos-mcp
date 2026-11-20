@@ -1306,7 +1306,9 @@ def t_project_config_names(sb):
     a = sb.start()
     a.initialize()
     hover_line(a, sb.uri, 10)
-    needle = "ignored=" + beside
+    # pharos logs the path from the session's cwd as the OS reports it:
+    # on macOS /tmp is a symlink to /private/tmp.
+    needle = "ignored=" + os.path.realpath(beside)
     wait_until(lambda: os.path.isdir(logdir) and needle in daemon_log(), 10, "the ignored-file warning")
     b = sb.start()
     b.initialize()
@@ -1323,7 +1325,8 @@ def t_project_config_names(sb):
     c = sb.start(cwd=sub)
     c.initialize()
     hover_line(c, sb.uri, 11)
-    wait_until(lambda: ('msg="loaded project config" path=%s' % nearer) in daemon_log(), 10,
+    wait_until(lambda: ('msg="loaded project config" path=%s' % os.path.realpath(nearer))
+               in daemon_log(), 10,
                "the nearer pharos.toml loaded")
 
 
