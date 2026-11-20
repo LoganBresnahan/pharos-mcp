@@ -12,7 +12,7 @@ own runtime, state and HOME-independent dirs) it checks:
 - `pharos diagnostics` (the CLI) reports it too;
 - hover on the helper's use answers, and goto_definition lands in the
   helper's file;
-- find_symbol on a cold session finds the helper (#21);
+- find_symbol on a cold session finds the helper (#21), within 20 s (#12);
 - after the error is fixed on disk, get_diagnostics comes back without it
   (ADR-038's re-sync).
 
@@ -164,7 +164,9 @@ def check_lang(key, args, results):
         # find_symbol first, on the cold session (#21).
         t0 = time.time()
         text, err = s.tool("find_symbol", {"name_path": "helper", "scope_uri": util_uri})
-        record("find_symbol cold", not err and '"name":"helper"' in text, "%.1fs %s" % (time.time() - t0, text[:100]))
+        took = time.time() - t0
+        record("find_symbol cold", not err and '"name":"helper"' in text and took * 1000 < args.find_budget_ms,
+               "%.1fs %s" % (took, text[:100]))
         t0 = time.time()
         text, err = s.tool("get_diagnostics", {"uri": main_uri, "timeout_ms": args.budget_ms})
         took = time.time() - t0
@@ -207,6 +209,9 @@ def main():
     ap.add_argument("--shim", required=True)
     ap.add_argument("--only", default="ts,go,py,rs")
     ap.add_argument("--budget-ms", type=int, default=60000)
+    # A cold find_symbol answers in 1-5 s once readiness ends on the
+    # server's own progress (#12); before that, ~58 s.
+    ap.add_argument("--find-budget-ms", type=int, default=20000)
     ap.add_argument("--skip-missing", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
