@@ -50,7 +50,7 @@ default_session_log_path() ->
                 Stamp = timestamp_filename(),
                 Name = lists:flatten(
                     io_lib:format("session-~s-~s.log", [Pid, Stamp])),
-                {some, list_to_binary(filename:join(Dir, Name))}
+                {some, pharos_fs_ffi:name_to_binary(filename:join(Dir, Name))}
             catch
                 _:_ -> none
             end
@@ -79,7 +79,9 @@ log_dir() ->
 log_cache_dir() ->
     case log_cache_dir_internal() of
         none -> <<>>;
-        {ok, Dir} -> list_to_binary(Dir)
+        %% Characters (from HOME / XDG_STATE_HOME) to their bytes: a
+        %% non-ASCII HOME crashed the daemon's boot here (#20).
+        {ok, Dir} -> pharos_fs_ffi:name_to_binary(Dir)
     end.
 
 %% LRU-trim files matching `Prefix*` under the log cache dir down

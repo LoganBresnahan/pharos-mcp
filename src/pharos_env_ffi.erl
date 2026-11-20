@@ -6,7 +6,7 @@
 -export([get/1]).
 
 get(Name) when is_binary(Name) ->
-    case os:getenv(binary_to_list(Name)) of
+    case os:getenv(pharos_fs_ffi:binary_to_name(Name)) of
         false ->
             none;
         Value ->

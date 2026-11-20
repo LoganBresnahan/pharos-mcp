@@ -105,7 +105,7 @@ init() ->
 %% directory. Format: `$HOME/.local/share/pharos/instances/<os_pid>/`.
 %% Falls back to `/tmp/pharos-instances/<os_pid>/` if $HOME is unset.
 instance_dir() ->
-    list_to_binary(instance_dir_path()).
+    pharos_fs_ffi:name_to_binary(instance_dir_path()).
 
 instance_dir_path() ->
     Home = case os:getenv("HOME") of
@@ -196,7 +196,7 @@ instances_root() ->
         false -> "/tmp/pharos-instances";
         H -> filename:join([H, ".local", "share", "pharos", "instances"])
     end,
-    list_to_binary(Home).
+    pharos_fs_ffi:name_to_binary(Home).
 
 %% List instance subdirs as `[{OwnerPid :: integer(), AbsPath :: binary()}]`.
 %% Skips entries whose name is not parseable as a positive integer
@@ -212,7 +212,7 @@ list_instance_dirs() ->
                 fun(Entry) ->
                     case string:to_integer(Entry) of
                         {Pid, []} when is_integer(Pid), Pid > 0 ->
-                            {true, {Pid, list_to_binary(filename:join(Home, Entry))}};
+                            {true, {Pid, pharos_fs_ffi:name_to_binary(filename:join(Home, Entry))}};
                         _ -> false
                     end
                 end,
@@ -223,7 +223,7 @@ list_instance_dirs() ->
 %% List `.pid` files inside an instance directory as
 %% `[{LspPid :: integer(), AbsPath :: binary()}]`.
 list_pid_files(InstanceDir) when is_binary(InstanceDir) ->
-    case file:list_dir(binary_to_list(InstanceDir)) of
+    case file:list_dir(pharos_fs_ffi:binary_to_name(InstanceDir)) of
         {ok, Entries} ->
             lists:filtermap(
                 fun(Entry) ->
@@ -232,8 +232,8 @@ list_pid_files(InstanceDir) when is_binary(InstanceDir) ->
                             Base = string:slice(Entry, 0, length(Entry) - 4),
                             case string:to_integer(Base) of
                                 {LspPid, []} when is_integer(LspPid), LspPid > 0 ->
-                                    Path = filename:join(binary_to_list(InstanceDir), Entry),
-                                    {true, {LspPid, list_to_binary(Path)}};
+                                    Path = filename:join(pharos_fs_ffi:binary_to_name(InstanceDir), Entry),
+                                    {true, {LspPid, pharos_fs_ffi:name_to_binary(Path)}};
                                 _ -> false
                             end;
                         false -> false
@@ -372,7 +372,7 @@ parse_pgid(S) ->
 %% individual orphan directory after reaping its LSPs.
 remove_dir_recursive(Dir) when is_binary(Dir) ->
     try
-        del_dir_recursive(binary_to_list(Dir))
+        del_dir_recursive(pharos_fs_ffi:binary_to_name(Dir))
     catch
         _:_ -> ok
     end,
@@ -620,7 +620,7 @@ reap_instance_dir(Dir, GraceMs, TermWaitMs) when is_binary(Dir) ->
                              receive {Ref, Sent} -> Sent =/= []
                              after GraceMs + TermWaitMs + 5000 -> false
                              end]),
-    _ = del_dir_recursive(binary_to_list(Dir)),
+    _ = del_dir_recursive(pharos_fs_ffi:binary_to_name(Dir)),
     Signalled.
 
 %% -- internals -------------------------------------------------------

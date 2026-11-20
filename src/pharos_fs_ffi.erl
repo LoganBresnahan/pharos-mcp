@@ -9,7 +9,7 @@
 %% Returns Gleam-friendly tagged tuples shaped as Result(t, e).
 
 -module(pharos_fs_ffi).
--export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1, days_since_iso8601/1, setenv/2]).
+-export([is_regular_file/1, is_directory/1, dirname/1, read_file/1, shell/1, encode_json/1, cwd/0, atomic_write_text/2, rm_rf/1, which_executable/1, mkdir_p/1, list_dir/1, delete_file/1, write_excl/2, home_dir/0, now_iso8601/0, getenv/1, days_since_iso8601/1, setenv/2, name_to_binary/1, binary_to_name/1]).
 
 is_regular_file(Path) ->
     filelib:is_regular(Path).
@@ -32,7 +32,9 @@ read_file(Path) ->
 %% binary holding the command's combined stdout+stderr. Used by tests
 %% to set up temp directories without dragging in a filesystem dep.
 shell(Cmd) ->
-    list_to_binary(os:cmd(binary_to_list(Cmd))).
+    %% os:cmd decodes both ways (OTP 26+): characters in, characters out
+    %% (#20).
+    name_to_binary(os:cmd(binary_to_name(Cmd))).
 
 %% Re-encode a JSON-derived term back to a JSON binary. OTP 27's
 %% json:encode/1 returns iodata (a deeply nested iolist of binaries
@@ -104,17 +106,17 @@ rm_rf(Path) when is_binary(Path) ->
 %% Honours absolute paths (returned verbatim if they exist + are
 %% executable).
 which_executable(Cmd) when is_binary(Cmd) ->
-    CmdStr = binary_to_list(Cmd),
+    CmdStr = binary_to_name(Cmd),
     case filename:pathtype(CmdStr) of
         absolute ->
-            case filelib:is_regular(CmdStr) of
-                true -> {ok, list_to_binary(CmdStr)};
+            case filelib:is_regular(Cmd) of
+                true -> {ok, Cmd};
                 false -> {error, nil}
             end;
         _ ->
             case os:find_executable(CmdStr) of
                 false -> {error, nil};
-                Path -> {ok, list_to_binary(Path)}
+                Path -> {ok, name_to_binary(Path)}
             end
     end.
 
@@ -176,24 +178,24 @@ write_excl(Path, Text) when is_binary(Path), is_binary(Text) ->
 home_dir() ->
     case os:getenv("HOME") of
         false -> <<"/">>;
-        Path -> list_to_binary(Path)
+        Path -> name_to_binary(Path)
     end.
 
 %% Read an environment variable. Gleam Strings are binaries; Erlang's
 %% os:getenv/1 expects a list — wrap the conversion here. Returns
 %% {ok, Binary} when set + non-empty, {error, nil} when unset or "".
 getenv(Key) when is_binary(Key) ->
-    case os:getenv(binary_to_list(Key)) of
+    case os:getenv(binary_to_name(Key)) of
         false -> {error, nil};
         "" -> {error, nil};
-        Value -> {ok, list_to_binary(Value)}
+        Value -> {ok, name_to_binary(Value)}
     end.
 
 %% Set an environment variable. Used by tests to redirect memory roots
 %% to scratch dirs without polluting the user's real ~/.pharos. Always
 %% returns nil.
 setenv(Key, Value) when is_binary(Key), is_binary(Value) ->
-    os:putenv(binary_to_list(Key), binary_to_list(Value)),
+    os:putenv(binary_to_name(Key), binary_to_name(Value)),
     nil.
 
 %% Wall-clock time as an ISO-8601 / RFC-3339 binary in UTC. Format:
@@ -229,4 +231,19 @@ name_to_binary(N) ->
     case file:native_name_encoding() of
         utf8 -> unicode:characters_to_binary(N);
         latin1 -> list_to_binary(N)
+    end.
+
+%% The other way: a binary (UTF-8 bytes, a Gleam String) as the list the
+%% os and file modules decode file names and environment values to. So
+%% os:getenv, os:putenv, os:find_executable and os:cmd get the characters
+%% the bytes spell, not one character per byte (#20). Invalid UTF-8 falls
+%% back to one character per byte.
+binary_to_name(B) when is_binary(B) ->
+    case file:native_name_encoding() of
+        utf8 ->
+            case unicode:characters_to_list(B) of
+                L when is_list(L) -> L;
+                _ -> binary_to_list(B)
+            end;
+        latin1 -> binary_to_list(B)
     end.

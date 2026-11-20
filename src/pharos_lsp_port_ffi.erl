@@ -91,13 +91,13 @@ spawn(Command, Args, Cwd, Env) ->
 resolve_command(Command, Path) when is_binary(Command) ->
     case Command of
         <<$/, _/binary>> ->
-            CmdStr = binary_to_list(Command),
+            CmdStr = to_chars(Command),
             case is_executable_file(CmdStr) of
                 true -> {ok, CmdStr};
                 false -> {error, not_found}
             end;
         _ ->
-            case find_executable(binary_to_list(Command), Path) of
+            case find_executable(to_chars(Command), Path) of
                 false -> {error, not_found};
                 Found -> {ok, Found}
             end
@@ -108,7 +108,7 @@ resolve_command(Command, Path) when is_binary(Command) ->
 %% ADR-034 spawn fingerprint.
 resolve_on_path(Command, Env) ->
     case resolve_command(Command, search_path(Env)) of
-        {ok, Path} -> unicode:characters_to_binary(Path);
+        {ok, Path} -> pharos_fs_ffi:name_to_binary(Path);
         {error, not_found} -> Command
     end.
 
@@ -140,11 +140,12 @@ env_options(Env, Current) ->
                            valid_env_name(K)],
     [{env, Set ++ Unset}].
 
+%% A binary as the characters the os and file modules expect: decoded
+%% from UTF-8 in utf8 filename mode, the bytes themselves in latin1 mode
+%% (LC_ALL=C, LANG unset). Decoding always, as before, wrote `é` as one
+%% byte under the C locale (#20).
 to_chars(Bin) ->
-    case unicode:characters_to_list(Bin) of
-        Chars when is_list(Chars) -> Chars;
-        _ -> binary_to_list(Bin)
-    end.
+    pharos_fs_ffi:binary_to_name(Bin).
 
 valid_env_name(<<>>) -> false;
 valid_env_name([]) -> false;

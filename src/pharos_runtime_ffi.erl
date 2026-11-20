@@ -1001,7 +1001,7 @@ argv() ->
 %% PHAROS_INSTALL_DIR no longer moves it: that variable now names the
 %% install root (ADR-035 §4).
 legacy_burrito_root() ->
-    list_to_binary(filename:join(default_burrito_base(), ".burrito")).
+    pharos_fs_ffi:name_to_binary(filename:join(default_burrito_base(), ".burrito")).
 
 default_burrito_base() ->
     case os:type() of
@@ -1054,11 +1054,11 @@ linux_default_data_home() ->
 %% root does not exist OR contains no pharos_* entries.
 list_pharos_extracts() ->
     RootBin = legacy_burrito_root(),
-    RootStr = binary_to_list(RootBin),
+    RootStr = pharos_fs_ffi:binary_to_name(RootBin),
     case file:list_dir(RootStr) of
         {error, _} -> [];
         {ok, Names} ->
-            [ list_to_binary(filename:join(RootStr, N))
+            [ pharos_fs_ffi:name_to_binary(filename:join(RootStr, N))
               || N <- Names,
                  lists:prefix("pharos_", N),
                  filelib:is_dir(filename:join(RootStr, N)) ]

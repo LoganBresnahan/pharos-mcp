@@ -36,7 +36,8 @@
 %% daemon (connect succeeds: refuse, so two daemons never share a
 %% key) or a stale one (connect refused: remove it and bind).
 listen(Path) when is_binary(Path) ->
-    P = binary_to_list(Path),
+    %% Characters, not one per byte: a non-ASCII runtime dir (#20).
+    P = pharos_fs_ffi:binary_to_name(Path),
     _ = filelib:ensure_dir(P),
     %% Not filelib:is_file/1: it is false for a socket, which is neither
     %% a regular file nor a directory.

@@ -130,6 +130,14 @@ jobs:
           fossil_grep 'filename:basedir\(user_cache'    'wrong XDG var for the Burrito cache path — Burrito uses user_data (XDG_DATA_HOME), not user_cache (XDG_CACHE_HOME)'
           fossil_grep 'burrito_runtime'                 'fossil path segment — Burrito does not use a `burrito_runtime` subdir'
 
+          # #20: binary_to_list on an environment value, a command or a
+          # path reads each UTF-8 byte as a character. Convert with
+          # pharos_fs_ffi:binary_to_name / name_to_binary (native encoding).
+          fossil_grep 'os:(getenv|putenv)\(binary_to_list\('    'binary_to_list on an env name or value — use pharos_fs_ffi:binary_to_name (non-ASCII, #20)'
+          fossil_grep 'os:cmd\(binary_to_list\('                 'binary_to_list on a shell command — use pharos_fs_ffi:binary_to_name (non-ASCII, #20)'
+          fossil_grep 'binary_to_list\((Command|Path|Dir|InstanceDir|Cmd|Cwd)\)'  'binary_to_list on a path or command — pass the binary, or use pharos_fs_ffi:binary_to_name (non-ASCII, #20)'
+          fossil_grep 'list_to_binary\((Dir|Home|Path|filename:join)'  'list_to_binary on an OS-derived name — use pharos_fs_ffi:name_to_binary (non-ASCII, #20)'
+
           # #16: binary_to_list on a UTF-8 path reads each byte as a
           # character, so a non-ASCII path names another file. Pass the
           # binary straight to the file module (ADR-042).

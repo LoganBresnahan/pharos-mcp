@@ -1153,6 +1153,83 @@ def long_runtime_dir_checks(sb, env_a, env_b):
     check(alive(pid_b), "stopping a's daemon stopped b's")
     check(sb.cli("daemon", "stop", extra_env=env_b).returncode == 0, "stop b")
     wait_until(lambda: not alive(pid_b), 15, "daemon b to exit")
+def t_non_ascii_home_and_server_path(sb):
+    """#20: a daemon whose HOME holds non-ASCII characters, with its
+    language server installed under a non-ASCII path, still answers, and
+    its instance-tracking dir (ADR-030) lands under that HOME. Environment
+    values, HOME and `which` went through binary_to_list / list_to_binary,
+    which read each UTF-8 byte as a character."""
+    home = os.path.join(sb.dir, "h\u00f6m\u00e9 \u6f22")
+    bindir = os.path.join(sb.dir, "bin \u00e9 \u6f22")
+    os.makedirs(home)
+    os.makedirs(bindir)
+    server = os.path.join(bindir, "stub-lsp")
+    shutil.copy(STUB, server)
+    os.chmod(server, 0o755)
+    with open(os.path.join(sb.fixture, ".pharos.toml"), "w") as f:
+        f.write('[languages.stub]\nfile_extensions = [".stub"]\n'
+                'root_markers = ["stub.root"]\ncommand = "stub-lsp"\n')
+    sb.env.update({"HOME": home, "PATH": bindir + os.pathsep + sb.env["PATH"]})
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "hello\n")
+    check("line 0: hello" in hover_line(a, uri, 10), "the server under a non-ASCII path must answer")
+    instances = os.path.join(home, ".local", "share", "pharos", "instances")
+    check(os.path.isdir(instances) and os.listdir(instances),
+          "instance dir under the non-ASCII HOME: %r" % (os.listdir(home),))
+    # The stop removes it. On 0.3.5 the stop raised (list_to_binary of
+    # the HOME path) and left it behind.
+    pid = sb.daemon_pid()
+    out = sb.cli("daemon", "stop")
+    check(out.returncode == 0, "daemon stop failed: %s" % out.stderr)
+    wait_until(lambda: not alive(pid), 15, "the daemon to exit")
+    check(os.listdir(instances) == [], "the instance dir must be removed at stop: %r" % os.listdir(instances))
+
+
+def non_ascii_daemon(sb, extra_env):
+    """A daemon whose HOME holds non-ASCII characters, with XDG_STATE_HOME
+    and XDG_CONFIG_HOME unset (the usual setup: logs go under HOME), and a
+    server configured by its absolute path under a non-ASCII folder. It
+    must boot, answer, and clean up its instance dir at stop."""
+    home = os.path.join(sb.dir, "h\u00f6m\u00e9 \u6f22")
+    bindir = os.path.join(sb.dir, "srv \u00e9 \u6f22")
+    os.makedirs(home)
+    os.makedirs(bindir)
+    server = os.path.join(bindir, "stub-lsp")
+    shutil.copy(STUB, server)
+    os.chmod(server, 0o755)
+    with open(os.path.join(sb.fixture, ".pharos.toml"), "w") as f:
+        f.write('[languages.stub]\nfile_extensions = [".stub"]\n'
+                'root_markers = ["stub.root"]\ncommand = "%s"\n' % server)
+    sb.env.pop("XDG_STATE_HOME", None)
+    sb.env.pop("XDG_CONFIG_HOME", None)
+    sb.env.update(dict(extra_env, HOME=home))
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    uri = stub_file(sb, "main.stub", "hello\n")
+    check("line 0: hello" in hover_line(a, uri, 10), "the server under a non-ASCII path must answer")
+    logs = os.path.join(home, ".local", "state", "pharos", "log")
+    check(os.path.isdir(logs) and os.listdir(logs), "logs under the non-ASCII HOME: %r" % (os.listdir(home),))
+    instances = os.path.join(home, ".local", "share", "pharos", "instances")
+    pid = sb.daemon_pid()
+    check(sb.cli("daemon", "stop").returncode == 0, "daemon stop")
+    wait_until(lambda: not alive(pid), 15, "the daemon to exit")
+    check(not os.path.isdir(instances) or os.listdir(instances) == [],
+          "the instance dir must be removed at stop: %r" % os.listdir(instances))
+
+
+def t_non_ascii_home_default_state(sb):
+    """#20: with XDG_STATE_HOME unset, a non-ASCII HOME crashed the
+    daemon's boot (the log dir went through list_to_binary), and an
+    absolute server command under a non-ASCII folder was "not found"."""
+    non_ascii_daemon(sb, {})
+
+
+def t_non_ascii_c_locale(sb):
+    """#20: under the C locale the VM's file names are latin1, and the
+    spawn path decoded UTF-8 anyway, so a server under a non-ASCII path
+    wasn't found. Conversions now follow file:native_name_encoding()."""
+    non_ascii_daemon(sb, {"LC_ALL": "C", "LANG": "C"})
 
 
 def t_resync_open_cap(sb):
@@ -1207,6 +1284,9 @@ SCENARIOS = [
     ("diagnostics_cli_project_timeout", t_diagnostics_cli_project_timeout),
     ("document_language_id", t_document_language_id),
     ("long_runtime_dir", t_long_runtime_dir),
+    ("non_ascii_home_and_server_path", t_non_ascii_home_and_server_path),
+    ("non_ascii_home_default_state", t_non_ascii_home_default_state),
+    ("non_ascii_c_locale", t_non_ascii_c_locale),
     ("uri_escapes_push_vscode", t_uri_escapes_push_vscode),
     ("uri_escapes_push_rust", t_uri_escapes_push_rust),
     ("uri_escapes_tsserver", t_uri_escapes_tsserver),
