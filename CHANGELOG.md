@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-11-19
+
 ### Fixed
 
 - A project whose path holds a character a URI escapes (a space, `#`, `%`) or a non-ASCII one
@@ -22,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `pharos diagnostics` escapes the paths it is given.
   - The captAInHook payload (`pharos-hook.sh`) keeps a touched path with a space whole.
   - `edit_at_symbol`'s drift check reads escaped paths, instead of quietly skipping (#16).
+- `apply_workspace_edit` answered "Applied edits." with `isError: false` even when no file was
+  written. Now any failed file marks the result an error (files are written one by one, so a
+  partial failure leaves the edit half-applied), the header says what landed ("No edits
+  applied", "Applied edits to 1 of 2 file(s)…"), and failed files are listed first (#22).
+- On a fresh typescript-language-server session, `find_symbol` failed with tsserver's
+  "No Project." until something had opened a file. Once that was fixed, it still said
+  `not_found`, because tsserver's first symbol search after opening sees only the opened
+  file. Now it opens `scope_uri` and, on a Tsserver-mode server, has tsserver load the
+  project before searching (#21).
+- The release workflow waited only 15 minutes for npm to serve the platform packages, and a
+  re-run then failed on "release already exists". It now waits up to 60 minutes with backoff,
+  and a re-run reuses an existing release that is published and holds exactly the run's
+  files (#19).
+
+### Changed
+
+- The log writer closes its file when stopped, so the last lines are on disk once it has
+  exited (#18).
 
 ## [0.3.4] — 2026-11-19
 
