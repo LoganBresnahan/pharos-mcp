@@ -128,6 +128,10 @@ pub type ServerOverride {
     /// #45. After a sync's first publish, wait until the server has been
     /// quiet this long and answer the latest. 0: off.
     publish_settle_ms: Option(Int),
+    /// #45. When the publish to answer is empty, wait this long of quiet.
+    empty_publish_settle_ms: Option(Int),
+    /// #45. The first answer after a didOpen waits this long of quiet.
+    open_settle_ms: Option(Int),
     /// ADR-038 amendment (A). true: send changes as a ranged
     /// whole-document replace; false: the range-less full text. Unset:
     /// the form the server's sync kind asks for.
@@ -228,6 +232,10 @@ pub type LanguageOverride {
     /// #45. After a sync's first publish, wait until the server has been
     /// quiet this long and answer the latest. 0: off.
     publish_settle_ms: Option(Int),
+    /// #45. When the publish to answer is empty, wait this long of quiet.
+    empty_publish_settle_ms: Option(Int),
+    /// #45. The first answer after a didOpen waits this long of quiet.
+    open_settle_ms: Option(Int),
     /// ADR-038 amendment (A). true: send changes as a ranged
     /// whole-document replace; false: the range-less full text. Unset:
     /// the form the server's sync kind asks for.
@@ -1268,6 +1276,11 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     ),
     save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
     publish_settle_ms: decode_optional_int(value, "publish_settle_ms"),
+    empty_publish_settle_ms: decode_optional_int(
+      value,
+      "empty_publish_settle_ms",
+    ),
+    open_settle_ms: decode_optional_int(value, "open_settle_ms"),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     generic_names_carry_params: decode_optional_bool(
       value,
@@ -1423,6 +1436,11 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
     ),
     save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
     publish_settle_ms: decode_optional_int(value, "publish_settle_ms"),
+    empty_publish_settle_ms: decode_optional_int(
+      value,
+      "empty_publish_settle_ms",
+    ),
+    open_settle_ms: decode_optional_int(value, "open_settle_ms"),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     generic_names_carry_params: decode_optional_bool(
       value,

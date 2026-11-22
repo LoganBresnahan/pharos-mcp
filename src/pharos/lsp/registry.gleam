@@ -214,6 +214,8 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     lazy_workspace_index_ms: option.unwrap(override.lazy_workspace_index_ms, 0),
     save_check_grace_ms: option.unwrap(override.save_check_grace_ms, 0),
     publish_settle_ms: option.unwrap(override.publish_settle_ms, 0),
+    empty_publish_settle_ms: option.unwrap(override.empty_publish_settle_ms, 0),
+    open_settle_ms: option.unwrap(override.open_settle_ms, 0),
     full_change_as_range: override.full_change_as_range,
     generic_names_carry_params: option.unwrap(
       override.generic_names_carry_params,
@@ -403,6 +405,11 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.publish_settle_ms,
       default.publish_settle_ms,
     ),
+    empty_publish_settle_ms: option.unwrap(
+      ovr.empty_publish_settle_ms,
+      default.empty_publish_settle_ms,
+    ),
+    open_settle_ms: option.unwrap(ovr.open_settle_ms, default.open_settle_ms),
     full_change_as_range: option.or(
       ovr.full_change_as_range,
       default.full_change_as_range,
@@ -447,6 +454,8 @@ fn server_from_override(
     lazy_workspace_index_ms: option.unwrap(ovr.lazy_workspace_index_ms, 0),
     save_check_grace_ms: option.unwrap(ovr.save_check_grace_ms, 0),
     publish_settle_ms: option.unwrap(ovr.publish_settle_ms, 0),
+    empty_publish_settle_ms: option.unwrap(ovr.empty_publish_settle_ms, 0),
+    open_settle_ms: option.unwrap(ovr.open_settle_ms, 0),
     full_change_as_range: ovr.full_change_as_range,
     generic_names_carry_params: option.unwrap(
       ovr.generic_names_carry_params,
@@ -525,6 +534,14 @@ fn merge_primary(
     publish_settle_ms: option.unwrap(
       override.publish_settle_ms,
       primary.publish_settle_ms,
+    ),
+    empty_publish_settle_ms: option.unwrap(
+      override.empty_publish_settle_ms,
+      primary.empty_publish_settle_ms,
+    ),
+    open_settle_ms: option.unwrap(
+      override.open_settle_ms,
+      primary.open_settle_ms,
     ),
     full_change_as_range: option.or(
       override.full_change_as_range,

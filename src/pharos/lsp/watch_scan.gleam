@@ -128,6 +128,10 @@ pub opaque type State {
     cheap: Bool,
     /// Directories left in the pass in progress; [] when none is.
     queue: List(String),
+    /// Squeezed scans' own cursor through the tree once the first pass is
+    /// done, so short questions still reach every directory in turn
+    /// without touching the pass, the interval or cheapness.
+    rotation: List(String),
     pass_started_ms: Int,
     /// When the last finished pass began, and how long it took, if it ran
     /// within one scan.
@@ -156,6 +160,7 @@ pub fn new(root: String, skip: List(String), spawn_second: Int) -> State {
     baseline_done: False,
     cheap: False,
     queue: [],
+    rotation: [],
     pass_started_ms: 0,
     last_pass_started_ms: None,
     last_pass_one_scan_ms: None,
@@ -261,7 +266,7 @@ pub fn scan_near(
   // finishing one here would count it toward cheapness from a squeezed
   // budget.
   let #(state, events) = case state.baseline_done {
-    True -> #(state, events)
+    True -> walk_rotation(state, walk, events, visits)
     False -> {
       let state = case state.queue {
         [] -> State(..state, queue: [state.root], pass_started_ms: now_ms)
@@ -288,6 +293,45 @@ pub fn scan_near(
     list.reverse(events),
     coverage,
   )
+}
+
+/// A squeezed scan after the first pass: the rest of its budget goes to
+/// the rotating cursor, restarted at the root when it has gone round.
+fn walk_rotation(
+  state: State,
+  walk: Walk,
+  events: List(Event),
+  visits: Int,
+) -> #(State, List(Event)) {
+  let state = case state.rotation {
+    [] -> State(..state, rotation: [state.root])
+    _ -> state
+  }
+  case state.rotation {
+    [] -> #(state, events)
+    [dir, ..rest] ->
+      case walk.clock() >= walk.deadline {
+        True -> #(state, events)
+        False ->
+          case
+            visit(State(..state, rotation: rest), dir, walk, visits > 0, events)
+          {
+            Error(Nil) -> #(state, events)
+            Ok(#(state, subdirs, events)) ->
+              case list.append(subdirs, state.rotation) {
+                // Gone round once: stop until the next question.
+                [] -> #(State(..state, rotation: []), events)
+                more ->
+                  walk_rotation(
+                    State(..state, rotation: more),
+                    walk,
+                    events,
+                    visits + 1,
+                  )
+              }
+          }
+      }
+  }
 }
 
 fn finish_pass(

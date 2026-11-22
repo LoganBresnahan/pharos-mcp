@@ -374,12 +374,33 @@ pub fn squeezed_scans_still_finish_the_first_pass_test() {
   // squeezed scan spends what's left on the first pass, which finishes.
   let files = dirs(20)
   let state = finish_near(watch_scan.new("/w", [], 150), files, 50)
-  // Once done, a squeezed scan starts no later pass: the full scans do.
+  // After it, short questions still reach a change far from the asked
+  // directory: a rotating cursor walks the rest of the tree in turn
+  // (verifier: "checked 4 of about 5005 directories" every time).
   let files = dict.insert(files, "/w/d7/new.go", #("n", 300, 300, 600))
-  let now = ticking()
-  let #(_, events, _) =
-    watch_scan.scan_near(state, Some("/w/d1"), now, 50, ticking, fs(files, 300))
-  events |> should.equal([])
+  find_far(state, files, 60) |> should.be_true
+}
+
+fn find_far(state, files, tries) {
+  case tries {
+    0 -> False
+    _ -> {
+      let now = ticking()
+      let #(state, events, _) =
+        watch_scan.scan_near(
+          state,
+          Some("/w/d1"),
+          now,
+          4,
+          ticking,
+          fs(files, 300),
+        )
+      case list.contains(events, Event("/w/d7/new.go", Created)) {
+        True -> True
+        False -> find_far(state, files, tries - 1)
+      }
+    }
+  }
 }
 
 fn finish_near(state, files, tries) {

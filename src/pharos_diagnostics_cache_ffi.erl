@@ -53,7 +53,8 @@
          mark_batch/1, batch_status/2, stamp_status/4, close_status/4, expect/4,
          expect_closed/3, expect_batch/2, forget_proc/1, lookup/4,
          settle_left/2, progress/2, progress_quiet/5,
-         progress_active/2, sync_age_ms/3, publish_age_ms/3]).
+         progress_active/2, sync_age_ms/3, publish_age_ms/3,
+         mark_opened/3, last_sync_was_open/3]).
 
 -define(TABLE, pharos_diagnostics_cache).
 -define(SYNCED, pharos_diagnostics_synced).
@@ -303,6 +304,7 @@ forget_proc(Pid) ->
     ets:match_delete(?PROGRESS, {{sync, Pid, '_', '_'}, '_'}),
     ets:match_delete(?PROGRESS, {{provisional, '_', '_', Pid}, '_'}),
     ets:match_delete(?PROGRESS, {{published, '_', '_', Pid}, '_'}),
+    ets:match_delete(?PROGRESS, {{opened, '_', '_', Pid}, '_'}),
     ets:delete(?PROGRESS, {versioned, Pid}),
     nil.
 
@@ -416,4 +418,18 @@ publish_age_ms(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
     case ets:lookup(?PROGRESS, {published, key(Uri0), ServerId, Pid}) of
         [{_, Ms}] -> now_ms() - Ms;
         [] -> -1
+    end.
+
+%% #45. Called by the proc after it writes a didOpen at `Version`.
+mark_opened(Uri0, ServerId, Version) when is_binary(Uri0), is_binary(ServerId) ->
+    true = ets:insert(?PROGRESS, {{opened, key(Uri0), ServerId, self()}, Version}),
+    nil.
+
+%% #45. Was the latest sync of `Uri0` written to proc `Pid` its didOpen?
+last_sync_was_open(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
+    case {ets:lookup(?PROGRESS, {opened, Uri, ServerId, Pid}),
+          ets:lookup(?SYNCED, {Uri, ServerId, Pid})} of
+        {[{_, V}], [{_, _, V}]} -> true;
+        _ -> false
     end.

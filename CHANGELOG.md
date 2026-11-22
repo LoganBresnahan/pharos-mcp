@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publishes (clangd, when a document is reopened), no longer counts as the answer while the
   real one may follow, and a reopened document is saved when the server asks for saves, so
   rust-analyzer re-checks it (#45).
+- get_diagnostics on jdtls waits up to 600 ms of quiet before answering an empty set (jdtls can
+  publish an interim `[]` without a version about 0.5 s before the real one), and on
+  perlnavigator the first answer after opening a file waits up to 400 ms (its Perl::Critic
+  findings come about 0.35 s after the open). `empty_publish_settle_ms` and `open_settle_ms` set
+  either for any server (#45).
 - pharos answers a server's `workspace/diagnostic/refresh`, `workspace/semanticTokens/refresh`,
   `workspace/inlayHint/refresh`, `workspace/codeLens/refresh`, `workspace/inlineValue/refresh`
   and `workspace/foldingRange/refresh` requests with an empty success, as VS Code does. They were

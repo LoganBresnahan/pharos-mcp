@@ -312,6 +312,16 @@
 # command = "mylang-lsp"
 # file_extensions = [".my"]
 # publish_settle_ms = 300
+#
+# Two narrower waits, each used when longer than `publish_settle_ms`:
+# `empty_publish_settle_ms` when the set an answer would take is empty
+# (bundled: jdtls 600, which can publish an interim `[]` without a
+# version about 0.5 s before the real set), and `open_settle_ms` for the
+# first answer after a document is opened (bundled: perlnavigator 400,
+# whose Perl::Critic findings come about 0.35 s after an open). Others 0.
+#
+# empty_publish_settle_ms = 600
+# open_settle_ms = 400
 
 # 4d) How a server is sent an edit (ADR-038 amendment (A)).
 #

@@ -239,6 +239,8 @@ fn server_keys() -> List(#(String, Shape)) {
     #("lazy_workspace_index_ms", off),
     #("save_check_grace_ms", off),
     #("publish_settle_ms", off),
+    #("empty_publish_settle_ms", off),
+    #("open_settle_ms", off),
     #("full_change_as_range", Boolean),
     #("generic_names_carry_params", Boolean),
     #("workspace_symbol_modules_only", Boolean),

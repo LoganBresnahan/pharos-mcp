@@ -1543,8 +1543,12 @@ def _phased_answers(sb, mode, settle_ms):
     server that publishes each change in two steps (STUB_LSP_DIAGNOSTICS
     `mode`); return the answers that lacked the error while it was
     there."""
-    sb.write_toml("publish_settle_ms = %d\n" % settle_ms if settle_ms else "")
-    a = sb.start({"STUB_LSP_DIAGNOSTICS": mode, "STUB_LSP_PHASE_MS": "150"})
+    return _phased_answers_with(sb, mode, "publish_settle_ms = %d\n" % settle_ms if settle_ms else "", 150)
+
+
+def _phased_answers_with(sb, mode, toml, phase_ms):
+    sb.write_toml(toml)
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": mode, "STUB_LSP_PHASE_MS": str(phase_ms)})
     a.initialize()
     path = os.path.join(sb.fixture, "main.stub")
     # A first question, so the server has published (and versioned) once.
@@ -1585,6 +1589,33 @@ def t_unversioned_interim_empty_is_provisional(sb):
     real one, with no setting."""
     wrong = _phased_answers(sb, "push-interim", 0)
     check(wrong == [], "answered the unversioned interim []: %s" % wrong)
+
+
+def t_interim_empty_on_a_server_that_never_versions(sb):
+    """#45 polish 2: jdtls sometimes publishes an interim [], without a
+    version, about 0.5 s before the real set, and never versions a
+    publish, so the provisional rule can't see it. With the server's
+    empty_publish_settle_ms, an empty set waits for quiet first."""
+    wrong = _phased_answers_with(sb, "push-interim-nov", "empty_publish_settle_ms = 600\n", 400)
+    check(wrong == [], "answered the interim []: %s" % wrong)
+
+
+def t_first_answer_after_open_settles(sb):
+    """#45 polish 2: perlnavigator publishes [] about 35 ms after a didOpen
+    and Perl::Critic's set about 355 ms; the open's own answer was []
+    unmarked. With the server's open_settle_ms, the first answer after a
+    didOpen waits for quiet that long; later changes don't."""
+    sb.write_toml("open_settle_ms = 500\n")
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push-open-late", "STUB_LSP_PHASE_MS": "300"})
+    a.initialize()
+    uri = stub_file(sb, "open.stub", "ERROR at open\n")
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 5000})
+    check("stub error on line 0" in d, "the open's answer lacked the late set: %s" % d[-300:])
+    stub_file(sb, "open.stub", "fine\nERROR later\n")
+    t0 = time.time()
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 5000})
+    check("stub error on line 1" in d, "after a change: %s" % d[-300:])
+    check(time.time() - t0 < 0.45, "a change waited the open settle: %.2f s" % (time.time() - t0))
 
 
 def t_config_warnings_without_lsp_tools(sb):
@@ -2451,6 +2482,8 @@ SCENARIOS = [
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),
     ("unversioned_interim_empty_is_provisional", t_unversioned_interim_empty_is_provisional),
+    ("interim_empty_on_a_server_that_never_versions", t_interim_empty_on_a_server_that_never_versions),
+    ("first_answer_after_open_settles", t_first_answer_after_open_settles),
     ("project_config_names", t_project_config_names),
 ]
 

@@ -977,8 +977,11 @@ fn write_ops(
           // Stamp after the write and before any later frame is read:
           // every publish this actor caches from here on comes after it.
           case op {
-            doc_sync.OpOpen(uri:, version:, ..)
-            | doc_sync.OpChange(uri:, version:, ..) ->
+            doc_sync.OpOpen(uri:, version:, ..) -> {
+              diagnostics_cache.mark_synced(uri, server_id, version)
+              diagnostics_cache.mark_opened(uri, server_id, version)
+            }
+            doc_sync.OpChange(uri:, version:, ..) ->
               diagnostics_cache.mark_synced(uri, server_id, version)
             doc_sync.OpClose(uri:) ->
               diagnostics_cache.mark_closed(uri, server_id)

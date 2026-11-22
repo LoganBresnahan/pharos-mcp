@@ -73,6 +73,12 @@ version, applies didOpen / didChange / didClose, and logs what it got:
                               real set, both at the document's version.
                               "push-interim" (#45, jdtls): the same, but
                               the first, empty set has no version.
+                              "push-interim-nov" (#45, jdtls as it is):
+                              neither publish has a version.
+                              "push-open-late" (#45, perlnavigator): after
+                              a didOpen, [] and the real set PHASE_MS
+                              later, both without a version; after a
+                              change, the real set at once.
                               unset: never publish. "push": publish after
                               every open/change, one diagnostic per line
                               containing ERROR. "push-suppress": the same,
@@ -278,6 +284,7 @@ HOVER_RETRY_STATE: dict[str, int] = {}
 DOCS: dict[str, dict] = {}
 # uri -> the diagnostics last published for it
 LAST_PUBLISHED: dict[str, list] = {}
+OPEN_VERSION: dict[str, int] = {}
 
 
 def read_message(stream):
@@ -507,6 +514,7 @@ def apply_sync(method, params):
     uri = doc.get("uri")
     if method == "textDocument/didOpen":
         DOCS[uri] = {"version": doc.get("version"), "text": doc.get("text", "")}
+        OPEN_VERSION[uri] = doc.get("version")
     elif method == "textDocument/didChange":
         changes = params.get("contentChanges") or []
         if os.environ.get("STUB_LSP_RANGED_ONLY") and uri in DOCS:
@@ -675,7 +683,10 @@ def maybe_publish(stdout, uri):
         return
     doc = DOCS[uri]
     diagnostics = stub_diagnostics(doc["text"]) + dep_diagnostics()
-    if mode in ("push-phased", "push-interim"):
+    opened = DOCS[uri].get("version") == OPEN_VERSION.get(uri)
+    if mode == "push-open-late" and not opened:
+        mode = "push-versionless"
+    if mode in ("push-phased", "push-interim", "push-interim-nov", "push-open-late"):
         # #45: elp publishes [] and then the real set at the same version;
         # jdtls sometimes an empty set with no version first.
         first = {"uri": published_uri(uri), "diagnostics": []}
@@ -683,7 +694,9 @@ def maybe_publish(stdout, uri):
             first["version"] = doc["version"]
         write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
                                "params": first})
-        later = {"uri": published_uri(uri), "diagnostics": diagnostics, "version": doc["version"]}
+        later = {"uri": published_uri(uri), "diagnostics": diagnostics}
+        if mode in ("push-phased", "push-interim"):
+            later["version"] = doc["version"]
         delay = int(os.environ.get("STUB_LSP_PHASE_MS", "150")) / 1000.0
         timer = threading.Timer(delay, lambda: write_message(stdout, {
             "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": later}))

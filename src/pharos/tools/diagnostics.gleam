@@ -162,17 +162,17 @@ fn attempt_single(
     Error(err) -> Error(map_session_error(err))
     Ok(lsp) -> {
       let primary = languages.primary_server(config)
-      let #(server_id, mode, grace_ms, settle_ms, pull_after_change_ms) = case
+      let #(server_id, mode, grace_ms, settle, pull_after_change_ms) = case
         primary
       {
         Ok(server) -> #(
           server.id,
           server.diagnostics_mode,
           server.save_check_grace_ms,
-          server.publish_settle_ms,
+          settle_of(server),
           server.pull_after_change_ms,
         )
-        Error(_) -> #("", Push, 0, 0, 0)
+        Error(_) -> #("", Push, 0, no_settle, 0)
       }
       let result = case mode {
         Push ->
@@ -181,7 +181,7 @@ fn attempt_single(
             server_id,
             proc.pid(lsp),
             grace_ms,
-            settle_ms,
+            settle,
             deadline_ms,
           ))
         Pull ->
@@ -312,7 +312,7 @@ fn server_report(
           server.id,
           proc.pid(lsp),
           server.save_check_grace_ms,
-          server.publish_settle_ms,
+          settle_of(server),
           deadline_ms,
         )
       {
@@ -344,7 +344,7 @@ fn server_report(
               server.id,
               proc.pid(lsp),
               server.save_check_grace_ms,
-              server.publish_settle_ms,
+              settle_of(server),
               deadline_ms,
             )
           {
@@ -424,12 +424,61 @@ type PushEntry {
 ///   deadline ends the wait first, the entry is answered marked;
 /// - missing (nothing cached, or only from before pharos closed the
 ///   document): wait until the call's deadline for a first publish.
+/// #45: a server's settle values (ADR-038 amendment #45).
+pub type Settle {
+  Settle(publish_ms: Int, empty_ms: Int, open_ms: Int)
+}
+
+const no_settle = Settle(0, 0, 0)
+
+fn settle_of(server: ServerConfig) -> Settle {
+  Settle(
+    server.publish_settle_ms,
+    server.empty_publish_settle_ms,
+    server.open_settle_ms,
+  )
+}
+
+/// The quiet an answer about `params` waits for: the server's
+/// `publish_settle_ms`, longer when the set is empty (`empty_ms`) or the
+/// document's latest sync was its didOpen (`open_ms`).
+fn settle_for(
+  settle: Settle,
+  params: Dynamic,
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+) -> Int {
+  let empty = case settle.empty_ms > 0 {
+    True ->
+      case
+        decode.run(
+          params,
+          decode.at(["diagnostics"], decode.list(decode.dynamic)),
+        )
+      {
+        Ok([]) -> settle.empty_ms
+        _ -> 0
+      }
+    False -> 0
+  }
+  let open = case settle.open_ms > 0 {
+    True ->
+      case diagnostics_cache.last_sync_was_open(file_uri, server_id, pid) {
+        True -> settle.open_ms
+        False -> 0
+      }
+    False -> 0
+  }
+  int.max(settle.publish_ms, int.max(empty, open))
+}
+
 fn resolve_push(
   file_uri: String,
   server_id: String,
   pid: Pid,
   grace_ms: Int,
-  settle_ms: Int,
+  settle: Settle,
   deadline_ms: Int,
 ) -> PushEntry {
   // #30: while the server is still working on this document's sync (a
@@ -442,15 +491,19 @@ fn resolve_push(
   case await_progress_quiet(file_uri, server_id, pid, grace_ms, deadline_ms) {
     True ->
       case resolve_push_now(file_uri, server_id, pid, deadline_ms) {
-        FreshEntry(params) if settle_ms > 0 ->
-          settle_publishes(
-            file_uri,
-            server_id,
-            pid,
-            settle_ms,
-            deadline_ms,
-            params,
-          )
+        FreshEntry(params) ->
+          case settle_for(settle, params, file_uri, server_id, pid) {
+            0 -> FreshEntry(params)
+            settle_ms ->
+              settle_publishes(
+                file_uri,
+                server_id,
+                pid,
+                settle_ms,
+                deadline_ms,
+                params,
+              )
+          }
         other -> other
       }
     False ->
@@ -625,12 +678,10 @@ fn push_result(
   server_id: String,
   pid: Pid,
   grace_ms: Int,
-  settle_ms: Int,
+  settle: Settle,
   deadline_ms: Int,
 ) -> DiagnosticsResult {
-  case
-    resolve_push(file_uri, server_id, pid, grace_ms, settle_ms, deadline_ms)
-  {
+  case resolve_push(file_uri, server_id, pid, grace_ms, settle, deadline_ms) {
     FreshEntry(params) ->
       Diagnostics(
         uri: file_uri,
@@ -843,7 +894,16 @@ fn tsserver_result(
       )
     Error(reason) -> {
       log_tsserver_fallback(server_id, reason)
-      case resolve_push(file_uri, server_id, proc.pid(lsp), 0, 0, deadline_ms) {
+      case
+        resolve_push(
+          file_uri,
+          server_id,
+          proc.pid(lsp),
+          0,
+          no_settle,
+          deadline_ms,
+        )
+      {
         FreshEntry(params) | CarriedEntry(params) ->
           Diagnostics(
             uri: file_uri,

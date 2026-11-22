@@ -127,8 +127,11 @@ These are the servers' own limits: pharos sends the events their watchers ask fo
   scanner at most the budget plus 1 s, never past its deadline, then goes on labelled. A scan
   squeezed below the budget by the deadline gives half its time to the asked file's directory
   and its ancestors and the rest to the first pass, if that hasn't finished, so a run of short
-  questions still completes it; it leaves the interval, the tree's cheapness and any later pass
-  as they were, so a short timeout doesn't make a small tree look expensive. The question sends
+  questions still completes it; after the first pass, the rest goes to a rotating cursor of its
+  own that walks the tree a few directories per question and starts again at the root, so a
+  client whose questions are all short still has every change found in turn. It leaves the
+  interval, the tree's cheapness and the full scans' pass as they were, so a short timeout
+  doesn't make a small tree look expensive. The question sends
   the scanner its request and waits with a bounded receive: a reply that comes too late is
   never fatal (a timed-out `process.call` raises, and took the question with it in the first
   revision). The reply goes to an alias of the asking process, dropped when the wait ends, so a

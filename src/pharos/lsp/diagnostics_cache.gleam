@@ -236,3 +236,12 @@ pub fn sync_age_ms(uri: String, server_id: String, pid: Pid) -> Int
 /// it never has.
 @external(erlang, "pharos_diagnostics_cache_ffi", "publish_age_ms")
 pub fn publish_age_ms(uri: String, server_id: String, pid: Pid) -> Int
+
+/// #45: the calling proc wrote the document's didOpen at `version`.
+@external(erlang, "pharos_diagnostics_cache_ffi", "mark_opened")
+pub fn mark_opened(uri: String, server_id: String, version: Int) -> Nil
+
+/// #45: was the latest sync of `uri` written to proc `pid` its didOpen
+/// (not a later change)?
+@external(erlang, "pharos_diagnostics_cache_ffi", "last_sync_was_open")
+pub fn last_sync_was_open(uri: String, server_id: String, pid: Pid) -> Bool
