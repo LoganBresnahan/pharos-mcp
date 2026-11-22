@@ -270,20 +270,22 @@
 
 # 4b) Lazy workspace indexers (#27).
 #
-# Some servers index the project after the first file opens without
-# reporting progress, and answer workspace/symbol empty until they're
-# done. `lazy_workspace_index_ms` is how long after the session is ready
-# that can happen; find_symbol retries an empty search within it (at most
-# 15 s per call). Bundled: clangd 2000, haskell-language-server 3000,
-# lua-language-server 3000, perlnavigator 3000, bash-language-server 20000, next-ls 20000;
-# others 0 (off). Raise it for a big project, or set it for your own
+# Some servers index the project after the first file opens, and answer
+# workspace/symbol empty until they're done. find_symbol retries an empty
+# search (at most 15 s per call) while the server reports indexing
+# progress, for 1.5 s after it ends, and for 3 s after the session's first
+# file is opened, on every server (#44). `lazy_workspace_index_ms`
+# lengthens that grace for a server that indexes a big project without
+# reporting progress. Bundled: pyright 10000, bash-language-server 6000;
+# others use the 3 s. Raise it for a big project, or set it for your own
 # server:
 #
 # [languages.cpp]
 # lazy_workspace_index_ms = 5000
 #
-# Any server that reports indexing progress is also retried while that
-# progress runs, whatever this value.
+# Search limits no wait fixes: clangd indexes files that aren't open only
+# with a compile_commands.json, and perlnavigator's workspace/symbol
+# searches the packages under the root `lib/` only.
 
 # 4c) Checks that start on save (#30).
 #

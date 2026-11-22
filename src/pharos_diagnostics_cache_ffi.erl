@@ -54,7 +54,8 @@
          expect_closed/3, expect_batch/2, forget_proc/1, lookup/4,
          settle_left/2, progress/2, progress_quiet/5,
          progress_active/2, sync_age_ms/3, publish_age_ms/3,
-         mark_opened/3, last_sync_was_open/3]).
+         mark_opened/3, last_sync_was_open/3, first_open_age_ms/1,
+         progress_ended_within/2]).
 
 -define(TABLE, pharos_diagnostics_cache).
 -define(SYNCED, pharos_diagnostics_synced).
@@ -251,7 +252,8 @@ progress(Token, Kind) when is_binary(Token), is_binary(Kind) ->
         <<"begin">> ->
             true = ets:insert(?PROGRESS, {{Self, Token}, seq(), now_ms()});
         <<"end">> ->
-            ets:delete(?PROGRESS, {Self, Token});
+            ets:delete(?PROGRESS, {Self, Token}),
+            ets:insert(?PROGRESS, {{progress_end, Self}, now_ms()});
         _ ->
             ok
     end,
@@ -306,6 +308,8 @@ forget_proc(Pid) ->
     ets:match_delete(?PROGRESS, {{published, '_', '_', Pid}, '_'}),
     ets:match_delete(?PROGRESS, {{opened, '_', '_', Pid}, '_'}),
     ets:delete(?PROGRESS, {versioned, Pid}),
+    ets:delete(?PROGRESS, {first_open, Pid}),
+    ets:delete(?PROGRESS, {progress_end, Pid}),
     nil.
 
 %% fresh | carried_over | missing for the entry proc `Pid` cached, as
@@ -423,7 +427,25 @@ publish_age_ms(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
 %% #45. Called by the proc after it writes a didOpen at `Version`.
 mark_opened(Uri0, ServerId, Version) when is_binary(Uri0), is_binary(ServerId) ->
     true = ets:insert(?PROGRESS, {{opened, key(Uri0), ServerId, self()}, Version}),
+    %% #44: the session's first didOpen, which starts the cold grace.
+    ets:insert_new(?PROGRESS, {{first_open, self()}, now_ms()}),
     nil.
+
+%% #44. ms since proc `Pid` wrote its first didOpen; -1 if it hasn't.
+first_open_age_ms(Pid) ->
+    case ets:lookup(?PROGRESS, {first_open, Pid}) of
+        [{_, Ms}] -> now_ms() - Ms;
+        [] -> -1
+    end.
+
+%% #44. Did a progress of proc `Pid` end less than `Ms` ago? HLS leaves
+%% about 1 s between its Indexing tokens, and lua-ls's results land just
+%% after its progress ends.
+progress_ended_within(Pid, Ms) when is_integer(Ms) ->
+    case ets:lookup(?PROGRESS, {progress_end, Pid}) of
+        [{_, At}] -> now_ms() - At < Ms;
+        [] -> false
+    end.
 
 %% #45. Was the latest sync of `Uri0` written to proc `Pid` its didOpen?
 last_sync_was_open(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->

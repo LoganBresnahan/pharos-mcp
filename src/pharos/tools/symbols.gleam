@@ -1574,15 +1574,27 @@ const cold_retry_cap_ms = 15_000
 /// A progress running longer than this is taken as stuck, not indexing.
 const indexing_stuck_ms = 30_000
 
+/// #44: every server's cold grace, from its session's first didOpen. It
+/// covers every gap measured before a server's progress begins or its
+/// index fills (lua-ls ≤1.3 s, HLS ≤1.6 s, next-ls about 2 s,
+/// perlnavigator 0.5 s). `lazy_workspace_index_ms` lengthens it.
+const cold_grace_ms = 3000
+
+/// #44: a progress that ended this recently still counts as indexing:
+/// HLS leaves about 1 s between its Indexing tokens, and lua-ls's
+/// results land just after its progress ends.
+const progress_settle_ms = 1500
+
 /// Run `ask` (given the timeout each attempt may use). While the server is
 /// still indexing and the answer is empty, null or an internal error
 /// (-32603), ask again every second, each attempt getting only what's left
 /// of min(the call's timeout, `cold_retry_cap_ms`). "Still indexing" means
-/// the server has a progress running (big projects), or its session is
-/// younger than the server's `lazy_workspace_index_ms` (clangd, HLS,
-/// lua-language-server, bash-language-server, next-ls index small projects
-/// without reporting any). Any other empty answer is
-/// taken as it is, so a typo or a missing symbol answers at once (#27).
+/// the server has a progress running, or one that ended under
+/// `progress_settle_ms` ago, or its session's first didOpen was under
+/// max(`cold_grace_ms`, the server's `lazy_workspace_index_ms`) ago
+/// (pyright and bash-language-server index big projects without
+/// reporting progress). Any other empty answer is taken as it is, so a
+/// typo or a missing symbol answers at once (#27, #44).
 fn retry_while_cold(
   lsp: proc.Proc,
   started: Int,
@@ -1616,9 +1628,15 @@ fn retry_loop(
     Error(lifecycle.ServerError(code: -32_603, ..)) -> True
     Error(_) -> False
   }
+  let pid = proc.pid(lsp)
+  let age = case diagnostics_cache.first_open_age_ms(pid) {
+    -1 -> proc.age_ms(lsp)
+    since_open -> since_open
+  }
   let still_indexing =
-    diagnostics_cache.progress_active(proc.pid(lsp), indexing_stuck_ms)
-    || proc.age_ms(lsp) < cold_window_ms
+    diagnostics_cache.progress_active(pid, indexing_stuck_ms)
+    || diagnostics_cache.progress_ended_within(pid, progress_settle_ms)
+    || age < int.max(cold_grace_ms, cold_window_ms)
   let elapsed = monotonic_ms() - started
   case
     worth_retrying && still_indexing && elapsed + cold_retry_step_ms < budget

@@ -245,3 +245,11 @@ pub fn mark_opened(uri: String, server_id: String, version: Int) -> Nil
 /// (not a later change)?
 @external(erlang, "pharos_diagnostics_cache_ffi", "last_sync_was_open")
 pub fn last_sync_was_open(uri: String, server_id: String, pid: Pid) -> Bool
+
+/// #44: ms since proc `pid` wrote its first didOpen; -1 if it hasn't.
+@external(erlang, "pharos_diagnostics_cache_ffi", "first_open_age_ms")
+pub fn first_open_age_ms(pid: Pid) -> Int
+
+/// #44: did a progress of proc `pid` end less than `ms` ago?
+@external(erlang, "pharos_diagnostics_cache_ffi", "progress_ended_within")
+pub fn progress_ended_within(pid: Pid, ms: Int) -> Bool

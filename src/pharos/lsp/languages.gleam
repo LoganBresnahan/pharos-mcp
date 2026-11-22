@@ -230,13 +230,13 @@ pub type ServerConfig {
     /// override per-language only when empirical testing shows the
     /// default probe is unreliable.
     warm_probe: WarmProbe,
-    /// #27: how long, in ms after its session became ready, the server
-    /// may still answer workspace searches empty (or with an internal
-    /// error) while it indexes the project without reporting progress:
-    /// clangd, HLS, lua-language-server and perlnavigator for a second or
-    /// so after the first file opens, bash-language-server and next-ls for several.
-    /// find_symbol retries an empty search within this window (and,
-    /// for any server, while it reports progress). 0: never.
+    /// #27, #44: how long, in ms after its session's first didOpen, the
+    /// server may still answer workspace searches empty (or with an
+    /// internal error) while it indexes a big project without reporting
+    /// progress (pyright, bash-language-server). find_symbol retries an
+    /// empty search within max(this, a uniform 3 s grace every server
+    /// gets), while the server reports progress, and for 1.5 s after it
+    /// ends. 0: the 3 s grace only.
     lazy_workspace_index_ms: Int,
     /// #30: how long after a document's sync get_diagnostics waits for
     /// the server to begin a check it starts on save (rust-analyzer's
@@ -779,7 +779,7 @@ fn elixir() -> LanguageConfig {
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
-        lazy_workspace_index_ms: 20_000,
+        lazy_workspace_index_ms: 0,
         save_check_grace_ms: 0,
         publish_settle_ms: 0,
         empty_publish_settle_ms: 0,
@@ -918,7 +918,7 @@ fn cpp() -> LanguageConfig {
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
-        lazy_workspace_index_ms: 2000,
+        lazy_workspace_index_ms: 0,
         save_check_grace_ms: 0,
         publish_settle_ms: 0,
         empty_publish_settle_ms: 0,
@@ -1068,7 +1068,7 @@ fn haskell() -> LanguageConfig {
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
-        lazy_workspace_index_ms: 3000,
+        lazy_workspace_index_ms: 0,
         save_check_grace_ms: 0,
         publish_settle_ms: 0,
         empty_publish_settle_ms: 0,
@@ -1120,7 +1120,7 @@ fn perl() -> LanguageConfig {
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
-        lazy_workspace_index_ms: 3000,
+        lazy_workspace_index_ms: 0,
         save_check_grace_ms: 0,
         // #45: perlnavigator publishes perl -c's set and then, within 58 ms,
         // one with Perl::Critic's too; it repeats the set about every 300 ms,
@@ -1651,7 +1651,7 @@ fn lua() -> LanguageConfig {
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
-        lazy_workspace_index_ms: 3000,
+        lazy_workspace_index_ms: 0,
         save_check_grace_ms: 0,
         publish_settle_ms: 0,
         empty_publish_settle_ms: 0,
@@ -1692,14 +1692,24 @@ fn bash() -> LanguageConfig {
         command: "bash-language-server",
         args: ["start"],
         initialization_options: json.object([]),
-        workspace_configuration: None,
+        // #44: its default background analysis stops at 500 files, so
+        // half of a large shell repo was never findable (4 of 8 targets
+        // in termux-packages); 5000 found all 8.
+        workspace_configuration: Some(
+          dict.from_list([
+            #(
+              "bashIde",
+              json.object([#("backgroundAnalysisMaxFiles", json.int(5000))]),
+            ),
+          ]),
+        ),
         methods: All,
         diagnostics_mode: Push,
         readiness_token: None,
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
-        lazy_workspace_index_ms: 20_000,
+        lazy_workspace_index_ms: 6000,
         save_check_grace_ms: 0,
         publish_settle_ms: 0,
         empty_publish_settle_ms: 0,
@@ -1755,7 +1765,7 @@ fn python() -> LanguageConfig {
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
-        lazy_workspace_index_ms: 0,
+        lazy_workspace_index_ms: 10_000,
         save_check_grace_ms: 0,
         publish_settle_ms: 0,
         empty_publish_settle_ms: 0,

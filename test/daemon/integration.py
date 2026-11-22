@@ -2088,15 +2088,32 @@ def t_find_symbol_cold_index_lazy_flag(sb):
 
 
 def t_find_symbol_cold_miss_is_prompt(sb):
-    """#27 (verifier-two): a first-call typo on a server with no window that
-    isn't indexing answers at once. Rev 1 retried every miss in a
-    session's first 20 s, about 14 s each."""
+    """#27, #44: a first-call typo costs at most the uniform cold grace (3 s
+    from the session's first didOpen), never the old per-server windows
+    (up to 20 s, about 14 s per miss); once the grace has passed, a miss
+    answers at once."""
     a, uri = _cold_find(sb, {})
     t0 = time.time()
     out = a.tool(10, "find_symbol", {"name_path": "absent_zz9", "scope_uri": uri})
     took = time.time() - t0
     check('"status":"not_found"' in out, "cold miss: %s" % out[-200:])
-    check(took < 2, "a first-call miss took %.1fs: it was retried" % took)
+    check(took < 4, "a first-call miss took %.1fs: past the grace" % took)
+    time.sleep(max(0, 3.2 - (time.time() - t0)))
+    t0 = time.time()
+    out = a.tool(11, "find_symbol", {"name_path": "absent_zz8", "scope_uri": uri})
+    took = time.time() - t0
+    check('"status":"not_found"' in out and took < 1.5,
+          "a miss after the grace took %.1fs: %s" % (took, out[-200:]))
+
+
+def t_find_symbol_cold_grace_for_every_server(sb):
+    """#44: a server in no table (no progress, no lazy_workspace_index_ms)
+    used to get no wait at all, so a search right after its first didOpen
+    answered empty while it was still indexing. Every server now gets the
+    grace."""
+    a, uri = _cold_find(sb, {"STUB_LSP_INDEX_DELAY_MS": "1500"})
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check('"status":"single"' in out, "cold find_symbol, no window set: %s" % out[-300:])
 
 
 def t_find_symbol_lazy_retry_is_a_deadline(sb):
@@ -2446,6 +2463,7 @@ SCENARIOS = [
     ("find_symbol_library_outside_the_root", t_find_symbol_library_outside_the_root),
     ("find_symbol_library_guess_is_a_near_miss", t_find_symbol_library_guess_is_a_near_miss),
     ("find_symbol_generic_class", t_find_symbol_generic_class),
+    ("find_symbol_cold_grace_for_every_server", t_find_symbol_cold_grace_for_every_server),
     ("find_symbol_modules_only_server", t_find_symbol_modules_only_server),
     ("find_symbol_type_member_layouts", t_find_symbol_type_member_layouts),
     ("find_symbol_generic_names_need_the_flag", t_find_symbol_generic_names_need_the_flag),
