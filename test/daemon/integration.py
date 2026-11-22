@@ -1538,6 +1538,55 @@ def t_watched_files_tiny_timeout_still_answers(sb):
           % (watched_events(sb), blocks[1:], scans()[-12:]))
 
 
+def _phased_answers(sb, mode, settle_ms):
+    """Alternate an ERROR line in and out, asking after each write, on a
+    server that publishes each change in two steps (STUB_LSP_DIAGNOSTICS
+    `mode`); return the answers that lacked the error while it was
+    there."""
+    sb.write_toml("publish_settle_ms = %d\n" % settle_ms if settle_ms else "")
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": mode, "STUB_LSP_PHASE_MS": "150"})
+    a.initialize()
+    path = os.path.join(sb.fixture, "main.stub")
+    # A first question, so the server has published (and versioned) once.
+    with open(path, "w") as f:
+        f.write("start\n")
+    a.tool(9, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+    time.sleep(0.4)
+    wrong = []
+    for i in range(6):
+        err = i % 2 == 0
+        with open(path, "w") as f:
+            f.write("ERROR here\n" if err else "fine\n")
+        d = a.tool(10 + i, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+        if err and "stub error on line 0" not in d:
+            wrong.append((i, d[-200:]))
+    return wrong
+
+
+def t_phased_publish_settles(sb):
+    """#45: elp publishes [] and then the real set, at the same version. An
+    answer taken from the first said "no errors", unmarked. With the
+    server's publish_settle_ms, get_diagnostics waits for it to go quiet
+    and answers the real set."""
+    wrong = _phased_answers(sb, "push-phased", 300)
+    check(wrong == [], "answered the interim []: %s" % wrong)
+
+
+def t_phased_publish_control(sb):
+    """#45 control: without publish_settle_ms, the stub's interim [] is
+    answered (what elp's users got): the stub reproduces the bug."""
+    check(_phased_answers(sb, "push-phased", 0) != [], "the control never caught the interim []")
+
+
+def t_unversioned_interim_empty_is_provisional(sb):
+    """#45: jdtls sometimes publishes an empty set with no version before
+    the real, versioned one. From a server that versions its publishes,
+    that set is no longer answered as fresh: get_diagnostics waits for the
+    real one, with no setting."""
+    wrong = _phased_answers(sb, "push-interim", 0)
+    check(wrong == [], "answered the unversioned interim []: %s" % wrong)
+
+
 def t_config_warnings_without_lsp_tools(sb):
     """#32 F4: a daemon whose sessions call only non-LSP tools still has
     its config warnings in the daemon log (where runtime_log_tail reads),
@@ -2356,6 +2405,9 @@ SCENARIOS = [
     ("watched_files_unfinished_scan_says_so", t_watched_files_unfinished_scan_says_so),
     ("watched_file_change_isnt_answered_from_cache", t_watched_file_change_isnt_answered_from_cache),
     ("watched_files_tiny_timeout_still_answers", t_watched_files_tiny_timeout_still_answers),
+    ("phased_publish_settles", t_phased_publish_settles),
+    ("phased_publish_control", t_phased_publish_control),
+    ("unversioned_interim_empty_is_provisional", t_unversioned_interim_empty_is_provisional),
     ("project_config_names", t_project_config_names),
 ]
 

@@ -158,6 +158,7 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "lazy_workspace_index_ms = "
       <> int.to_string(server.lazy_workspace_index_ms),
     "save_check_grace_ms = " <> int.to_string(server.save_check_grace_ms),
+    "publish_settle_ms = " <> int.to_string(server.publish_settle_ms),
     case server.full_change_as_range {
       None ->
         "# full_change_as_range unset: ranged for an Incremental server, whole text for Full (ADR-038)"

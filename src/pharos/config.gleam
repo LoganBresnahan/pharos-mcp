@@ -125,6 +125,9 @@ pub type ServerOverride {
     /// #30. How long after a sync get_diagnostics waits for a check the
     /// server starts on save to begin. 0: no grace.
     save_check_grace_ms: Option(Int),
+    /// #45. After a sync's first publish, wait until the server has been
+    /// quiet this long and answer the latest. 0: off.
+    publish_settle_ms: Option(Int),
     /// ADR-038 amendment (A). true: send changes as a ranged
     /// whole-document replace; false: the range-less full text. Unset:
     /// the form the server's sync kind asks for.
@@ -220,6 +223,9 @@ pub type LanguageOverride {
     /// #30. How long after a sync get_diagnostics waits for a check the
     /// server starts on save to begin. 0: no grace.
     save_check_grace_ms: Option(Int),
+    /// #45. After a sync's first publish, wait until the server has been
+    /// quiet this long and answer the latest. 0: off.
+    publish_settle_ms: Option(Int),
     /// ADR-038 amendment (A). true: send changes as a ranged
     /// whole-document replace; false: the range-less full text. Unset:
     /// the form the server's sync kind asks for.
@@ -1257,6 +1263,7 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       "lazy_workspace_index_ms",
     ),
     save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
+    publish_settle_ms: decode_optional_int(value, "publish_settle_ms"),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     generic_names_carry_params: decode_optional_bool(
       value,
@@ -1407,6 +1414,7 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
       "lazy_workspace_index_ms",
     ),
     save_check_grace_ms: decode_optional_int(value, "save_check_grace_ms"),
+    publish_settle_ms: decode_optional_int(value, "publish_settle_ms"),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     generic_names_carry_params: decode_optional_bool(
       value,

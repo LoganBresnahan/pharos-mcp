@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- get_diagnostics no longer answers a server's first, partial publish as the settled set. elp
+  publishes `[]` and then the real set for each change, and perlnavigator `perl -c`'s findings
+  and then Perl::Critic's; an answer taken in between said "no errors" or missed the critic's
+  entries, unmarked. pharos now waits until such a server has published nothing more for its
+  `publish_settle_ms` (elp 50 ms, perlnavigator 100 ms, others 0; never past the call's
+  timeout). An empty set published without a version, from a server that versions its
+  publishes (clangd, when a document is reopened), no longer counts as the answer while the
+  real one may follow, and a reopened document is saved when the server asks for saves, so
+  rust-analyzer re-checks it (#45).
 - pharos answers a server's `workspace/diagnostic/refresh`, `workspace/semanticTokens/refresh`,
   `workspace/inlayHint/refresh`, `workspace/codeLens/refresh`, `workspace/inlineValue/refresh`
   and `workspace/foldingRange/refresh` requests with an empty success, as VS Code does. They were

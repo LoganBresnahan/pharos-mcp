@@ -213,6 +213,7 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     warm_probe: ProbeWorkspaceSymbol(""),
     lazy_workspace_index_ms: option.unwrap(override.lazy_workspace_index_ms, 0),
     save_check_grace_ms: option.unwrap(override.save_check_grace_ms, 0),
+    publish_settle_ms: option.unwrap(override.publish_settle_ms, 0),
     full_change_as_range: override.full_change_as_range,
     generic_names_carry_params: option.unwrap(
       override.generic_names_carry_params,
@@ -394,6 +395,10 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.save_check_grace_ms,
       default.save_check_grace_ms,
     ),
+    publish_settle_ms: option.unwrap(
+      ovr.publish_settle_ms,
+      default.publish_settle_ms,
+    ),
     full_change_as_range: option.or(
       ovr.full_change_as_range,
       default.full_change_as_range,
@@ -433,6 +438,7 @@ fn server_from_override(
     warm_probe: ProbeWorkspaceSymbol(""),
     lazy_workspace_index_ms: option.unwrap(ovr.lazy_workspace_index_ms, 0),
     save_check_grace_ms: option.unwrap(ovr.save_check_grace_ms, 0),
+    publish_settle_ms: option.unwrap(ovr.publish_settle_ms, 0),
     full_change_as_range: ovr.full_change_as_range,
     generic_names_carry_params: option.unwrap(
       ovr.generic_names_carry_params,
@@ -503,6 +509,10 @@ fn merge_primary(
     save_check_grace_ms: option.unwrap(
       override.save_check_grace_ms,
       primary.save_check_grace_ms,
+    ),
+    publish_settle_ms: option.unwrap(
+      override.publish_settle_ms,
+      primary.publish_settle_ms,
     ),
     full_change_as_range: option.or(
       override.full_change_as_range,

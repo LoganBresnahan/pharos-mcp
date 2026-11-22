@@ -238,6 +238,7 @@ fn server_keys() -> List(#(String, Shape)) {
     ),
     #("lazy_workspace_index_ms", off),
     #("save_check_grace_ms", off),
+    #("publish_settle_ms", off),
     #("full_change_as_range", Boolean),
     #("generic_names_carry_params", Boolean),
     #("pull_after_change_ms", off),

@@ -68,7 +68,12 @@ version, applies didOpen / didChange / didClose, and logs what it got:
   STUB_LSP_SYNC_SAVE=         unset: the number form. Set, the options
                               form with save = "none" (left out),
                               "true", or "text" ({includeText: true})
-  STUB_LSP_DIAGNOSTICS=       unset: never publish. "push": publish after
+  STUB_LSP_DIAGNOSTICS=       "push-phased" (#45, elp): publish [] and,
+                              STUB_LSP_PHASE_MS (default 150) later, the
+                              real set, both at the document's version.
+                              "push-interim" (#45, jdtls): the same, but
+                              the first, empty set has no version.
+                              unset: never publish. "push": publish after
                               every open/change, one diagnostic per line
                               containing ERROR. "push-suppress": the same,
                               but skip a publish whose diagnostics equal
@@ -661,6 +666,21 @@ def maybe_publish(stdout, uri):
         return
     doc = DOCS[uri]
     diagnostics = stub_diagnostics(doc["text"]) + dep_diagnostics()
+    if mode in ("push-phased", "push-interim"):
+        # #45: elp publishes [] and then the real set at the same version;
+        # jdtls sometimes an empty set with no version first.
+        first = {"uri": published_uri(uri), "diagnostics": []}
+        if mode == "push-phased":
+            first["version"] = doc["version"]
+        write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                               "params": first})
+        later = {"uri": published_uri(uri), "diagnostics": diagnostics, "version": doc["version"]}
+        delay = int(os.environ.get("STUB_LSP_PHASE_MS", "150")) / 1000.0
+        timer = threading.Timer(delay, lambda: write_message(stdout, {
+            "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": later}))
+        timer.daemon = True
+        timer.start()
+        return
     if mode == "push-suppress" and LAST_PUBLISHED.get(uri) == diagnostics:
         return
     LAST_PUBLISHED[uri] = diagnostics

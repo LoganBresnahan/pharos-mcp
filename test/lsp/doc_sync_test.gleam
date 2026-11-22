@@ -474,3 +474,31 @@ pub fn a_ranged_change_after_a_lone_cr_reopens_test() {
     )
   change |> string.contains("textDocument/didChange") |> should.be_true
 }
+
+pub fn a_reopen_is_saved_when_the_server_asks_test() {
+  // #45: rust-analyzer re-runs cargo check on didSave; a reopen sent none.
+  let caps = SyncCaps(change: 2, save: Save, open_close: True)
+  let assert [close, open, save] =
+    doc_sync.notifications(
+      caps,
+      OpChange(
+        "file:///a.rs",
+        "rust",
+        4,
+        "fn a() {}\n",
+        Some(#(2, 0)),
+        None,
+        True,
+      ),
+    )
+  close |> string.contains("textDocument/didClose") |> should.be_true
+  open |> string.contains("textDocument/didOpen") |> should.be_true
+  save |> string.contains("textDocument/didSave") |> should.be_true
+  // Sync kind None too.
+  let assert [_, _, save] =
+    doc_sync.notifications(
+      SyncCaps(change: 0, save: Save, open_close: True),
+      OpChange("file:///a.x", "x", 4, "y\n", None, None, False),
+    )
+  save |> string.contains("textDocument/didSave") |> should.be_true
+}

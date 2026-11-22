@@ -53,7 +53,7 @@
          mark_batch/1, batch_status/2, stamp_status/4, close_status/4, expect/4,
          expect_closed/3, expect_batch/2, forget_proc/1, lookup/4,
          settle_left/2, progress/2, progress_quiet/5,
-         progress_active/2, sync_age_ms/3]).
+         progress_active/2, sync_age_ms/3, publish_age_ms/3]).
 
 -define(TABLE, pharos_diagnostics_cache).
 -define(SYNCED, pharos_diagnostics_synced).
@@ -100,10 +100,33 @@ put_publish(Uri0, ServerId, Version, Term) when is_binary(Uri0), is_binary(Serve
         {{some, V}, [{_, _, Synced}]} when is_integer(V), is_integer(Synced) -> V < Synced;
         _ -> false
     end,
+    case Version of
+        {some, _} -> ets:insert(?PROGRESS, {{versioned, self()}, true});
+        _ -> ok
+    end,
     case Stale of
         true -> nil;
-        false -> put(Uri, ServerId, Term)
+        false ->
+            put(Uri, ServerId, Term),
+            ets:insert(?PROGRESS, {{published, Uri, ServerId, self()}, now_ms()}),
+            Key = {provisional, Uri, ServerId, self()},
+            case provisional(Version, Term) of
+                true ->
+                    [{_, Seq, _}] = ets:lookup(?TABLE, {Uri, ServerId, self()}),
+                    ets:insert(?PROGRESS, {Key, Seq});
+                false -> ets:delete(?PROGRESS, Key)
+            end,
+            nil
     end.
+
+%% #45: an empty publish without a version, from a server that versions
+%% its publishes, is an interim one (jdtls between two checks, clangd on
+%% a didClose just before the reopen's real set), not the settled answer.
+provisional(none, Term) when is_map(Term) ->
+    maps:get(<<"diagnostics">>, Term, undefined) =:= []
+        andalso ets:member(?PROGRESS, {versioned, self()});
+provisional(_, _) ->
+    false.
 
 %% Any proc's entry for (Uri, ServerId): for tests and introspection.
 get(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
@@ -278,6 +301,9 @@ forget_proc(Pid) ->
     ets:delete(?EXPECTED, {batch, Pid}),
     ets:match_delete(?PROGRESS, {{Pid, '_'}, '_', '_'}),
     ets:match_delete(?PROGRESS, {{sync, Pid, '_', '_'}, '_'}),
+    ets:match_delete(?PROGRESS, {{provisional, '_', '_', Pid}, '_'}),
+    ets:match_delete(?PROGRESS, {{published, '_', '_', Pid}, '_'}),
+    ets:delete(?PROGRESS, {versioned, Pid}),
     nil.
 
 %% fresh | carried_over | missing for the entry proc `Pid` cached, as
@@ -304,12 +330,26 @@ lookup(Uri0, ServerId, Pid, SettleMs)
                 gone -> missing;
                 Doc ->
                     Fresh = Doc =:= fresh
-                        andalso batch_settled(Seq, Pid, SettleMs),
+                        andalso batch_settled(Seq, Pid, SettleMs)
+                        andalso not provisional_pending(Key, Seq, Pid, SettleMs),
                     case Fresh of
                         true -> {fresh, Term};
                         false -> {carried_over, Term}
                     end
             end
+    end.
+
+%% #45: the entry at `Seq` is an interim empty publish, and the last
+%% batch's settle window is still running: the server's settled set may
+%% still come. Past the window it is taken as the answer.
+provisional_pending({Uri, ServerId, Pid}, Seq, Pid, SettleMs) ->
+    case ets:lookup(?PROGRESS, {provisional, Uri, ServerId, Pid}) of
+        [{_, Seq}] ->
+            case ets:lookup(?SYNCED, {batch, Pid}) of
+                [{_, _, _, At}] -> now_ms() < At + SettleMs;
+                [] -> false
+            end;
+        _ -> false
     end.
 
 %% fresh | stale | gone: the entry at `Seq` against its document's rows.
@@ -366,6 +406,14 @@ key(Uri) -> 'pharos@workspace_root':canonical_uri(Uri).
 %% server, in ms; -1 if pharos never synced it there.
 sync_age_ms(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
     case ets:lookup(?PROGRESS, {sync, Pid, key(Uri0), ServerId}) of
+        [{_, Ms}] -> now_ms() - Ms;
+        [] -> -1
+    end.
+
+%% #45. How long ago proc `Pid` cached its latest publish about `Uri0`,
+%% in ms; -1 if it never has.
+publish_age_ms(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
+    case ets:lookup(?PROGRESS, {published, key(Uri0), ServerId, Pid}) of
         [{_, Ms}] -> now_ms() - Ms;
         [] -> -1
     end.

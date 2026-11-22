@@ -298,6 +298,21 @@
 # file_extensions = [".my"]
 # save_check_grace_ms = 500
 
+# 4c') Servers that publish one change in phases (#45).
+#
+# Some servers publish a change's diagnostics in two steps: elp publishes
+# `[]` and then the real set, perlnavigator `perl -c`'s findings and then
+# Perl::Critic's. `publish_settle_ms` makes get_diagnostics wait, after
+# the first publish that follows a sync, until the server has published
+# nothing more for that long (never past the call's timeout), and answer
+# the latest. Bundled: elp and perlnavigator (see `--print-language-config`),
+# others 0. Set it for a server of your own that does the same:
+#
+# [languages.mylang]
+# command = "mylang-lsp"
+# file_extensions = [".my"]
+# publish_settle_ms = 300
+
 # 4d) How a server is sent an edit (ADR-038 amendment (A)).
 #
 # When a file pharos holds open changed on disk, the server gets the new

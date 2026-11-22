@@ -252,9 +252,10 @@ fn save_decoder() -> decode.Decoder(SaveMode) {
 ///   `full_change_as_range` forces either.
 /// - Change in the ranged form after a text with a lone `\r`: `didClose`
 ///   then `didOpen` instead, since servers disagree on where such a text
-///   ends (`has_lone_cr`).
+///   ends (`has_lone_cr`), then a `didSave` when the server asks for one.
 /// - Change, sync kind None: `didClose` then `didOpen` at the new
-///   version (never a second `didOpen` without a close). Since pharos
+///   version (never a second `didOpen` without a close), then a `didSave`
+///   when the server asks for one. Since pharos
 ///   opened the document whatever `openClose` said, it mirrors that on
 ///   change; a server that really reads the disk ignores both. Sending
 ///   such servers nothing at all waits on the capability survey.
@@ -265,10 +266,8 @@ pub fn notifications(caps: SyncCaps, op: SyncOp) -> List(String) {
     ]
     OpClose(uri:), _ -> [did_close(uri)]
     OpNotify(body:), _ -> [body]
-    OpChange(uri:, language_id:, version:, text:, ..), 0 -> [
-      did_close(uri),
-      did_open(uri, language_id, version, text),
-    ]
+    OpChange(uri:, language_id:, version:, text:, ..), 0 ->
+      reopen(caps, uri, language_id, version, text)
     OpChange(
       uri:,
       language_id:,
@@ -284,17 +283,39 @@ pub fn notifications(caps: SyncCaps, op: SyncOp) -> List(String) {
         // A ranged change after a text with a lone \r: the server may
         // count that text's lines differently, so reopen instead, as for
         // sync kind None. Correct whatever its line counting.
-        Some(_), True -> [
-          did_close(uri),
-          did_open(uri, language_id, version, text),
+        Some(_), True -> reopen(caps, uri, language_id, version, text)
+        end, _ -> [
+          did_change(uri, version, text, end),
+          ..saved(caps, uri, text)
         ]
-        end, _ ->
-          list.append([did_change(uri, version, text, end)], case caps.save {
-            NoSave -> []
-            Save -> [did_save(uri, Error(Nil))]
-            SaveWithText -> [did_save(uri, Ok(text))]
-          })
       }
+  }
+}
+
+/// A change carried out as `didClose` + `didOpen`, then the `didSave` a
+/// server that asks for saves gets after any change (#45): without it
+/// rust-analyzer's cargo check didn't re-run, and its entries from the
+/// text before the reopen were answered as fresh.
+fn reopen(
+  caps: SyncCaps,
+  uri: String,
+  language_id: String,
+  version: Int,
+  text: String,
+) -> List(String) {
+  [
+    did_close(uri),
+    did_open(uri, language_id, version, text),
+    ..saved(caps, uri, text)
+  ]
+}
+
+/// The `didSave` that follows a change, when the server asks for one.
+fn saved(caps: SyncCaps, uri: String, text: String) -> List(String) {
+  case caps.save {
+    NoSave -> []
+    Save -> [did_save(uri, Error(Nil))]
+    SaveWithText -> [did_save(uri, Ok(text))]
   }
 }
 

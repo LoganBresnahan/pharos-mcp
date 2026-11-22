@@ -458,3 +458,55 @@ pub fn spellings_of_one_uri_share_an_entry_test() {
   diagnostics_cache.lookup("file:///tmp/my proj/x@y.ts", "ts", me)
   |> should.equal(diagnostics_cache.Missing)
 }
+
+@external(erlang, "maps", "from_list")
+fn params(pairs: List(#(String, List(Int)))) -> dynamic.Dynamic
+
+/// #45: jdtls sometimes publishes an interim empty set without a version,
+/// and clangd one on the didClose just before a reopen; the settled set
+/// comes after. From a server that versions its publishes, such a set is
+/// carried over while the batch's settle window runs, then taken as the
+/// answer.
+pub fn an_unversioned_empty_publish_is_provisional_test() {
+  diagnostics_cache.init()
+  diagnostics_cache.drop_uri("file:///p.java")
+  let me = process.self()
+  let empty = params([#("diagnostics", [])])
+
+  diagnostics_cache.expect("file:///p.java", "jdtls", 1, me)
+  diagnostics_cache.mark_synced("file:///p.java", "jdtls", 1)
+  diagnostics_cache.put_publish("file:///p.java", "jdtls", Some(1), empty)
+  diagnostics_cache.expect_batch(me, 3)
+  diagnostics_cache.expect("file:///p.java", "jdtls", 2, me)
+  diagnostics_cache.mark_batch(3)
+  diagnostics_cache.mark_synced("file:///p.java", "jdtls", 2)
+
+  diagnostics_cache.put_publish("file:///p.java", "jdtls", None, empty)
+  diagnostics_cache.lookup_within("file:///p.java", "jdtls", me, 60_000)
+  |> should.equal(diagnostics_cache.CarriedOver(empty))
+  // Past the window: the answer.
+  diagnostics_cache.lookup_within("file:///p.java", "jdtls", me, 0)
+  |> should.equal(diagnostics_cache.Fresh(empty))
+  // The settled, versioned set replaces it at once.
+  diagnostics_cache.put_publish("file:///p.java", "jdtls", Some(2), empty)
+  diagnostics_cache.lookup_within("file:///p.java", "jdtls", me, 60_000)
+  |> should.equal(diagnostics_cache.Fresh(empty))
+  diagnostics_cache.forget_proc(me)
+}
+
+/// A server that never versions its publishes (tsserver's path, some
+/// others) is untouched: its unversioned empty set is fresh.
+pub fn an_unversioned_server_is_untouched_test() {
+  diagnostics_cache.init()
+  diagnostics_cache.drop_uri("file:///q.x")
+  let me = process.self()
+  let empty = params([#("diagnostics", [])])
+  diagnostics_cache.expect_batch(me, 4)
+  diagnostics_cache.expect("file:///q.x", "nov", 1, me)
+  diagnostics_cache.mark_batch(4)
+  diagnostics_cache.mark_synced("file:///q.x", "nov", 1)
+  diagnostics_cache.put_publish("file:///q.x", "nov", None, empty)
+  diagnostics_cache.lookup_within("file:///q.x", "nov", me, 60_000)
+  |> should.equal(diagnostics_cache.Fresh(empty))
+  diagnostics_cache.forget_proc(me)
+}

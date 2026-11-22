@@ -231,3 +231,8 @@ pub fn progress_active(pid: Pid, stuck_ms: Int) -> Bool
 /// server; -1 if never.
 @external(erlang, "pharos_diagnostics_cache_ffi", "sync_age_ms")
 pub fn sync_age_ms(uri: String, server_id: String, pid: Pid) -> Int
+
+/// #45: ms since proc `pid` cached its latest publish about `uri`; -1 if
+/// it never has.
+@external(erlang, "pharos_diagnostics_cache_ffi", "publish_age_ms")
+pub fn publish_age_ms(uri: String, server_id: String, pid: Pid) -> Int

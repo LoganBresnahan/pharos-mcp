@@ -162,14 +162,17 @@ fn attempt_single(
     Error(err) -> Error(map_session_error(err))
     Ok(lsp) -> {
       let primary = languages.primary_server(config)
-      let #(server_id, mode, grace_ms, pull_after_change_ms) = case primary {
+      let #(server_id, mode, grace_ms, settle_ms, pull_after_change_ms) = case
+        primary
+      {
         Ok(server) -> #(
           server.id,
           server.diagnostics_mode,
           server.save_check_grace_ms,
+          server.publish_settle_ms,
           server.pull_after_change_ms,
         )
-        Error(_) -> #("", Push, 0, 0)
+        Error(_) -> #("", Push, 0, 0, 0)
       }
       let result = case mode {
         Push ->
@@ -178,6 +181,7 @@ fn attempt_single(
             server_id,
             proc.pid(lsp),
             grace_ms,
+            settle_ms,
             deadline_ms,
           ))
         Pull ->
@@ -308,6 +312,7 @@ fn server_report(
           server.id,
           proc.pid(lsp),
           server.save_check_grace_ms,
+          server.publish_settle_ms,
           deadline_ms,
         )
       {
@@ -339,6 +344,7 @@ fn server_report(
               server.id,
               proc.pid(lsp),
               server.save_check_grace_ms,
+              server.publish_settle_ms,
               deadline_ms,
             )
           {
@@ -423,6 +429,7 @@ fn resolve_push(
   server_id: String,
   pid: Pid,
   grace_ms: Int,
+  settle_ms: Int,
   deadline_ms: Int,
 ) -> PushEntry {
   // #30: while the server is still working on this document's sync (a
@@ -433,7 +440,19 @@ fn resolve_push(
   // that looks fresh is answered as carried over (unsure), never as
   // fresh.
   case await_progress_quiet(file_uri, server_id, pid, grace_ms, deadline_ms) {
-    True -> resolve_push_now(file_uri, server_id, pid, deadline_ms)
+    True ->
+      case resolve_push_now(file_uri, server_id, pid, deadline_ms) {
+        FreshEntry(params) if settle_ms > 0 ->
+          settle_publishes(
+            file_uri,
+            server_id,
+            pid,
+            settle_ms,
+            deadline_ms,
+            params,
+          )
+        other -> other
+      }
     False ->
       case resolve_push_now(file_uri, server_id, pid, now_ms()) {
         FreshEntry(params) -> CarriedEntry(params)
@@ -478,6 +497,44 @@ fn await_progress_quiet(
         False -> {
           process.sleep(poll_step_ms)
           await_progress_quiet(file_uri, server_id, pid, grace_ms, deadline_ms)
+        }
+      }
+  }
+}
+
+/// #45: a server that publishes one change in phases (elp's `[]` then the
+/// real set, perlnavigator's `perl -c` then Perl::Critic) gets `settle_ms`
+/// of quiet after its latest publish before that publish is the answer.
+/// If the call's deadline comes first, the latest is answered marked as
+/// carried over (unsure), never as fresh.
+fn settle_publishes(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  settle_ms: Int,
+  deadline_ms: Int,
+  latest: Dynamic,
+) -> PushEntry {
+  let age = diagnostics_cache.publish_age_ms(file_uri, server_id, pid)
+  let current = case diagnostics_cache.lookup(file_uri, server_id, pid) {
+    diagnostics_cache.Fresh(params) -> params
+    _ -> latest
+  }
+  case age < 0 || age >= settle_ms {
+    True -> FreshEntry(current)
+    False ->
+      case now_ms() + settle_ms - age > deadline_ms {
+        True -> CarriedEntry(current)
+        False -> {
+          process.sleep(settle_ms - age)
+          settle_publishes(
+            file_uri,
+            server_id,
+            pid,
+            settle_ms,
+            deadline_ms,
+            current,
+          )
         }
       }
   }
@@ -568,9 +625,12 @@ fn push_result(
   server_id: String,
   pid: Pid,
   grace_ms: Int,
+  settle_ms: Int,
   deadline_ms: Int,
 ) -> DiagnosticsResult {
-  case resolve_push(file_uri, server_id, pid, grace_ms, deadline_ms) {
+  case
+    resolve_push(file_uri, server_id, pid, grace_ms, settle_ms, deadline_ms)
+  {
     FreshEntry(params) ->
       Diagnostics(
         uri: file_uri,
@@ -783,7 +843,7 @@ fn tsserver_result(
       )
     Error(reason) -> {
       log_tsserver_fallback(server_id, reason)
-      case resolve_push(file_uri, server_id, proc.pid(lsp), 0, deadline_ms) {
+      case resolve_push(file_uri, server_id, proc.pid(lsp), 0, 0, deadline_ms) {
         FreshEntry(params) | CarriedEntry(params) ->
           Diagnostics(
             uri: file_uri,

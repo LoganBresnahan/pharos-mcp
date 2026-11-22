@@ -367,6 +367,34 @@ isn't an option: typescript-language-server, pyright, jdtls and lua-language-ser
 spec and would keep a stale tail. The range-less form has no end to misplace, so a Full server
 is unaffected.
 
+**Amendment (#45, 2026-11-20): interim and phased publishes.** The freshness rule takes the
+first publish after a sync as the answer. Three servers publish one change in steps, and an
+answer taken between the steps was unmarked and wrong (verifier's sweep on 7435276):
+
+- **Phased publishes, per server: `publish_settle_ms`** (pharos.toml, per language or per
+  server; Logan's choice). After the first publish that follows a sync, get_diagnostics waits
+  until the server has published nothing more for that long, never past the call's deadline,
+  and answers the latest. If the deadline comes first, the latest is answered marked as carried
+  over. Bundled: elp 50 ms (it publishes `[]` then the real set at the same version on 280 of
+  288 edits, at most 7 ms apart; pharos answered the `[]` about 5% of the time) and
+  perlnavigator 100 ms (`perl -c`'s set, then one with Perl::Critic's, at most 58 ms apart).
+  perlnavigator also repeats its set about every 300 ms, so its value must stay well under
+  that: at 500 ms the wait ran past the repeats, about 800 ms per answer. Every other server
+  has 0 and is unchanged.
+- **An unversioned empty publish from a server that versions its publishes is provisional.**
+  It counts as carried over while the last batch's settle window runs, until a later publish
+  replaces it; past the window it is the answer. clangd publishes such a `[]` on the didClose of
+  a reopen, 6 ms before the real set (verifier-two). A server that never versions (jdtls, the
+  tsserver path) is untouched.
+- **A reopen sends didSave** when the server asks for saves, as a change does: rust-analyzer
+  re-runs cargo check, and its entries from the text before the reopen are waited out like
+  after any change (#30).
+
+Not fixed: jdtls never versions a publish and publishes once per edit, so its occasional `[]`
+(1–4% of answers) is the only publish for that edit, and no rule here can tell it from a real
+clean result. rust-analyzer needed no value: each edit publishes twice about 90 ms apart, and
+#30's save-check grace already holds the answer for the second (24 of 24 right).
+
 ## Alternatives considered
 
 - **A batch of only `didOpen`s doesn't count for freshness.** It fixes the case the review hit
