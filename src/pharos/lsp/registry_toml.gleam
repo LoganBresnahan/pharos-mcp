@@ -167,6 +167,8 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "pull_after_change_ms = " <> int.to_string(server.pull_after_change_ms),
     "generic_names_carry_params = "
       <> bool_text(server.generic_names_carry_params),
+    "workspace_symbol_modules_only = "
+      <> bool_text(server.workspace_symbol_modules_only),
     case server.watch_files {
       languages.WatchIfRegistered ->
         "# watch_files unset: scanned for changed files only if the server registers watchers (ADR-043)"

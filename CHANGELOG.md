@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- `find_symbol` on elp resolves `module/function` and a module. elp 1.1's workspace search finds
+  modules only, and its documentSymbol has no module node, so `util/helper` and `util` were
+  not found. A module hit named like its file is now read as that file's root, and a bare name
+  that isn't found says the server finds modules only (`workspace_symbol_modules_only`, bundled
+  for elp) (#40).
 - get_diagnostics no longer answers a server's first, partial publish as the settled set. elp
   publishes `[]` and then the real set for each change, and perlnavigator `perl -c`'s findings
   and then Perl::Critic's; an answer taken in between said "no errors" or missed the critic's

@@ -281,13 +281,18 @@ pub fn find_symbol(
   // (jdtls's `Box<T>`) has them stripped for the match, and from the
   // query's own name for its workspace search. No other server: they
   // keep angle brackets for real name parts (clangd's `operator<=>`).
-  let generic = case session.config_for_uri(scope_uri) {
-    Ok(config) ->
-      case languages.primary_server(config) {
-        Ok(server) -> server.generic_names_carry_params
-        Error(_) -> False
-      }
-    Error(_) -> False
+  let primary = case session.config_for_uri(scope_uri) {
+    Ok(config) -> languages.primary_server(config) |> option.from_result
+    Error(_) -> None
+  }
+  let generic = case primary {
+    Some(server) -> server.generic_names_carry_params
+    None -> False
+  }
+  // #40: elp's workspace search finds modules only.
+  let modules_only = case primary {
+    Some(server) -> server.workspace_symbol_modules_only
+    None -> False
   }
   let name_match_strategy = name_match_strategy_for(generic)
   let name_match_strategy_with_fuzzy =
@@ -307,8 +312,8 @@ pub fn find_symbol(
       // respond — and still gives the LLM a usable handle for the
       // common "edit a symbol I know lives in this file" workflow.
       use ws_supported <- result.try(workspace_symbol_supported(pool, scope_uri))
-      use unique_uris <- result.try(case ws_supported {
-        False -> Ok([scope_uri])
+      use #(unique_uris, module_hits) <- result.try(case ws_supported {
+        False -> Ok(#([scope_uri], []))
         True -> {
           use ws_results <- result.try(workspace_symbol_query(
             pool,
@@ -334,10 +339,11 @@ pub fn find_symbol(
           // scope_uri is always drilled too, first: the server's
           // workspace search can miss what the scope file defines (jdtls
           // answered only a JDK class for `helper`, #29).
-          Ok(
+          Ok(#(
             [scope_uri, ..list.map(ws_results, fn(s) { s.uri })]
-            |> list.unique,
-          )
+              |> list.unique,
+            list.filter(ws_results, fn(s) { s.kind == 2 }),
+          ))
         }
       })
       // workspace_symbol can return URIs that the same LSP cannot
@@ -370,6 +376,13 @@ pub fn find_symbol(
           }),
         ),
       )
+      // #40: each server's layout read as one tree of containers, so a
+      // `module/function` path drills the same way on every server.
+      let trees =
+        list.map(trees, fn(pair) {
+          let #(uri, tree) = pair
+          #(uri, normalize_tree(uri, tree, module_hits))
+        })
       let strict =
         list.flat_map(trees, fn(pair) {
           let #(uri, tree) = pair
@@ -447,6 +460,15 @@ pub fn find_symbol(
             near_misses: near,
             note: Some(
               "this server can't search the workspace for symbols, so only scope_uri was searched; pass a scope_uri in the file that defines it",
+            ),
+          ))
+        // #40: a bare name on a server whose workspace search finds
+        // modules only was looked for in scope_uri alone.
+        NotFound(near, None), True if modules_only && rest == [] ->
+          Ok(NotFound(
+            near_misses: near,
+            note: Some(
+              "this server's workspace search finds modules only, so only scope_uri was searched for a bare name; ask for module/function (e.g. util/helper), or pass a scope_uri in the file that defines it",
             ),
           ))
         resolution, _ -> Ok(resolution)
@@ -772,6 +794,62 @@ fn within(inner: Range, outer: Range) -> Bool {
 
 fn position_le(a: Position, b: Position) -> Bool {
   a.line < b.line || { a.line == b.line && a.character <= b.character }
+}
+
+// -- One tree per layout (#40) ---------------------------------------
+
+/// Reads a server's documentSymbol layout as one tree of containers:
+/// - elp has no module node: a workspace hit of kind Module named like
+///   the file (Erlang's module is its file name) whose tree has no
+///   top-level symbol of that name becomes the tree's root.
+fn normalize_tree(
+  uri: String,
+  tree: List(DocumentSymbolDecoded),
+  module_hits: List(WorkspaceSymbolRow),
+) -> List(DocumentSymbolDecoded) {
+  let stem = file_stem(uri)
+  case
+    list.any(module_hits, fn(m) { m.uri == uri && m.name == stem }),
+    list.any(tree, fn(s) { s.name == stem })
+  {
+    True, False -> [module_root(stem, tree)]
+    _, _ -> tree
+  }
+}
+
+/// A module node over a file's whole tree (#40).
+fn module_root(
+  name: String,
+  tree: List(DocumentSymbolDecoded),
+) -> DocumentSymbolDecoded {
+  let start = Position(0, 0)
+  let end =
+    list.fold(tree, start, fn(acc, s) {
+      case position_le(acc, s.range.end) {
+        True -> s.range.end
+        False -> acc
+      }
+    })
+  DocumentSymbolDecoded(
+    name: name,
+    kind: 2,
+    range: Range(start, end),
+    selection_range: Range(start, start),
+    detail: None,
+    children: tree,
+  )
+}
+
+/// `file:///w/src/util.erl` → `util`.
+fn file_stem(uri: String) -> String {
+  let base =
+    string.split(uri, "/")
+    |> list.last
+    |> result.unwrap("")
+  case string.split(base, ".") |> list.reverse {
+    [_ext, ..rest] if rest != [] -> string.join(list.reverse(rest), ".")
+    _ -> base
+  }
 }
 
 /// Workspace-file matches only, when there are any; else all of them.

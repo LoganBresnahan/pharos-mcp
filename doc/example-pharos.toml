@@ -343,6 +343,12 @@
 # stripped. Bundled: jdtls true, others false: they name generics bare and
 # may use angle brackets in real names (`operator<=>`, `Pair<int, int>`).
 # generic_names_carry_params = true
+#
+# `workspace_symbol_modules_only` says the server's workspace/symbol finds
+# modules only (bundled: elp). find_symbol then reads a module hit named
+# like its file as that file's root, so `util/helper` resolves, and says
+# so when a bare name isn't found. Other servers: false.
+# workspace_symbol_modules_only = true
 
 # 4e) Files changed on disk (ADR-043, #10).
 #

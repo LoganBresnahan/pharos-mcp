@@ -241,6 +241,7 @@ fn server_keys() -> List(#(String, Shape)) {
     #("publish_settle_ms", off),
     #("full_change_as_range", Boolean),
     #("generic_names_carry_params", Boolean),
+    #("workspace_symbol_modules_only", Boolean),
     #("pull_after_change_ms", off),
     #("watch_files", Boolean),
     #("initialization_options_json", Str),

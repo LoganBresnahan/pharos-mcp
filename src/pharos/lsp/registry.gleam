@@ -219,6 +219,10 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
       override.generic_names_carry_params,
       False,
     ),
+    workspace_symbol_modules_only: option.unwrap(
+      override.workspace_symbol_modules_only,
+      False,
+    ),
     pull_after_change_ms: option.unwrap(override.pull_after_change_ms, 0),
     watch_files: watch_mode(override.watch_files, languages.WatchIfRegistered),
   )
@@ -407,6 +411,10 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.generic_names_carry_params,
       default.generic_names_carry_params,
     ),
+    workspace_symbol_modules_only: option.unwrap(
+      ovr.workspace_symbol_modules_only,
+      default.workspace_symbol_modules_only,
+    ),
     pull_after_change_ms: option.unwrap(
       ovr.pull_after_change_ms,
       default.pull_after_change_ms,
@@ -442,6 +450,10 @@ fn server_from_override(
     full_change_as_range: ovr.full_change_as_range,
     generic_names_carry_params: option.unwrap(
       ovr.generic_names_carry_params,
+      False,
+    ),
+    workspace_symbol_modules_only: option.unwrap(
+      ovr.workspace_symbol_modules_only,
       False,
     ),
     pull_after_change_ms: option.unwrap(ovr.pull_after_change_ms, 0),
@@ -521,6 +533,10 @@ fn merge_primary(
     generic_names_carry_params: option.unwrap(
       override.generic_names_carry_params,
       primary.generic_names_carry_params,
+    ),
+    workspace_symbol_modules_only: option.unwrap(
+      override.workspace_symbol_modules_only,
+      primary.workspace_symbol_modules_only,
     ),
     pull_after_change_ms: option.unwrap(
       override.pull_after_change_ms,

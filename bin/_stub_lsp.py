@@ -143,6 +143,10 @@ Symbols (#21):
                               case-insensitively, like jdtls (#29)
   STUB_LSP_SYMBOL_PARAMS=1    documentSymbol names functions with a
                               parameter list, "helper(int)", as jdtls does
+  STUB_LSP_WORKSPACE_SYMBOL=modules  elp 1.1 (#40): workspace/symbol
+                              answers modules only (kind 2, named after
+                              each .stub file); documentSymbol has no
+                              module node
   STUB_LSP_WORKSPACE_SYMBOL=none  documentSymbol only: no
                               workspaceSymbolProvider, as zls (#28)
 
@@ -736,6 +740,20 @@ def handle_workspace_symbol(req):
     mode = os.environ.get("STUB_LSP_WORKSPACE_SYMBOL")
     if mode == "null":
         return {"jsonrpc": "2.0", "id": req["id"], "result": None}
+    if mode == "modules":
+        # elp 1.1's shape (#40): modules only, named after their file,
+        # for every .stub file under the open documents' folders.
+        query = (req.get("params") or {}).get("query") or ""
+        result = []
+        for folder in {os.path.dirname(uri_path(u)) for u in DOCS}:
+            for dirpath, _, names in os.walk(folder):
+                for name in sorted(names):
+                    stem, ext = os.path.splitext(name)
+                    if ext == ".stub" and query and query in stem:
+                        rng = {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}
+                        result.append({"name": stem, "kind": 2,
+                                       "location": {"uri": "file://" + os.path.join(dirpath, name), "range": rng}})
+        return {"jsonrpc": "2.0", "id": req["id"], "result": result}
     if mode == "all":
         # jdtls's shape: every file under the open documents' folders,
         # node_modules included, matched case-insensitively.

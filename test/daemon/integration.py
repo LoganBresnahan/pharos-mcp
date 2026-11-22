@@ -1939,6 +1939,25 @@ def t_find_symbol_generic_names_need_the_flag(sb):
     check("type_params_strip" not in out, "stripped without the flag: %s" % out[-500:])
 
 
+def t_find_symbol_modules_only_server(sb):
+    """#40: elp 1.1's workspace/symbol finds modules only, and its
+    documentSymbol has no module node, so `util/helper` and `util` were
+    not_found. A module hit named like its file is now read as that
+    file's root; a bare name that isn't found says the server finds
+    modules only."""
+    sb.write_toml("workspace_symbol_modules_only = true\n")
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "modules"})
+    a.initialize()
+    stub_file(sb, "util.stub", "function helper() {\n}\nfunction other() {\n}\n")
+    uri = stub_file(sb, "main.stub", "function run() {\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "util/helper", "scope_uri": uri})
+    check('"status":"single"' in out and "util.stub" in out, "util/helper: %s" % out[-400:])
+    out = a.tool(11, "find_symbol", {"name_path": "util", "scope_uri": uri})
+    check('"status":"single"' in out and '"kind":2' in out, "util: %s" % out[-400:])
+    out = a.tool(12, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check("not_found" in out and "modules only" in out, "bare helper: %s" % out[-400:])
+
+
 def t_find_symbol_library_guess_is_a_near_miss(sb):
     """#29: a match only in another case, and only outside the workspace,
     is a near miss, not "single": a lowercase `helper` must not resolve to
@@ -2374,6 +2393,7 @@ SCENARIOS = [
     ("find_symbol_library_outside_the_root", t_find_symbol_library_outside_the_root),
     ("find_symbol_library_guess_is_a_near_miss", t_find_symbol_library_guess_is_a_near_miss),
     ("find_symbol_generic_class", t_find_symbol_generic_class),
+    ("find_symbol_modules_only_server", t_find_symbol_modules_only_server),
     ("find_symbol_generic_names_need_the_flag", t_find_symbol_generic_names_need_the_flag),
     ("find_symbol_cold_index_while_indexing", t_find_symbol_cold_index_while_indexing),
     ("find_symbol_cold_index_lazy_flag", t_find_symbol_cold_index_lazy_flag),

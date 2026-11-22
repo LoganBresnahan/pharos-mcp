@@ -135,6 +135,8 @@ pub type ServerOverride {
     /// #39. true: the server names generic types with their type
     /// parameters (`Box<T>`), so find_symbol strips them to match.
     generic_names_carry_params: Option(Bool),
+    /// #40. true: the server's workspace search finds modules only.
+    workspace_symbol_modules_only: Option(Bool),
     /// #38. Wait this long after a change before a pull request.
     pull_after_change_ms: Option(Int),
     /// ADR-043. true: always scan for files changed on disk for this
@@ -233,6 +235,8 @@ pub type LanguageOverride {
     /// #39. true: the server names generic types with their type
     /// parameters (`Box<T>`), so find_symbol strips them to match.
     generic_names_carry_params: Option(Bool),
+    /// #40. true: the server's workspace search finds modules only.
+    workspace_symbol_modules_only: Option(Bool),
     /// #38. Wait this long after a change before a pull request.
     pull_after_change_ms: Option(Int),
     /// ADR-043. true: always scan for files changed on disk for this
@@ -1269,6 +1273,10 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       value,
       "generic_names_carry_params",
     ),
+    workspace_symbol_modules_only: decode_optional_bool(
+      value,
+      "workspace_symbol_modules_only",
+    ),
     pull_after_change_ms: decode_optional_int(value, "pull_after_change_ms"),
     watch_files: decode_optional_bool(value, "watch_files"),
     custom_uri_schemes: decode_optional_custom_uri_schemes(value),
@@ -1419,6 +1427,10 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
     generic_names_carry_params: decode_optional_bool(
       value,
       "generic_names_carry_params",
+    ),
+    workspace_symbol_modules_only: decode_optional_bool(
+      value,
+      "workspace_symbol_modules_only",
     ),
     pull_after_change_ms: decode_optional_int(value, "pull_after_change_ms"),
     watch_files: decode_optional_bool(value, "watch_files"),
