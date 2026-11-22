@@ -1958,6 +1958,28 @@ def t_find_symbol_modules_only_server(sb):
     check("not_found" in out and "modules only" in out, "bare helper: %s" % out[-400:])
 
 
+def t_find_symbol_type_member_layouts(sb):
+    """#50: `Type/method` couldn't drill on rust-analyzer (methods under
+    `impl T` symbols beside the struct) or gopls (methods flat at the top
+    level, named `(T).m`). Both now read as the type's members, and a
+    bare method name still matches once."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "none", "STUB_LSP_SYMBOL_RAW": "1"})
+    a.initialize()
+    rust = stub_file(sb, "lib.stub", "sym 23 Boxx\nsym 19 impl Boxx<T>\n  sym 6 get\n"
+                     "sym 19 impl Tr<T> for Boxx<T>\n  sym 6 show\nsym 23 Other\n")
+    for path, want in (("Boxx/get", "get"), ("Boxx/show", "show"), ("get", "get")):
+        out = a.tool(10, "find_symbol", {"name_path": path, "scope_uri": rust})
+        # Under the type: before, the fuzzy fallback found them through
+        # a substring of `impl Boxx<T>`, with that impl in their path.
+        check('"status":"single"' in out and ('"name":"%s"' % want) in out
+              and "impl " not in out,
+              "rust layout %s: %s" % (path, out[-400:]))
+    go = stub_file(sb, "box.stub", "sym 23 Box\nsym 6 (Box[T]).Get\nsym 6 (*Box).Put\nsym 12 Free\n")
+    for path in ("Box/Get", "Box/Put", "Get"):
+        out = a.tool(20, "find_symbol", {"name_path": path, "scope_uri": go})
+        check('"status":"single"' in out, "go layout %s: %s" % (path, out[-400:]))
+
+
 def t_find_symbol_library_guess_is_a_near_miss(sb):
     """#29: a match only in another case, and only outside the workspace,
     is a near miss, not "single": a lowercase `helper` must not resolve to
@@ -2394,6 +2416,7 @@ SCENARIOS = [
     ("find_symbol_library_guess_is_a_near_miss", t_find_symbol_library_guess_is_a_near_miss),
     ("find_symbol_generic_class", t_find_symbol_generic_class),
     ("find_symbol_modules_only_server", t_find_symbol_modules_only_server),
+    ("find_symbol_type_member_layouts", t_find_symbol_type_member_layouts),
     ("find_symbol_generic_names_need_the_flag", t_find_symbol_generic_names_need_the_flag),
     ("find_symbol_cold_index_while_indexing", t_find_symbol_cold_index_while_indexing),
     ("find_symbol_cold_index_lazy_flag", t_find_symbol_cold_index_lazy_flag),

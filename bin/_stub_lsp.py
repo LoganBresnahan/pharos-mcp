@@ -224,6 +224,11 @@ Watched files (ADR-043):
                               document after STUB_LSP_DEP_DELAY_MS (default
                               300), at its current version (gopls's way)
 
+Raw layouts (#50):
+
+  STUB_LSP_SYMBOL_RAW=1       documentSymbol from `sym KIND NAME` lines,
+                              two-space indent for a child (raw_symbols)
+
 Generic names (#39):
 
   STUB_LSP_SYMBOL_GENERICS=1  documentSymbol names as jdtls does: a
@@ -819,11 +824,34 @@ def handle_document_symbol(req):
     params = os.environ.get("STUB_LSP_SYMBOL_PARAMS")
     if os.environ.get("STUB_LSP_SYMBOL_GENERICS"):
         return {"jsonrpc": "2.0", "id": req["id"], "result": generic_symbols(text)}
+    if os.environ.get("STUB_LSP_SYMBOL_RAW"):
+        return {"jsonrpc": "2.0", "id": req["id"], "result": raw_symbols(text)}
     for i, name, line in function_lines(text):
         rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
         shown = name + "(int)" if params else name
         result.append({"name": shown, "kind": 12, "range": rng, "selectionRange": rng, "children": []})
     return {"jsonrpc": "2.0", "id": req["id"], "result": result}
+
+
+def raw_symbols(text):
+    """#50: each `sym KIND NAME` line is a symbol named NAME (spaces
+    allowed) of LSP kind KIND; indented two spaces, a child of the last
+    unindented one. Lets a test lay symbols out as any server does:
+    gopls's flat `(T).m` methods, rust-analyzer's `impl T` blocks."""
+    out = []
+    for i, line in enumerate(text.split("\n")):
+        child = line.startswith("  ")
+        words = line.strip().split(" ", 2)
+        if len(words) < 3 or words[0] != "sym":
+            continue
+        rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
+        sym = {"name": words[2], "kind": int(words[1]), "range": rng, "selectionRange": rng, "children": []}
+        if child and out:
+            out[-1]["children"].append(sym)
+            out[-1]["range"]["end"] = rng["end"]
+        else:
+            out.append(sym)
+    return out
 
 
 def generic_symbols(text):

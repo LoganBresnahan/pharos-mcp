@@ -376,8 +376,9 @@ pub fn find_symbol(
           }),
         ),
       )
-      // #40: each server's layout read as one tree of containers, so a
-      // `module/function` path drills the same way on every server.
+      // #40, #50: each server's layout read as one tree of containers,
+      // so a `Type/member` or `module/function` path drills the same way
+      // on every server.
       let trees =
         list.map(trees, fn(pair) {
           let #(uri, tree) = pair
@@ -796,17 +797,25 @@ fn position_le(a: Position, b: Position) -> Bool {
   a.line < b.line || { a.line == b.line && a.character <= b.character }
 }
 
-// -- One tree per layout (#40) ---------------------------------------
+// -- One tree per layout (#40, #50) ---------------------------------------
 
 /// Reads a server's documentSymbol layout as one tree of containers:
+/// - gopls names a method `(T).m`, `(*T).m` or `(T[K]).m` at the top
+///   level: it moves under the top-level `T`;
+/// - rust-analyzer puts methods under `impl T<…>` or `impl Tr for T<…>`
+///   symbols beside the struct: their children move under the top-level
+///   `T` (the impl symbol stays, empty);
 /// - elp has no module node: a workspace hit of kind Module named like
 ///   the file (Erlang's module is its file name) whose tree has no
 ///   top-level symbol of that name becomes the tree's root.
+/// Each moves only when the `T` (or module) is there to receive it, so
+/// a name matches once, never twice.
 fn normalize_tree(
   uri: String,
   tree: List(DocumentSymbolDecoded),
   module_hits: List(WorkspaceSymbolRow),
 ) -> List(DocumentSymbolDecoded) {
+  let tree = attach_members(tree)
   let stem = file_stem(uri)
   case
     list.any(module_hits, fn(m) { m.uri == uri && m.name == stem }),
@@ -814,6 +823,138 @@ fn normalize_tree(
   {
     True, False -> [module_root(stem, tree)]
     _, _ -> tree
+  }
+}
+
+fn attach_members(
+  tree: List(DocumentSymbolDecoded),
+) -> List(DocumentSymbolDecoded) {
+  let names = list.map(tree, fn(s) { s.name })
+  // The type each top-level symbol's members belong to, when it is a
+  // Go method or a Rust impl whose type is a top-level symbol here.
+  let owner = fn(s: DocumentSymbolDecoded) {
+    case go_receiver(s.name), rust_impl_type(s.name) {
+      Ok(t), _ -> Ok(#(t, True))
+      _, Ok(t) -> Ok(#(t, False))
+      _, _ -> Error(Nil)
+    }
+    |> result.try(fn(found) {
+      case list.contains(names, found.0) {
+        True -> Ok(found)
+        False -> Error(Nil)
+      }
+    })
+  }
+  let moved =
+    list.fold(tree, dict.new(), fn(acc, s) {
+      case owner(s) {
+        Ok(#(t, True)) -> dict.upsert(acc, t, fn(old) { add(old, [s]) })
+        Ok(#(t, False)) -> dict.upsert(acc, t, fn(old) { add(old, s.children) })
+        Error(Nil) -> acc
+      }
+    })
+  case dict.size(moved) {
+    0 -> tree
+    _ ->
+      list.filter_map(tree, fn(s) {
+        case owner(s) {
+          // A Go method: now under its type.
+          Ok(#(_, True)) -> Error(Nil)
+          // A Rust impl: stays, its members now under the type.
+          Ok(#(_, False)) -> Ok(DocumentSymbolDecoded(..s, children: []))
+          Error(Nil) ->
+            case dict.get(moved, s.name) {
+              Ok(members) ->
+                Ok(
+                  DocumentSymbolDecoded(
+                    ..s,
+                    children: list.append(s.children, members),
+                  ),
+                )
+              Error(Nil) -> Ok(s)
+            }
+        }
+      })
+  }
+}
+
+fn add(
+  old: Option(List(DocumentSymbolDecoded)),
+  more: List(DocumentSymbolDecoded),
+) -> List(DocumentSymbolDecoded) {
+  case old {
+    Some(list) -> list.append(list, more)
+    None -> more
+  }
+}
+
+/// gopls's method name `(T).m`, `(*T).m` or `(T[K]).m`: `T`.
+pub fn go_receiver(name: String) -> Result(String, Nil) {
+  case string.starts_with(name, "("), string.split_once(name, ").") {
+    True, Ok(#(receiver, method)) if method != "" -> {
+      let receiver = string.drop_start(receiver, 1)
+      let receiver = case string.starts_with(receiver, "*") {
+        True -> string.drop_start(receiver, 1)
+        False -> receiver
+      }
+      case string.split_once(receiver, "[") {
+        Ok(#(base, _)) -> Ok(base)
+        Error(Nil) -> Ok(receiver)
+      }
+      |> result.try(fn(t) {
+        case t {
+          "" -> Error(Nil)
+          _ -> Ok(t)
+        }
+      })
+    }
+    _, _ -> Error(Nil)
+  }
+}
+
+/// rust-analyzer's impl name `impl T<…>` or `impl Tr<…> for T<…>`
+/// (`impl<K> …` too): `T`, without type parameters or a path.
+pub fn rust_impl_type(name: String) -> Result(String, Nil) {
+  case string.starts_with(name, "impl ") || string.starts_with(name, "impl<") {
+    False -> Error(Nil)
+    True -> {
+      let rest = string.drop_start(name, 4)
+      // `impl<K> …`: skip the impl's own parameters.
+      let rest = case string.starts_with(rest, "<") {
+        True -> skip_angle(string.drop_start(rest, 1), 1)
+        False -> rest
+      }
+      let rest = string.trim(rest)
+      let self_type = case string.split_once(rest, " for ") {
+        Ok(#(_, t)) -> t
+        Error(Nil) -> rest
+      }
+      let self_type = case string.split_once(self_type, "<") {
+        Ok(#(base, _)) -> base
+        Error(Nil) -> self_type
+      }
+      let self_type =
+        string.trim(self_type)
+        |> string.split("::")
+        |> list.last
+        |> result.unwrap("")
+      case self_type {
+        "" -> Error(Nil)
+        t -> Ok(string.replace(t, "&", "") |> string.trim)
+      }
+    }
+  }
+}
+
+/// The text after the `>` closing an angle bracket already opened
+/// `depth` times.
+fn skip_angle(text: String, depth: Int) -> String {
+  case string.pop_grapheme(text), depth {
+    _, 0 -> text
+    Ok(#("<", rest)), _ -> skip_angle(rest, depth + 1)
+    Ok(#(">", rest)), _ -> skip_angle(rest, depth - 1)
+    Ok(#(_, rest)), _ -> skip_angle(rest, depth)
+    Error(Nil), _ -> ""
   }
 }
 

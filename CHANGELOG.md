@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not found. A module hit named like its file is now read as that file's root, and a bare name
   that isn't found says the server finds modules only (`workspace_symbol_modules_only`, bundled
   for elp) (#40).
+- `find_symbol Type/method` drills on rust-analyzer and gopls. rust-analyzer puts methods under
+  `impl T` symbols beside the type, and gopls names them `(T).m` at the top level, so a path
+  through the type never matched. Both layouts now read as the type's members; a bare method
+  name still matches once (#50).
 - get_diagnostics no longer answers a server's first, partial publish as the settled set. elp
   publishes `[]` and then the real set for each change, and perlnavigator `perl -c`'s findings
   and then Perl::Critic's; an answer taken in between said "no errors" or missed the critic's
