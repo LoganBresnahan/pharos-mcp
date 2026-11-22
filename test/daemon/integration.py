@@ -1253,9 +1253,13 @@ def t_config_key_warnings(sb):
     likely key it misspells), once in the daemon log and once in the ring
     runtime_log_tail reads, where people look, as well as in the boot log
     when the daemon's own boot read the file. A second session on the same
-    file adds no copy; an edited file warns afresh."""
+    file adds no copy; an edited file warns afresh. The unknown language
+    in [tool_config], checked once both files are merged, still names its
+    file; the "loaded" info line is logged once per session, not again by
+    the daemon's recheck."""
     sb.write_toml('ready_timeout_msx = 1\nsave_check_grace_ms = "soon"\n'
-                  'lazy_workspace_index_ms = -1\n')
+                  'lazy_workspace_index_ms = -1\n'
+                  '[tool_config.hover.stbu]\ndefault_timeout_ms = 5000\n')
     logdir = os.path.join(sb.state, "pharos", "log")
 
     def daemon_log():
@@ -1285,6 +1289,14 @@ def t_config_key_warnings(sb):
           "the wrong-type warning doesn't say the types: %s" % lines(wrong))
     check(all("value=-1" in l and 'effect="read as 0 (off)"' in l for l in lines(bad)),
           "the invalid-value warning doesn't say what pharos does: %s" % lines(bad))
+    toollang = "key=tool_config.hover.stbu"
+    wait_until(lambda: count(toollang) > 0, 10, "the tool-language warning")
+    check(count(toollang) == 1 and all(
+        "path=" + os.path.realpath(os.path.join(sb.fixture, ".pharos.toml")) in l
+        for l in lines(toollang)),
+        "the tool-language warning doesn't name its file once: %s" % lines(toollang))
+    check(count("loaded project config") == 1,
+          "the loaded line, once for one session: %s" % lines("loaded project config"))
     ring = a.tool(11, "runtime_log_tail", {"n": 500, "filter": "ready_timeout_msx"})
     check(ring.count("ready_timeout_msx") == 1, "runtime_log_tail: %s" % ring[-400:])
 
@@ -1853,6 +1865,14 @@ def t_find_symbol_generic_class(sb):
     out = a.tool(12, "find_symbol", {"name_path": "Pair", "scope_uri": pair})
     check('"status":"single"' in out and '"kind":5' in out,
           "expected the class Pair alone, not its constructor too: %s" % out[-500:])
+    # A library class named bare (javax.swing.Box) matches exactly, and
+    # must not outrank the workspace's Box<T> (the exact-over-stripped
+    # rule runs after the workspace preference).
+    with open(os.path.join(lib, "Box.stub"), "w") as f:
+        f.write("class Box plain {\n  function width() {\n  }\n}\n")
+    out = a.tool(14, "find_symbol", {"name_path": "Box", "scope_uri": uri})
+    check('"status":"single"' in out and "node_modules" not in out,
+          "a bare library Box outranked the workspace Box<T>: %s" % out[-500:])
     # The query's own type parameters (jdtls's display name).
     out = a.tool(13, "find_symbol", {"name_path": "Box<T>", "scope_uri": uri})
     check('"status":"single"' in out and "Box.stub" in out and "node_modules" not in out,

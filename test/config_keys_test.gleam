@@ -650,6 +650,21 @@ pub fn only_empty_file_extensions_keep_the_bundled_ones_test() {
   |> should.not_equal(resolved("[languages.ruby]\n").languages)
 }
 
+pub fn only_empty_file_extensions_on_a_new_language_say_it_matches_nothing_test() {
+  // N2: a language nothing else defines has no extensions to keep.
+  problems(
+    "[languages.mylang]\ncommand = \"my-lsp\"\nfile_extensions = [\"\"]\n",
+  )
+  |> should.equal([
+    BadValue(
+      "languages.mylang.file_extensions",
+      "",
+      "no empty entry",
+      "ignored; the language has no bundled extensions, so it matches no file",
+    ),
+  ])
+}
+
 pub fn dotted_global_file_taken_by_the_walk_is_not_ignored_test() {
   // F5: cwd is the XDG directory, which holds only .pharos.toml: the walk
   // reads it as the project file, so it isn't "not read".

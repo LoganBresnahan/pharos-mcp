@@ -223,7 +223,9 @@ Generic names (#39):
                               column 0, named `fn(T)`, and a `constructor`
                               line as a constructor `NAME(T)`; with
                               STUB_LSP_WORKSPACE_SYMBOL=all, workspace/
-                              symbol also finds classes, named bare
+                              symbol also finds classes, named bare. A
+                              `class NAME plain` line is named bare, as
+                              the JDK's non-generic classes are
 
 Refresh requests (#49):
 
@@ -795,8 +797,10 @@ def generic_symbols(text):
     for i, line in enumerate(lines):
         rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
         if line.startswith("class "):
-            name = line[len("class "):].split()[0].split("{")[0]
-            current = {"name": name + "<T>", "kind": 5, "range": dict(rng), "selectionRange": rng, "children": []}
+            words = line[len("class "):].split()
+            name = words[0].split("{")[0]
+            shown = name if len(words) > 1 and words[1] == "plain" else name + "<T>"
+            current = {"name": shown, "kind": 5, "range": dict(rng), "selectionRange": rng, "children": []}
             out.append(current)
         elif line.strip() == "constructor" and current is not None:
             base = current["name"].split("<")[0]

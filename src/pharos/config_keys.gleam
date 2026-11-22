@@ -369,7 +369,7 @@ fn check_value(
                 path,
                 "",
                 "no empty entry",
-                "ignored; the bundled extensions stay",
+                ignored_extensions_effect(context, path),
               ),
             ]
           }
@@ -854,5 +854,21 @@ fn next_row(
       next_row(rest_b, char_a, [above, ..rest_previous], [cell, ..acc], cell)
     }
     _, _ -> list.reverse(acc)
+  }
+}
+
+/// What an all-empty `file_extensions` list leaves: a bundled language
+/// keeps its bundled extensions; any other has none (a later file's
+/// `[languages.<id>]` replaces an earlier one's whole), so it matches no
+/// file.
+fn ignored_extensions_effect(context: Context, path: String) -> String {
+  let id = case string.split(path, ".") {
+    ["languages", id, ..] -> id
+    _ -> ""
+  }
+  case list.any(context.bundled, fn(pair) { pair.0 == id }) {
+    True -> "ignored; the bundled extensions stay"
+    False ->
+      "ignored; the language has no bundled extensions, so it matches no file"
   }
 }

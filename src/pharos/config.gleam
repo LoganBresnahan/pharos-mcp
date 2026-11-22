@@ -370,11 +370,21 @@ pub fn load() -> Config {
 /// own cwd and env; a session context (ADR-034) is this over the
 /// session's. Same code either way, so the two cannot drift.
 pub fn resolve(cwd: String, getenv: fn(String) -> Option(String)) -> Config {
+  resolve_with(cwd, getenv, True)
+}
+
+/// `announce`: log the info line naming each file read. `recheck/0`
+/// passes False, so a daemon start logs it once, not twice.
+fn resolve_with(
+  cwd: String,
+  getenv: fn(String) -> Option(String),
+  announce: Bool,
+) -> Config {
   warn_dotted_global(cwd, getenv)
-  defaults()
-  |> overlay_global_toml(getenv)
-  |> overlay_project_toml(cwd, getenv)
-  |> warn_unknown_tool_languages
+  let #(config, global) = overlay_global_toml(defaults(), getenv, announce)
+  let #(config, project) = overlay_project_toml(config, cwd, getenv, announce)
+  config
+  |> warn_unknown_tool_languages(option.values([global, project]))
   |> apply_env(getenv)
 }
 
@@ -513,6 +523,17 @@ fn earlier_servers(config: Config) -> List(#(String, List(String))) {
 pub fn unknown_tool_languages(
   config: Config,
 ) -> List(#(String, String, Option(String))) {
+  unknown_tool_language_entries(config)
+  |> list.map(fn(found) {
+    let #(tool, lang, suggestion) = found
+    #("tool_config." <> tool <> "." <> lang, lang, suggestion)
+  })
+}
+
+/// `#(tool, language, likely misspelling)` for `unknown_tool_languages`.
+fn unknown_tool_language_entries(
+  config: Config,
+) -> List(#(String, String, Option(String))) {
   let known =
     list.append(
       dict.keys(languages.default_registry()),
@@ -527,34 +548,65 @@ pub fn unknown_tool_languages(
     |> list.filter_map(fn(lang) {
       case list.contains(known, lang) {
         True -> Error(Nil)
-        False ->
-          Ok(#(
-            "tool_config." <> tool <> "." <> lang,
-            lang,
-            config_keys.closest(lang, known),
-          ))
+        False -> Ok(#(tool, lang, config_keys.closest(lang, known)))
       }
     })
   })
 }
 
-fn warn_unknown_tool_languages(config: Config) -> Config {
-  list.each(unknown_tool_languages(config), fn(found) {
-    let #(key, lang, suggestion) = found
-    case first_config_check(key, <<"tool language">>, writer.running()) {
-      False -> Nil
-      True ->
-        log.fields_at(
-          "pharos/config",
-          log_entry.Warn,
-          "config names an unknown language",
-          [
-            #("key", key),
-            #("name", lang),
-            ..option_field("did_you_mean", suggestion)
-          ],
-        )
+/// Warns about each unknown tool language, naming the file it is in
+/// (`files`: each file read, with its parsed TOML, global first). The
+/// check runs after the merge, so the file is found by looking the
+/// table up in each.
+fn warn_unknown_tool_languages(
+  config: Config,
+  files: List(#(String, Dynamic)),
+) -> Config {
+  list.each(unknown_tool_language_entries(config), fn(found) {
+    let #(tool, lang, suggestion) = found
+    let key = "tool_config." <> tool <> "." <> lang
+    let paths =
+      list.filter_map(files, fn(file) {
+        let #(path, parsed) = file
+        case
+          decode.run(
+            parsed,
+            decode.at(["tool_config", tool, lang], decode.dynamic),
+          )
+        {
+          Ok(_) -> Ok(path)
+          Error(_) -> Error(Nil)
+        }
+      })
+    let paths = case paths {
+      [] -> [""]
+      _ -> paths
     }
+    list.each(paths, fn(path) {
+      case
+        first_config_check(
+          path,
+          <<"tool language ", key:utf8>>,
+          writer.running(),
+        )
+      {
+        False -> Nil
+        True ->
+          log.fields_at(
+            "pharos/config",
+            log_entry.Warn,
+            "config names an unknown language",
+            list.flatten([
+              case path {
+                "" -> []
+                _ -> [#("path", path)]
+              },
+              [#("key", key), #("name", lang)],
+              option_field("did_you_mean", suggestion),
+            ]),
+          )
+      }
+    })
   })
   config
 }
@@ -564,7 +616,7 @@ fn warn_unknown_tool_languages(config: Config) -> Config {
 /// it is up. The first check, at boot, runs before the writer starts and
 /// reaches stderr only. Call once the writer runs.
 pub fn recheck() -> Nil {
-  let _ = resolve(cwd(), env.get)
+  let _ = resolve_with(cwd(), env.get, False)
   Nil
 }
 
@@ -573,16 +625,18 @@ pub fn recheck() -> Nil {
 fn overlay_global_toml(
   config: Config,
   getenv: fn(String) -> Option(String),
-) -> Config {
+  announce: Bool,
+) -> #(Config, Option(#(String, Dynamic))) {
   case getenv("PHAROS_CONFIG_FILE") {
-    Some(path) if path != "" -> overlay_path(config, path, "PHAROS_CONFIG_FILE")
+    Some(path) if path != "" ->
+      overlay_path(config, path, "PHAROS_CONFIG_FILE", announce)
     _ ->
       case xdg_config_path(getenv) {
-        None -> config
+        None -> #(config, None)
         Some(path) ->
           case path_exists(path) {
-            False -> config
-            True -> overlay_path(config, path, "global config")
+            False -> #(config, None)
+            True -> overlay_path(config, path, "global config", announce)
           }
       }
   }
@@ -657,7 +711,8 @@ fn overlay_project_toml(
   config: Config,
   cwd: String,
   getenv: fn(String) -> Option(String),
-) -> Config {
+  announce: Bool,
+) -> #(Config, Option(#(String, Dynamic))) {
   let #(found, ignored) = find_project_config(cwd, getenv)
   list.each(ignored, fn(pair) {
     let #(path, instead) = pair
@@ -673,8 +728,8 @@ fn overlay_project_toml(
     }
   })
   case found {
-    None -> config
-    Some(path) -> overlay_path(config, path, "project config")
+    None -> #(config, None)
+    Some(path) -> overlay_path(config, path, "project config", announce)
   }
 }
 
@@ -741,21 +796,32 @@ fn dirname(path: String) -> String
 
 // -- Path → Config overlay ------------------------------------------------
 
-fn overlay_path(config: Config, path: String, label: String) -> Config {
+/// The config with the file at `path` applied, and the file's parsed
+/// TOML when it could be read.
+fn overlay_path(
+  config: Config,
+  path: String,
+  label: String,
+  announce: Bool,
+) -> #(Config, Option(#(String, Dynamic))) {
   case read_toml(path) {
     Error(reason) -> {
       log.fields_at("pharos/config", log_entry.Warn, "ignoring " <> label, [
         #("path", path),
         #("reason", reason),
       ])
-      config
+      #(config, None)
     }
     Ok(#(bytes, parsed)) -> {
-      log.fields_at("pharos/config", log_entry.Info, "loaded " <> label, [
-        #("path", path),
-      ])
+      case announce {
+        True ->
+          log.fields_at("pharos/config", log_entry.Info, "loaded " <> label, [
+            #("path", path),
+          ])
+        False -> Nil
+      }
       warn_unknown_keys(path, bytes, parsed, earlier_servers(config))
-      apply_toml(config, parsed)
+      #(apply_toml(config, parsed), Some(#(path, parsed)))
     }
   }
 }

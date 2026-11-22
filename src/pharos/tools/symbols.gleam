@@ -411,8 +411,14 @@ pub fn find_symbol(
         Error(_) -> None
       }
       let is_workspace_file = fn(uri) { in_workspace(uri, root) }
+      // #39: on a server whose generic names carry their parameters, a
+      // name matched exactly outranks one matched only with them stripped
+      // (`Pair<int, int>` asked, `Pair` not wanted too). After the
+      // workspace preference: a JDK class named bare (`javax.swing.Box`)
+      // matches exactly and must not drop the project's `Box<T>`.
       let matches =
         prefer_workspace_files(matches, is_workspace_file)
+        |> exact_outranks_stripped
         |> drop_own_constructors
       // Only fuzzy matches (another case, a substring), and none in the
       // workspace: those are near misses, not an answer. jdtls's
@@ -734,16 +740,30 @@ fn trailing_segment(name: String) -> String {
 /// same thing asked for: jdtls names a class `Pair<A, B>` and its
 /// constructor `Pair(A, B)`, and `find_symbol Pair` answered both (#39).
 /// The class stays. An enum (10) is a container too: jdtls names a Java
-/// enum's constructor after it.
-fn drop_own_constructors(matches: List(SymbolMatch)) -> List(SymbolMatch) {
+/// enum's constructor after it. So is a constructor named like a class
+/// matched in the same file, outside it: clangd puts an explicit
+/// specialization's constructor (`Pair` in `Pair<int, int>`) beside the
+/// template.
+pub fn drop_own_constructors(matches: List(SymbolMatch)) -> List(SymbolMatch) {
   let containers =
     list.filter(matches, fn(m) { m.kind == 5 || m.kind == 23 || m.kind == 10 })
   list.filter(matches, fn(m) {
     m.kind != 9
     || !list.any(containers, fn(c) {
-      c.uri == m.uri && within(m.range, c.range)
+      c.uri == m.uri && { within(m.range, c.range) || c.name == m.name }
     })
   })
+}
+
+/// #39: when any match is exact, matches found only by stripping type
+/// parameters are dropped.
+pub fn exact_outranks_stripped(
+  matches: List(SymbolMatch),
+) -> List(SymbolMatch) {
+  case list.any(matches, fn(m) { m.matched_via == "exact" }) {
+    True -> list.filter(matches, fn(m) { m.matched_via != "type_params_strip" })
+    False -> matches
+  }
 }
 
 fn within(inner: Range, outer: Range) -> Bool {
