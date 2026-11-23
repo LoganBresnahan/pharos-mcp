@@ -3,7 +3,6 @@
 </p>
 
 <h1 align="center">pharos</h1>
-<h2 align="center">v0.2.1</h2>
 
 <p align="center">
   <strong>Headless LSP-MCP bridge for AI agents.</strong>
@@ -48,7 +47,7 @@ methodology, per-question data, and per-kind drill-downs at
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Language support](#language-support)
-- [Tools](#tools)
+- [Tools](#tools) (+ [reading answers](#reading-answers))
 - [CLI reference](#cli-reference)
 - [Configuration](#configuration)
 - [Benchmark methodology](#benchmark-methodology)
@@ -70,8 +69,8 @@ so sessions on the same project share language servers
 [ADR-035](doc/adr/035-releases-without-burrito.md)).
 
 Linux needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36,
-RHEL 10 or newer; RHEL 9's glibc is 2.34); pharos 0.2 doesn't run on
-Alpine/musl or older distros yet, and `pharos-mcp@0.1.4` still does.
+RHEL 10 or newer; RHEL 9's glibc is 2.34). pharos doesn't run on
+Alpine/musl or older distros yet; `pharos-mcp@0.1.4` still does.
 
 ### 1. install.sh (Linux, macOS)
 
@@ -131,7 +130,7 @@ Either way, add pharos to your MCP host's config:
 shared daemon. If a session can't reach the daemon it falls back to
 direct mode on its own, and `pharos --doctor` lists those fallbacks.
 
-pharos 0.2 runs on Linux and macOS. The macOS builds are made on macOS 15 and
+pharos runs on Linux and macOS. The macOS builds are made on macOS 15 and
 need macOS 15 or later: Intel builds always have, and Apple silicon builds do
 from the release after 0.2.2 (0.2.2 needs macOS 14). On Windows, install it inside WSL
 (`pharos-mcp@0.1.4` was the last native Windows build).
@@ -310,6 +309,58 @@ category + literal tool name — mix freely) or `tools = ["all"]` in
 | **raw** | 1 | `lsp_request_raw` | Off by default. Opt in only when the agent legitimately needs LSP methods pharos hasn't wrapped natively. |
 | **all** *(preset)* | 53 | All tools available | The "expose everything" preset (`tools = ["all"]`) — dogfood / power-user installs that want both `debug` and `raw` exposed. |
 
+### Reading answers
+
+**What a `uri` must look like.** Tools take a local file as a `file://`
+URI with an absolute path: `file:///home/me/proj/main.go`.
+`file://localhost/abs` and `file:/abs` are accepted too. Everything else
+is refused with a message that says what to send instead: a relative or
+bare path, a `file://` URI naming another host (a relative
+`file://src/a.ts` reads as the host `src`), a `file:` URI with a relative
+path, and a path with a line on the end (`main.go:12`,
+`file:///abs/main.go:12`), which gets the URI and the 0-based `line` to
+pass. A URI of another scheme (`untitled:`, `https://`) is not a file on
+disk; `jdt://` and other schemes a language registers work with the
+navigation tools and `fetch_uri_contents`, and get_diagnostics says it
+covers files on disk only; for a file that isn't on disk it fails at once
+("file not found", #61).
+
+**get_diagnostics.** Answers are as of the file on disk, and an answer
+the server may not have caught up with says so in a `pharos` member:
+
+- `carried_over`: the server hasn't published since the last change (or
+  pharos couldn't wait for it): this is its last set, which may describe
+  the text before the change. It still holds if the change left the
+  diagnostics as they were.
+- `assumed_current`: the server published nothing since the file was
+  opened, and it publishes nothing for a file without problems
+  (lua-language-server), so the set is taken as current.
+- `files_unchecked`: pharos hadn't finished checking the tree for files
+  changed on disk before this answer. (Other tools that pass a server's
+  answer through carry the same note as a second text block.)
+- `not_reported`: on a language with several servers (Python: pyright and
+  ruff), these servers reported nothing in time; their diagnostics are
+  unknown, not empty.
+- "No textDocument/publishDiagnostics notification was received for …
+  within the timeout" means the server said nothing in time: the
+  diagnostics are unknown, not empty.
+
+**find_symbol.** At most 16 files are searched per call: `scope_uri`
+first, then those whose symbols the workspace search named exactly like
+the query;
+`files_not_searched` says how many it named that weren't, and how to
+narrow (a `scope_uri` in the defining file, or a fuller `name_path`). A
+match found only in another case or by a partial name carries a note
+("no exact match for the name asked; nearest by a partial name: X", or
+"… nearest in another case: X"). On
+servers whose workspace search finds modules only (elp, perlnavigator),
+ask for `module/function` or `Package/sub`; a bare name not found says so.
+
+**Unsupported methods.** When a server doesn't advertise a method, the
+tool says so ("this language server (<id>) doesn't support <method>: it
+doesn't advertise <capability>, so pharos didn't send the request")
+instead of failing.
+
 [↑ top](#pharos)
 
 ## CLI reference
@@ -327,9 +378,9 @@ commands.
 | `pharos --cleanup` | List orphan LSP children left behind by prior pharos sessions that exited uncleanly (host crash, SIGKILL, OOM-killer). Dry-run by default — adds nothing destructive without a flag. |
 | `pharos --cleanup --yes` | Reap the orphans listed by `--cleanup`: SIGTERM each, wait 5 s, SIGKILL survivors, remove their per-PID tracking directory. |
 | `pharos daemon status [--all]` | This version's shared daemon (or every daemon): its sessions and language servers. |
-| `pharos daemon stop [--all]` | Stop this version's daemon (or all). Sessions on it see their server exit; MCP clients restart it on reconnect. |
+| `pharos daemon stop [--all]` | Stop this version's daemon (or all). Returns once the daemon has exited (up to 10 s; past that it says the daemon is still stopping and exits 1). Sessions on it see their server exit; MCP clients restart it on reconnect. |
 | `pharos --direct` | Run this session in its own process instead of the shared daemon (also `PHAROS_MODE=direct`). |
-| `pharos diagnostics [--json] [--timeout-ms N] FILE...` | The files' diagnostics through the shared daemon, for hooks and scripts. Each file is `ok`, `unsure` (pharos marked the answer: say nothing) or `failed`; exit 0 once the daemon answered, 1 if pharos itself failed. A captAInHook payload built on it ships in every release: [integrations/captainhook/](integrations/captainhook/README.md). |
+| `pharos diagnostics [--json] [--timeout-ms N] FILE...` | The files' diagnostics through the shared daemon, for hooks and scripts. Each file is `ok`, `unsure` (pharos marked the answer: say nothing) or `failed`; exit 0 once the daemon answered, 1 if pharos itself failed, 2 on bad usage. A captAInHook payload built on it ships in every release: [integrations/captainhook/](integrations/captainhook/README.md). |
 | `pharos self update [--version V]` | Install the latest release (or V) with its install.sh. An npm install prints the npm command instead. |
 | `pharos self rollback` | Switch back to the previous version. |
 | `pharos self prune` | Remove the versions install.sh no longer keeps (all but the current and previous, unless running), and what pharos 0.1.x unpacked under `~/.local/share/.burrito/pharos_*` that no running process uses. |
@@ -352,6 +403,7 @@ commands.
 | `PHAROS_SHUTDOWN_DRAIN_MS` | How long to wait for in-flight requests before initiating LSP shutdown on SIGTERM/stdin-EOF. | `2000` |
 | `PHAROS_DAEMON_IDLE_SECS` | How long the shared daemon stays up after its last session ends. | `1800` |
 | `PHAROS_LSP_IDLE_SECS` | Stop a language server after this many seconds with no request routed to it; it restarts on the next call. Overrides every language's `idle_stop_secs`. `0` never stops. | `1800` (java, scala, haskell: `7200`) |
+| `PHAROS_RUNTIME_DIR` | Where the daemon's socket lives. A path too long for a Unix socket falls back to `/tmp/pharos-<uid>/` under a name hashed from it, and an explicit one that doesn't fit is reported on stderr. | `$XDG_RUNTIME_DIR/pharos` (macOS: `$TMPDIR/pharos`), else `/tmp/pharos-<uid>` |
 | `PHAROS_WATCH_BUDGET_MS` | How long one scan for files changed on disk may walk before a question (ADR-043). Never more than what's left of the question's timeout. A tree scanned whole within half of it is scanned before every question; a larger one at most every 2 s, resuming where it stopped, with answers marked until it has covered the tree. | `200` |
 
 [↑ top](#pharos)
@@ -375,7 +427,22 @@ pharos --print-default-config > ~/.config/pharos/pharos.toml
 $EDITOR ~/.config/pharos/pharos.toml
 ```
 
-The full schema lives in [doc/example-pharos.toml](doc/example-pharos.toml).
+The full schema lives in [doc/example-pharos.toml](doc/example-pharos.toml),
+including the per-server tuning keys: settle windows for servers that
+publish in phases, silence after an open, position encodings, file
+watching and modules-only lookups. `pharos --print-language-config <id>`
+shows the values in effect for a language.
+
+pharos checks every config file it reads and warns, on stderr and in the
+daemon log, about unknown keys (with the likely spelling), values of the
+wrong type, unusable values, unknown tool or language names, missing
+required keys and keys in the wrong table. A value that would do harm is
+ignored: an unknown `diagnostics_mode`, an `initialize_timeout_ms` or a
+`[tool_config]` `default_timeout_ms` of 0 or less, a negative
+`idle_stop_secs`, and an empty file extension keep the default; a `tools`
+list in which no entry names a tool, category or preset keeps the earlier
+setting (`"default"` unless an earlier file set one), while an explicit
+`tools = []` exposes none.
 
 ### Tool filter (`tools = [...]`)
 
@@ -392,7 +459,8 @@ tools = ["hover", "goto_definition"]   # fully explicit
 ### Per-tool timeout overrides (`[tool_config.<name>]`)
 
 Every LSP-bound tool accepts an optional `timeout_ms` argument and has
-a compile-time default (`30s` for most, `60s` for `find_references`).
+a compile-time default: 30 s for most, 60 s for `find_references`, 20 s
+for `get_diagnostics`.
 Override globally or per-language:
 
 ```toml
@@ -416,7 +484,7 @@ Recommended starting bumps for heavy LSPs:
 | `jdtls` (java) | `type_hierarchy_*`, `find_references`, `format_document` | 90-120 s |
 | `metals` (scala) | `workspace_symbols`, `inlay_hints`, `semantic_tokens`, `rename_preview` | 60-90 s |
 | `ruby-lsp` | `goto_*`, `call_hierarchy_prepare` | 60 s |
-| `perl/PLS` | `find_references`, `rename_preview` | 120-240 s |
+| `perlnavigator` (perl) | `find_references`, `rename_preview` | 120-240 s |
 | `gopls` (big mod) | `workspace_symbols` | 90 s |
 | `rust-analyzer` (monorepo) | `format_document` | 60 s |
 
@@ -566,7 +634,7 @@ optional argument; defaults are listed in
 | `goto_implementation` | URI + range list of implementations (trait impls, abstract overrides, etc.) | `textDocument/implementation` |
 | `find_references` | URI + range list of every reference site | `textDocument/references` |
 | `find_referencing_symbols` | One step deeper than `find_references` — returns the *containing symbol* of each reference (function name, class, etc.) | composed: `references` → `documentSymbol` per uri |
-| `find_symbol` | Locate a symbol by name + optional kind across the workspace | `workspace/symbol` |
+| `find_symbol` | Locate a symbol by `name_path` (`Type/member`, `module/function`) across the workspace. Searches at most 16 files per call, the ones named exactly like the query first, and says so in `files_not_searched` when it left some out | `workspace/symbol` + `documentSymbol` |
 | `document_symbols` | Outline of every symbol in one file (hierarchical) | `textDocument/documentSymbol` |
 | `workspace_symbols` | Fuzzy-match symbol name across the workspace | `workspace/symbol` |
 | `get_symbols_overview` | Top-level outline only (no nesting) — cheaper than `document_symbols` for "what's in this file" probes | composed |
@@ -578,7 +646,7 @@ optional argument; defaults are listed in
 | `type_hierarchy_prepare` | Anchor a type-hierarchy query | `textDocument/prepareTypeHierarchy` |
 | `type_hierarchy_supertypes` | Parent classes/traits | `typeHierarchy/supertypes` |
 | `type_hierarchy_subtypes` | Child classes/implementations | `typeHierarchy/subtypes` |
-| `get_diagnostics` | Errors/warnings for one file or workspace-wide | `textDocument/diagnostic` + cached `publishDiagnostics` |
+| `get_diagnostics` | Errors and warnings for one file (`uri`), as of the file on disk; see [Reading answers](#reading-answers) for its markers | `textDocument/diagnostic` + cached `publishDiagnostics` |
 | `inlay_hints` | Inline type / parameter hints in a range | `textDocument/inlayHint` |
 | `semantic_tokens` | Token-level semantic classifications for syntax-aware operations | `textDocument/semanticTokens/*` |
 | `fetch_uri_contents` | Read raw text behind a custom URI scheme (e.g. `jdt://` for jdtls class-file contents) — see [ADR-029](doc/adr/029-custom-uri-schemes.md) | scheme-dependent |
@@ -657,21 +725,21 @@ benchmarked five — follow each LSP's own install instructions.
 | Language | Server(s) | Notes |
 |----------|-----------|-------|
 | C / C++ | [clangd](https://clangd.llvm.org/) | Needs `compile_commands.json` for non-trivial projects |
-| Elixir | [next-ls](https://github.com/elixir-tools/next-ls) (default) — alts: [elixir-ls](https://github.com/elixir-lsp/elixir-ls), [start_expert](https://github.com/elixir-lang/expert) | |
-| Erlang | [elp](https://github.com/WhatsApp/erlang-language-platform) — alt: [erlang_ls](https://github.com/erlang-ls/erlang_ls) | A module created on disk stays unknown to elp until it is opened: elp acts on no file-change event for source files (ADR-043) |
+| Elixir | [next-ls](https://github.com/elixir-tools/next-ls) (default) — alts: [elixir-ls](https://github.com/elixir-lsp/elixir-ls), [start_expert](https://github.com/elixir-lang/expert) | next-ls counts columns in code points; pharos converts them, so positions on lines with non-ASCII text are right. next-ls publishes nothing for a clean file, so get_diagnostics on one waits out its timeout and says no publish came (#59). It compiles only on a save and acts on no file-change event, so a file changed on disk and asked about for the first time gets no compile. It needs Hex where the session's `MIX_HOME` / `MIX_ARCHIVES` point, or it never starts its runtime (sessions that differ in them get separate servers, #62). After a change, get_diagnostics waits for the compile next-ls runs on save (#60) and for its indexing progress, so an answer after an edit can take several seconds (about 10 s on geex, more under load) although the new set is published sooner |
+| Erlang | [elp](https://github.com/WhatsApp/erlang-language-platform) — alt: [erlang_ls](https://github.com/erlang-ls/erlang_ls) | elp's workspace search finds modules only: ask find_symbol for `module/function` (`util/helper`, or `util/helper/1` with the arity); a bare function name is looked for in scope_uri only. elp publishes nothing for a file without problems, so get_diagnostics on a clean file waits out its timeout (20 s by default) and says no publish came; a shorter `timeout_ms` shortens the wait (#56). A first answer can be elp's compiler set before its lint set arrives, unmarked; asking again gets the whole set. A file asked about in the same step as files changed on disk reach elp can lose its set to elp re-reading those files, and then waits out its timeout too (#56). A module created on disk becomes known to elp after its project reload, which elp runs at its next event 500 ms or more after the change (ADR-043) |
 | Gleam | [gleam lsp](https://github.com/gleam-lang/gleam) (built into compiler) | Pharos dogfoods its own gleam tree against this |
 | Scala | [metals](https://github.com/scalameta/metals) | First-run bootstraps Bloop (~2-3 min); pharos timeout config covers it |
 | Clojure | [clojure-lsp](https://github.com/clojure-lsp/clojure-lsp) | Native binary, no JVM cold-start |
 | Haskell | [haskell-language-server](https://github.com/haskell/haskell-language-server) (`haskell-language-server-wrapper`) | Use `ghcup` to keep GHC/cabal/HLS in sync |
-| Ruby | [ruby-lsp](https://github.com/Shopify/ruby-lsp) | Project needs `Gemfile.lock` (run `bundle install` first). ruby-lsp never indexes a method defined outside a class or module, so its workspace search never returns a top-level `def`: definition and hover on a call to one answer nothing, and find_symbol finds it only with scope_uri set to the file that defines it (from another file it may answer a similarly named method instead); methods in classes and modules are found from anywhere |
-| Lua | [lua-language-server](https://github.com/LuaLS/lua-language-server) | |
+| Ruby | [ruby-lsp](https://github.com/Shopify/ruby-lsp) | Project needs `Gemfile.lock` (run `bundle install` first). Diagnostics are pulled; positions on lines with non-ASCII text are converted (ruby-lsp counts UTF-8 bytes). ruby-lsp never indexes a method defined outside a class or module, so its workspace search never returns a top-level `def`: definition and hover on a call to one answer nothing, and find_symbol finds it only with scope_uri set to the file that defines it (from another file it may answer a similarly named method instead); methods in classes and modules are found from anywhere |
+| Lua | [lua-language-server](https://github.com/LuaLS/lua-language-server) | lua-language-server publishes nothing for a clean file, so get_diagnostics answers `[]` marked `assumed_current` about 2 s after a file's open, once the workspace is loaded and diagnosed; before that (about 30 s on a large project) the answer waits, past the 20 s default timeout. Asked again with nothing changed, the answer is the same. After an edit, silence never counts: the answer waits as for any server; a file answered `[]` that way and edited, still clean, gets `[]` marked `carried_over` in about 2 s. Each answer after a publish waits 1 s for its later phases; on a heavily overloaded machine a partial set can still come back unmarked (#54) |
 | Bash | [bash-language-server](https://github.com/bash-lsp/bash-language-server) | Diagnostics need `shellcheck` on PATH |
 | Zig | [zls](https://github.com/zigtools/zls) | Match your zig version |
-| Perl | [pls](https://github.com/FractalBoy/perl-language-server) | |
+| Perl | [perlnavigator](https://github.com/bscan/PerlNavigator) | Its workspace search returns packages only (from the root `lib/`): ask find_symbol for `Package/sub` (`My::App/run` for lib/My/App.pm); a bare sub name is looked for in scope_uri only. perlnavigator publishes each check twice, first with the previous check's Perl::Critic findings, so get_diagnostics waits for the second: about 2.35 s after an edit, 2.5 s after an open (ADR-038) |
 | HTML / CSS / JSON | [vscode-langservers-extracted](https://github.com/hrsh7th/vscode-langservers-extracted) (one package) | |
 | YAML | [yaml-language-server](https://github.com/redhat-developer/yaml-language-server) | |
 | Markdown | [marksman](https://github.com/artempyanykh/marksman) | Single Rust binary |
-| Terraform / HCL | [terraform-ls](https://github.com/hashicorp/terraform-ls) | |
+| Terraform / HCL | [terraform-ls](https://github.com/hashicorp/terraform-ls) | terraform-ls returns columns in code points; pharos converts them |
 
 ### Adding your own language
 

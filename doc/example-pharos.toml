@@ -292,8 +292,9 @@
 # rust-analyzer reruns cargo check on save and, until it ends, republishes
 # the last check's diagnostics at the new version. `save_check_grace_ms` is
 # how long get_diagnostics waits after a sync for such a check to begin
-# (then it waits for the check to end). Bundled: rust-analyzer 500, others
-# 0. Set it for a server of your own that does the same:
+# (then it waits for the check to end). Bundled: rust-analyzer 500, next-ls
+# 100 (it compiles on save, #60), others 0. Set it for a server of your own
+# that does the same:
 #
 # [languages.mylang]
 # command = "mylang-lsp"
@@ -413,7 +414,9 @@
 # those that watch by themselves don't, and nothing is scanned for them.
 # A small tree is scanned whole before every question; a large one at
 # most every 2 s, 200 ms at a time (PHAROS_WATCH_BUDGET_MS), and answers
-# say so while the scan hasn't covered it.
+# say so while the scan hasn't covered it. File times are whole seconds,
+# so the first scan can't tell a file stamped in the second the server
+# started from one changed after: it reports such a file once (#58).
 #
 # `watch_files = false` turns it off for a server (it isn't offered
 # watcher registration at all, and keeps any watching of its own);

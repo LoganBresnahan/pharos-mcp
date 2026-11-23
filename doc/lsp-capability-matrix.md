@@ -265,10 +265,11 @@ default JSON-RPC + LSP framing:
   + `get_diagnostics` + `inlay_hints` + `semantic_tokens` regularly
   timeout out on cold workspace.
 - **perlnavigator (perl)** — replaced PLS in pass 20+ era. Stable; no
-  per-call tuning beyond the 240s override carried from PLS era. A
-  server limit: after an edit, its Perl::Critic diagnostics keep the line
-  numbers they had when the file was opened, so they can point at a stale
-  line until the file is reopened; pharos can't correct that (ADR-038).
+  per-call tuning beyond the 240s override carried from PLS era. It
+  publishes each check twice, the first time with the previous check's
+  Perl::Critic findings (which looked like Critic entries keeping their
+  open-time lines after an edit); pharos waits for the second
+  (`publish_settle_ms` 1000, polish 8, ADR-038).
 - **gopls (go)** — the call-h F in pass 27 is the target, not gopls:
   it's the struct `flagConfig`, and gopls rightly answers that it isn't
   a function, so the chained calls had no item (#43). `type_hierarchy_*`

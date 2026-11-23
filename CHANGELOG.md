@@ -60,8 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then says the daemon is still stopping and exits 1. A daemon that has exited but not been
   reaped yet (a zombie: its spawning shim suspended, or a container whose PID 1 never reaps)
   counts as gone.
-- perlnavigator's Perl::Critic diagnostics keep the line they had at the open after an edit; that
-  is the server's, now documented as a limit (ADR-038).
 - A `uri` in the path:line form (`main.go:12`, `src/a.ts:12:5`, `file:///abs/main.go:4`) is
   refused with what to send instead (the file URI, and the line and character 0-based), rather
   than read as a URI whose scheme is `main.go:` or as an unsupported file type. A bare name with
@@ -98,13 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `shutdown` and `exit` before closing its stdin. Closing stdin alone made gleam panic ("Fatal
   compiler bug") and elp exit with status 101; a server that doesn't answer within 1 s is stopped
   as before (#48).
-- `find_symbol` on a cold session retries an empty search on every server for 3 s after the
-  first file opens, and for 1.5 s after a server's indexing progress ends, instead of a
-  per-server table counted from spawn: servers missing from the table got no wait at all, and a
-  real miss on bash-language-server or next-ls in the first 20 s could take up to 15 s.
-  bash-language-server keeps a longer grace (6 s), for big projects it indexes without
-  reporting progress, and now analyses up to 5000 files in the background
-  (its default 500 left half of a large shell repo unfindable) (#44).
+- `find_symbol` on a cold session retries an empty search while the server may still be
+  indexing: for 3 s after the first file opens, while it reports indexing progress, and for
+  1.5 s after that progress ends. 0.3.5 didn't retry, so a server still indexing answered
+  not_found. bash-language-server gets a longer grace (6 s), for big projects it indexes
+  without reporting progress, and now analyses up to 5000 files in the background (its default
+  500 left half of a large shell repo unfindable) (#27, #44).
 - `find_symbol` on elp resolves `module/function` and a module. elp 1.1's workspace search finds
   modules only, and its documentSymbol has no module node, so `util/helper` and `util` were
   not found. A module hit named like its file is now read as that file's root, and a bare name
@@ -115,20 +112,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the type never matched. Both layouts now read as the type's members; a bare method
   name still matches once (#50).
 - get_diagnostics no longer answers a server's first, partial publish as the settled set. elp
-  publishes `[]` and then the real set for each change, and perlnavigator `perl -c`'s findings
-  and then Perl::Critic's; an answer taken in between said "no errors" or missed the critic's
-  entries, unmarked. pharos now waits until such a server has published nothing more for its
-  `publish_settle_ms` (elp 50 ms, perlnavigator 100 ms, others 0; never past the call's
-  timeout). An empty set published without a version, from a server that versions its
-  publishes (clangd, when a document is reopened), no longer counts as the answer while the
-  real one may follow, and a reopened document is saved when the server asks for saves, so
-  rust-analyzer re-checks it (#45).
+  publishes `[]` and then the real set for each change, and perlnavigator publishes each check
+  twice, first `perl -c`'s new findings with the previous check's Perl::Critic findings, then
+  the right set about 0.3 s later; an answer taken in between said "no errors" or carried the
+  previous Critic findings (which looked like Critic entries keeping their old lines), unmarked.
+  pharos now waits until such a server has published nothing more for its `publish_settle_ms`
+  (elp 50 ms, perlnavigator 1000 ms, lua-language-server 1000 ms since #46, others 0; never past
+  the call's timeout). On perlnavigator an answer after an edit takes about 2.35 s. An empty set
+  published without a version, from a server that versions its publishes (clangd, when a
+  document is reopened), no longer counts as the answer while the real one may follow, and a
+  reopened document is saved when the server asks for saves, so rust-analyzer re-checks it
+  (#45).
 - get_diagnostics on jdtls answers an empty set only once 600 ms have passed since the server's
   first publish after the change (jdtls can publish an interim `[]` without a version about
-  0.5 s before the real one), and on perlnavigator an answer right after opening a file waits
-  until 650 ms after its first publish (its Perl::Critic findings come about 0.34 s after the
-  open). `empty_publish_settle_ms` and `open_settle_ms` set
-  either for any server (#45).
+  0.5 s before the real one), and on perlnavigator an answer right after opening a file waits until
+  650 ms after its first publish (its Perl::Critic findings come about 0.34 s after the open),
+  then for its publishes to settle: about 2.5 s after the open in all. `empty_publish_settle_ms`
+  and `open_settle_ms` set either for any server (#45).
 - pharos answers a server's `workspace/diagnostic/refresh`, `workspace/semanticTokens/refresh`,
   `workspace/inlayHint/refresh`, `workspace/codeLens/refresh`, `workspace/inlineValue/refresh`
   and `workspace/foldingRange/refresh` requests with an empty success, as VS Code does. They were
@@ -150,9 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   servers count as a line break or not, the next change reopens the document instead.
   `full_change_as_range = true | false` forces either form for a server (ADR-038
   amendment (A)).
-- get_diagnostics on a file deleted from disk, on a pull server that answers a null report for
-  a document it doesn't hold (ruby-lsp), answers that no diagnostics were observed. It used to
-  fail with "diagnostic response decode failed" and restart the server.
+- A pull server's null report for a document it doesn't hold (ruby-lsp) reads as no
+  diagnostics observed. It used to fail with "diagnostic response decode failed" and restart
+  the server.
 - Files changed on disk that pharos never opened reach the servers that rely on their client to
   watch files (gopls, pyright, jdtls and others). Before, a file a checkout or a build created,
   changed or deleted stayed unknown to them: an import of a new package stayed broken. pharos
@@ -172,9 +172,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A session with a thin env (a hook, a cron job) that started next-ls first was joined by every
   later one, and next-ls without Hex never starts its runtime (#62).
 - pharos no longer moves an `erl_crash.dump` it finds in its working directory into its own
-  log dir. Run in an Elixir, Erlang or Gleam project, every pharos start (even `--version`) took
-  that project's crash dump, where pharos's log rotation then deleted it; pharos's own dumps
-  already go to its log dir (#55).
+  log dir. Each start of pharos's runtime in an Elixir, Erlang or Gleam project took that
+  project's crash dump, where pharos's log rotation then deleted it: the daemon (in the working
+  directory of the session that started it), a `--direct` session, or a command such as
+  `--print-language-config`. pharos's own dumps already go to its log dir (#55).
 - A pharos.toml warning is logged once, not twice, when the daemon's boot-time recheck and the
   first session's config check run at the same moment (the check for "already logged" wasn't
   atomic; an integration run caught it).
@@ -212,6 +213,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[[languages.<id>.servers]]`). How the file applies is unchanged; these used to pass
   without a word. Older names it still reads, such as `readiness_timeout_ms`, don't warn
   (#32).
+- get_diagnostics on ruby-lsp works: it never pushes diagnostics, so it's now asked for them
+  (pull), where 0.3.5 waited out its timeout. Its edits go as a ranged replace, which ruby-lsp
+  needs (it kept the old text after a range-less change) (#35, #38).
+- A server is told it may pull diagnostics only when pharos pulls them from it. In 0.3.5 every
+  server was told it could: rust-analyzer then served its own diagnostics by pull and pushed only
+  cargo check's, which came before pharos's didOpen, so a never-edited Rust file waited out the
+  timeout. vscode-css now validates, so CSS diagnostics appear (#8).
+- A cold rust-analyzer, gopls or pyright no longer waits about 59 s at spawn: the readiness wait
+  ends when the server is ready, and what it publishes meanwhile is kept (#12).
+- get_diagnostics on rust-analyzer no longer answers a fixed file's old error as fresh: it waits
+  while the check rust-analyzer reruns after a sync is running, giving that check's progress
+  `save_check_grace_ms` to begin (500 ms for rust-analyzer, 0 for others); past the call's
+  deadline the answer is marked carried over (#30).
+- A publish that arrives in the same read as a reply, or behind an error reply, is no longer
+  lost (zls's diagnostics after find_symbol), and a reply cut off by a timeout no longer leaves
+  half a frame in front of every later one (#25, #31, #33).
+- find_symbol takes a null workspace/symbol answer (perlnavigator, lua-language-server, gopls)
+  as no matches instead of failing; a not_found from a search narrowed to scope_uri says so;
+  and a match in the workspace now outranks one in a library, and a match found only in a
+  library by case or a partial name is a near miss (jdtls answered `helper` with the JDK's
+  `Helper`) (#26, #28, #29).
+- A server that exits during its handshake (ruby-lsp without a Gemfile.lock) says so, with its
+  exit status and where its error output went (the daemon's boot log) (#36).
+- Every LSP request tool says plainly when the server doesn't support the method, where some
+  timed out, answered `[]` or passed a raw -32601 through (#37).
+- A non-ASCII HOME, environment values and server paths work: the daemon couldn't boot with a
+  non-ASCII HOME (#20).
+- Two long `PHAROS_RUNTIME_DIR`s no longer share one daemon: the fallback socket under
+  `/tmp/pharos-<uid>/` is named after the requested dir, and an explicit dir too long for a
+  socket is reported on stderr (#14).
+- `pharos daemon status` no longer fails on macOS with "Invalid argument" (#34).
+- `bin/pharos-dev` keeps stdout to JSON-RPC frames (#9).
 
 ## [0.3.5] — 2026-11-19
 

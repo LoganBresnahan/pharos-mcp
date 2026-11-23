@@ -271,7 +271,7 @@ it reruns on save ends, about 2 s later. So right after an agent fixed a Rust er
   running.
 - A sync on a server configured to start a check on save waits up to its
   `save_check_grace_ms` for that check's begin to land (cargo check's comes just after the
-  save). rust-analyzer has 500 ms; every other bundled server has 0.
+  save). rust-analyzer has 500 ms; every other bundled server has 0 (#60: next-ls 100 ms).
 - A progress running past 30 s is taken as stuck and no longer holds answers.
 - The wait never passes the call's deadline. If the deadline comes first, the entry is answered
   marked carried over (unsure), never as fresh.
@@ -430,7 +430,9 @@ Two more cases, each a per-server value (Logan's choice, polish 2):
   one: perlnavigator publishes at about 35, 340, 1035 and 1345 ms after an open, then stops, and
   with quiet a question landing near the later two waited about 0.65 s more. Bundled:
   perlnavigator 650 ms (Critic's set came 299–394 ms after the open's first publish in
-  verifier's runs, the next repeat about 1 s after it; the open's answer costs about 0.7 s),
+  verifier's runs, the next repeat about 1 s after it; the window costs about 0.7 s, and with
+  polish 8's 1000 ms `publish_settle_ms` after it the open's answer comes about 2.5 s after the
+  open quiet, 3.3 s at load 11),
   others 0; changes after the open are unaffected.
 - **perlnavigator's stale Perl::Critic lines were pharos answering too early (polish 8).** After
   an edit, Critic entries seemed to keep the lines they had before it (15 of 15 edits in

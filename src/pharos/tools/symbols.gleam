@@ -317,7 +317,7 @@ fn drill_plan(
         [], [_, first, ..more] -> {
           let segments = list.reverse([first, ..more])
           let parent = string.join(segments, "::")
-          // Polish 6 (verifier's N3): and every ancestor itself, which can
+          // Polish 7 (verifier's N3): and every ancestor itself, which can
           // hold a helper named under it (Class::Struct::Tie_ISA, in
           // Class/Struct.pm; Env::Array::VMS, in Env.pm).
           let ancestors =
@@ -933,7 +933,7 @@ fn normalize_tree(
 ) -> List(DocumentSymbolDecoded) {
   let tree = attach_members(tree)
   let stem = file_stem(uri)
-  // Polish 6 (verifier's B2): only on a modules-only server (elp,
+  // Polish 7 (verifier's B2): only on a modules-only server (elp,
   // perlnavigator): jdtls's outline starts with a one-line `package` node
   // that must not take the classes after it.
   let nested = case modules_only {
@@ -969,7 +969,7 @@ fn nest_in_packages(
     position_le(outer.range.start, inner.range.start)
     && position_le(inner.range.end, outer.range.end)
   }
-  // Polish 6 (verifier's B2): a symbol belongs to the package whose range
+  // Polish 7 (verifier's B2): a symbol belongs to the package whose range
   // holds its start, so a sub straddling a package's end (an inner
   // `package` inside its body) still lands; and every childless package
   // node counts, even one that holds nothing (IPC::Msg, whose subs all
