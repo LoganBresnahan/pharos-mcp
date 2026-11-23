@@ -2173,6 +2173,12 @@ def t_find_symbol_caps_its_drills(sb):
           and "searched 15 of the 20 files the workspace search named" in j.get("files_not_searched", "")
           and drills() - before <= 16,
           "capped exact `put`: %d drills, %s" % (drills() - before, r[-300:]))
+    # verifier's N2 on polish 6: scope_uri among the named files, so no
+    # ", and scope_uri".
+    r = a.tool(13, "find_symbol", {"name_path": "put", "scope_uri": "file://" + os.path.join(sb.fixture, "x00.stub")})
+    note = json.loads(r).get("files_not_searched", "")
+    check("searched 16 of the 20 files the workspace search named (exact names first);" in note
+          and "and scope_uri" not in note, "scope among the named: %s" % note)
 
 
 def t_find_symbol_prefers_the_workspace(sb):
@@ -2382,8 +2388,17 @@ def t_find_symbol_perl_block_packages(sb):
     stub_file(sb, "Struct.stub", "sym 4 Class::Struct ~1\nsym 12 printem\nsym 4 Class::Struct::Tie_ISA ~3\n"
               "sym 12 TIEARRAY\nsym 12 import\nsym 12 struct\n")
     uri = stub_file(sb, "main.stub", "sym 12 run\n")
+    # verifier's B2: a package holding nothing before its inner block
+    # (IPC::Msg), and a sub straddling its package's end (Net::Domain's
+    # _hostname, with a `package main;` inside its body).
+    stub_file(sb, "Msg.stub", "sym 4 IPC::Msg ~1\nplain\nsym 4 IPC::Msg::stat ~3\nplain\n"
+              "sym 12 new\nsym 12 snd\n")
+    stub_file(sb, "Domain.stub", "sym 4 Net::Domain ~2\nsym 12 _hostname ~4\nplain\n"
+              "sym 4 main ~5\nplain\nsym 12 hostfqdn\n")
     for i, (path, line) in enumerate((("Class::Struct/struct", 5), ("Class::Struct/printem", 1),
-                                       ("Class::Struct::Tie_ISA/TIEARRAY", 3))):
+                                       ("Class::Struct::Tie_ISA/TIEARRAY", 3),
+                                       ("IPC::Msg/new", 4), ("IPC::Msg/snd", 5),
+                                       ("Net::Domain/_hostname", 1))):
         out = a.tool(10 + i, "find_symbol", {"name_path": path, "scope_uri": uri})
         j = json.loads(out)
         check(j.get("status") == "single" and j["match"]["range"]["start"]["line"] == line,

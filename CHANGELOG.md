@@ -23,9 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a second package in its file like `Tie::StdHash/TIEHASH`) drills that package's file and is
   found, where it wasn't before; a bare sub name from another file gets the advice to ask
   `Package/sub` or pass scope_uri (#51, ADR-026 amendment).
-- On perlnavigator, a sub after an inner `{ package X; ... }` block (Class::Struct's `struct`)
-  belongs to the package the block interrupted, and a helper package named under its file's own
-  (`Class::Struct::Tie_ISA`) is looked for in the parent's file: both were not found.
+- On perlnavigator, a sub after an inner `{ package X; ... }` block (Class::Struct's `struct`,
+  every sub in IPC::Msg) belongs to the package the block interrupted, a sub whose body holds a
+  `package` line belongs to the package it starts in, and a helper package named under its
+  file's own or an ancestor's (`Class::Struct::Tie_ISA`, `Env::Array::VMS`) is looked for in
+  that file: all were not found. This applies to modules-only servers only, so jdtls's
+  `package` line keeps its classes beside it.
 - get_diagnostics on lua-language-server answers a file clean from its open in about 2 s, marked
   `assumed_current`, instead of waiting its whole timeout: the server publishes nothing for such
   a file. That holds once its workspace is loaded and diagnosed; before then (about 30 s on a

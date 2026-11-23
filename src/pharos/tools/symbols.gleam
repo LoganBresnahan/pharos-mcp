@@ -315,12 +315,18 @@ fn drill_plan(
     True ->
       case exact, string.split(head, "::") |> list.reverse {
         [], [_, first, ..more] -> {
-          let parent = string.join(list.reverse([first, ..more]), "::")
-          // Polish 6 (verifier's N3): and the parent itself, which can hold
-          // a helper named under it (Class::Struct::Tie_ISA, in
-          // Class/Struct.pm; JSON::PP's helpers in JSON/PP.pm).
+          let segments = list.reverse([first, ..more])
+          let parent = string.join(segments, "::")
+          // Polish 6 (verifier's N3): and every ancestor itself, which can
+          // hold a helper named under it (Class::Struct::Tie_ISA, in
+          // Class/Struct.pm; Env::Array::VMS, in Env.pm).
+          let ancestors =
+            list.index_map(segments, fn(_, i) {
+              string.join(list.take(segments, i + 1), "::")
+            })
           list.filter(hits, fn(s) {
-            s.name == parent || string.starts_with(s.name, parent <> "::")
+            list.contains(ancestors, s.name)
+            || string.starts_with(s.name, parent <> "::")
           })
         }
         _, _ -> exact
@@ -474,7 +480,13 @@ pub fn find_symbol(
       let drill_files = fn(uris) {
         list.try_map(uris, fn(uri) {
           case document_symbol_query(pool, uri, default_timeout_ms) {
-            Ok(tree) -> Ok(Some(#(uri, normalize_tree(uri, tree, module_hits))))
+            Ok(tree) ->
+              Ok(
+                Some(#(
+                  uri,
+                  normalize_tree(uri, tree, module_hits, modules_only),
+                )),
+              )
             Error(SessionFailed(_)) -> Ok(None)
             Error(other) -> Error(other)
           }
@@ -917,10 +929,18 @@ fn normalize_tree(
   uri: String,
   tree: List(DocumentSymbolDecoded),
   module_hits: List(WorkspaceSymbolRow),
+  modules_only: Bool,
 ) -> List(DocumentSymbolDecoded) {
   let tree = attach_members(tree)
   let stem = file_stem(uri)
-  case nest_in_packages(tree) {
+  // Polish 6 (verifier's B2): only on a modules-only server (elp,
+  // perlnavigator): jdtls's outline starts with a one-line `package` node
+  // that must not take the classes after it.
+  let nested = case modules_only {
+    True -> nest_in_packages(tree)
+    False -> Error(Nil)
+  }
+  case nested {
     Ok(nested) -> nested
     // #40: elp's outline has no module node: a module hit named like the
     // file makes one.
@@ -949,11 +969,18 @@ fn nest_in_packages(
     position_le(outer.range.start, inner.range.start)
     && position_le(inner.range.end, outer.range.end)
   }
+  // Polish 6 (verifier's B2): a symbol belongs to the package whose range
+  // holds its start, so a sub straddling a package's end (an inner
+  // `package` inside its body) still lands; and every childless package
+  // node counts, even one that holds nothing (IPC::Msg, whose subs all
+  // come after its inner IPC::Msg::stat block).
+  let starts_in = fn(inner: DocumentSymbolDecoded, outer: DocumentSymbolDecoded) {
+    position_le(outer.range.start, inner.range.start)
+    && position_le(inner.range.start, outer.range.end)
+  }
   let packages =
     list.filter(tree, fn(s) {
-      s.children == []
-      && { s.kind == 2 || s.kind == 3 || s.kind == 4 }
-      && list.any(tree, fn(o) { o != s && within(o, s) })
+      s.children == [] && { s.kind == 2 || s.kind == 3 || s.kind == 4 }
     })
   case packages {
     [] -> Error(Nil)
@@ -968,7 +995,7 @@ fn nest_in_packages(
         })
       let inside = fn(s: DocumentSymbolDecoded) {
         packages
-        |> list.filter(fn(p) { p != s && within(s, p) })
+        |> list.filter(fn(p) { p != s && starts_in(s, p) })
         |> list.sort(fn(a, b) {
           case within(a, b) {
             True -> order.Lt
@@ -986,7 +1013,7 @@ fn nest_in_packages(
       let interrupted = fn(s: DocumentSymbolDecoded) {
         let before =
           list.filter(by_start, fn(p) {
-            position_le(p.range.end, s.range.start)
+            p != s && position_le(p.range.end, s.range.start)
           })
         case list.last(before) {
           Error(Nil) -> Error(Nil)
@@ -1209,7 +1236,15 @@ fn normalize_for_handle(
     True -> [WorkspaceSymbolRow(name: stem, kind: 2, uri: uri)]
     False -> []
   }
-  normalize_tree(uri, tree, hits)
+  let modules_only = case session.config_for_uri(uri) {
+    Ok(config) ->
+      case languages.primary_server(config) {
+        Ok(server) -> server.workspace_symbol_modules_only
+        Error(_) -> False
+      }
+    Error(_) -> False
+  }
+  normalize_tree(uri, tree, hits, modules_only)
 }
 
 /// `[…, "helper", "1"]` → `[…, "helper/1"]`.
