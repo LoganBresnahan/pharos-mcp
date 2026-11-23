@@ -512,10 +512,16 @@ fn is_zombie(pid: i32) -> bool {
     unsafe {
         let mut info: libc::proc_bsdinfo = std::mem::zeroed();
         let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // arg 1: for PROC_PIDTBSDINFO, XNU looks a pid up among zombies
+        // only when arg is non-zero (apple-oss-distributions/xnu
+        // bsd/kern/proc_info.c, proc_pidinfo, "Check if we need to look for
+        // zombies": `if (arg) { findzomb = 1; }`, tag xnu-12377.121.6).
+        // With 0 a zombie isn't found (ESRCH), and this answered false
+        // (polish 6's macOS CI). pbi_status is then the proc's p_stat.
         let got = libc::proc_pidinfo(
             pid,
             libc::PROC_PIDTBSDINFO,
-            0,
+            1,
             &mut info as *mut _ as *mut libc::c_void,
             size,
         );
