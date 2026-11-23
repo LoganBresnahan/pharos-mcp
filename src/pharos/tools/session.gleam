@@ -35,6 +35,7 @@ import pharos/lsp/languages.{
 }
 import pharos/lsp/lifecycle
 import pharos/lsp/pool.{type Pool}
+import pharos/lsp/position_encoding
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/registry
 import pharos/lsp/watch
@@ -1103,6 +1104,10 @@ pub fn build_spawn_spec(
     variant: spawn_fingerprint(config, server, init_params, env),
     env: env,
     idle_stop_ms: idle_stop_secs(config) * 1000,
+    position_encodings: position_encoding.of_settings(
+      server.position_encoding,
+      server.returned_position_encoding,
+    ),
   )
 }
 

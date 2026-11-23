@@ -44,6 +44,7 @@ import pharos/lsp/inflight
 import pharos/lsp/instance_track
 import pharos/lsp/languages
 import pharos/lsp/pool
+import pharos/lsp/position_encoding
 import pharos/lsp/registry
 import pharos/lsp/registry_toml
 import pharos/lsp/watch
@@ -160,6 +161,9 @@ fn do_boot() -> Result(Pid, String) {
   // ADR-043: registered file watchers, and the scanner per LSP proc.
   watchers.init()
   watch.init()
+  // #47: each LSP proc's column encodings, owned by this long-lived
+  // process (an ETS table dies with the process that made it).
+  position_encoding.init()
   // ADR-030 S3: create `~/.local/share/pharos/instances/<our-pid>/`
   // so client.start can write tracking files for each LSP it
   // spawns. Idempotent. No-op on platforms where $HOME is unset

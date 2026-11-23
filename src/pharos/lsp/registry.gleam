@@ -226,6 +226,8 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
       False,
     ),
     pull_after_change_ms: option.unwrap(override.pull_after_change_ms, 0),
+    position_encoding: override.position_encoding,
+    returned_position_encoding: override.returned_position_encoding,
     watch_files: watch_mode(override.watch_files, languages.WatchIfRegistered),
   )
 }
@@ -426,6 +428,14 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.pull_after_change_ms,
       default.pull_after_change_ms,
     ),
+    position_encoding: option.or(
+      ovr.position_encoding,
+      default.position_encoding,
+    ),
+    returned_position_encoding: option.or(
+      ovr.returned_position_encoding,
+      default.returned_position_encoding,
+    ),
     watch_files: watch_mode(ovr.watch_files, default.watch_files),
   )
 }
@@ -466,6 +476,8 @@ fn server_from_override(
       False,
     ),
     pull_after_change_ms: option.unwrap(ovr.pull_after_change_ms, 0),
+    position_encoding: ovr.position_encoding,
+    returned_position_encoding: ovr.returned_position_encoding,
     watch_files: watch_mode(ovr.watch_files, languages.WatchIfRegistered),
   )
 }
@@ -558,6 +570,14 @@ fn merge_primary(
     pull_after_change_ms: option.unwrap(
       override.pull_after_change_ms,
       primary.pull_after_change_ms,
+    ),
+    position_encoding: option.or(
+      override.position_encoding,
+      primary.position_encoding,
+    ),
+    returned_position_encoding: option.or(
+      override.returned_position_encoding,
+      primary.returned_position_encoding,
     ),
     watch_files: watch_mode(override.watch_files, primary.watch_files),
   )

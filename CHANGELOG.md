@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- On a line with non-ASCII text before a token, ruby-lsp's, next-ls's and terraform-ls's
+  positions point at the right characters. ruby-lsp advertises UTF-16 but counts UTF-8 bytes,
+  next-ls counts code points, both ways, and terraform-ls returns code points; pharos converts
+  every position it sends and gets back for a server set with `position_encoding` (bundled:
+  ruby-lsp "utf-8", next-ls "utf-32") or `returned_position_encoding` (bundled: terraform-ls
+  "utf-32") (#47, ADR-044).
 - find_symbol says so when no match has the name asked for: a match found only in another case
   or by a partial name (ruby-lsp's `helper2` for `helper`) carries a note, "no exact match for the
   name asked; nearest by a partial name: helper2", where it read like any single match.

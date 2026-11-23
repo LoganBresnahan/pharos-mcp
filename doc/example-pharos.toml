@@ -363,6 +363,21 @@
 # so when a bare name isn't found. Other servers: false.
 # workspace_symbol_modules_only = true
 
+# 4d') Servers whose columns aren't UTF-16 (ADR-044, #47).
+#
+# LSP counts a column in UTF-16 code units. `position_encoding` says a
+# server really counts "utf-8" bytes or "utf-32" code points, for every
+# position pharos sends it and gets back; `returned_position_encoding`
+# says so for the positions it returns only (it reads UTF-16). Bundled:
+# ruby-lsp position_encoding "utf-8", next-ls position_encoding "utf-32",
+# terraform-ls returned_position_encoding "utf-32". For a server of your
+# own:
+#
+# [languages.mylang]
+# command = "mylang-lsp"
+# file_extensions = [".my"]
+# position_encoding = "utf-32"
+
 # 4e) Files changed on disk (ADR-043, #10).
 #
 # Before a question, pharos scans the workspace for files changed on

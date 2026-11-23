@@ -230,6 +230,14 @@ Watched files (ADR-043):
                               document after STUB_LSP_DEP_DELAY_MS (default
                               300), at its current version (gopls's way)
 
+Position encodings (#47):
+
+  STUB_LSP_UTF8=1             ruby-lsp's way: advertises utf-16 but reads
+                              and writes UTF-8 byte columns: hover answers
+                              "received L:C", references returns each
+                              `target` at its byte column, diagnostics the
+                              ERROR token's
+
 Raw layouts (#50):
 
   STUB_LSP_SYMBOL_RAW=1       documentSymbol from `sym KIND NAME` lines,
@@ -435,6 +443,9 @@ def handle_initialize(req):
         capabilities["workspaceSymbolProvider"] = True
     if os.environ.get("STUB_LSP_PULL"):
         capabilities["diagnosticProvider"] = {"interFileDependencies": False, "workspaceDiagnostics": False}
+    if os.environ.get("STUB_LSP_UTF8"):
+        capabilities["referencesProvider"] = True
+        capabilities["positionEncoding"] = "utf-16"   # as ruby-lsp claims
     if os.environ.get("STUB_LSP_FALSE_BUT_SERVES"):
         capabilities["implementationProvider"] = False
         capabilities["renameProvider"] = False
@@ -583,6 +594,14 @@ def log_line(message):
 
 
 def stub_diagnostics(text):
+    if os.environ.get("STUB_LSP_UTF8"):
+        # #47: the ERROR token's own UTF-8 byte column.
+        return [
+            {"range": {"start": {"line": i, "character": utf8_col(line, "ERROR")},
+                       "end": {"line": i, "character": utf8_col(line, "ERROR") + 5}},
+             "severity": 1, "source": "stub", "message": "stub error on line %d" % i}
+            for i, line in enumerate(text.split("\n")) if "ERROR" in line
+        ]
     return [
         {
             "range": {"start": {"line": i, "character": 0},
@@ -895,8 +914,18 @@ def generic_symbols(text):
     return out
 
 
+def utf8_col(line, token):
+    """The UTF-8 byte column of `token` in `line` (#47)."""
+    return len(line[:line.index(token)].encode("utf-8"))
+
+
 def handle_hover(req):
     mode = os.environ.get("STUB_LSP_HOVER_RESPONSES", "")
+    if os.environ.get("STUB_LSP_UTF8"):
+        # #47, ruby-lsp's way: the column read as UTF-8 bytes.
+        pos = (req.get("params") or {}).get("position") or {}
+        return {"jsonrpc": "2.0", "id": req["id"], "result": {
+            "contents": {"kind": "plaintext", "value": "received %d:%d" % (pos.get("line", -1), pos.get("character", -1))}}}
     delay = int(os.environ.get("STUB_LSP_HOVER_DELAY_MS", "0")) / 1000.0
     if delay:
         time.sleep(delay)
@@ -1122,6 +1151,16 @@ def main():
                 continue
             write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"],
                                    "result": {"kind": "full", "items": stub_diagnostics(text)}})
+        elif method == "textDocument/references" and os.environ.get("STUB_LSP_UTF8"):
+            # #47: every line's `target`, at its UTF-8 byte column.
+            ru = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
+            locs = []
+            for i, line in enumerate(DOCS.get(ru, {}).get("text", "").split("\n")):
+                if "target" in line:
+                    c = utf8_col(line, "target")
+                    locs.append({"uri": ru, "range": {"start": {"line": i, "character": c},
+                                                      "end": {"line": i, "character": c + 6}}})
+            write_message(stdout, {"jsonrpc": "2.0", "id": msg["id"], "result": locs})
         elif method == "textDocument/hover":
             resp = handle_hover(msg)
             write_message(stdout, resp)

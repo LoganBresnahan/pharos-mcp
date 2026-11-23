@@ -245,6 +245,24 @@ fn server_keys() -> List(#(String, Shape)) {
     #("generic_names_carry_params", Boolean),
     #("workspace_symbol_modules_only", Boolean),
     #("pull_after_change_ms", off),
+    #(
+      "position_encoding",
+      OneOf(
+        ["utf-8", "utf-16", "utf-32"],
+        True,
+        "utf-8, utf-16 or utf-32",
+        "ignored; UTF-16 stays",
+      ),
+    ),
+    #(
+      "returned_position_encoding",
+      OneOf(
+        ["utf-8", "utf-16", "utf-32"],
+        True,
+        "utf-8, utf-16 or utf-32",
+        "ignored; UTF-16 stays",
+      ),
+    ),
     #("watch_files", Boolean),
     #("initialization_options_json", Str),
     #("workspace_configuration_json", Str),

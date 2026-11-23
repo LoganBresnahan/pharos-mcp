@@ -53,6 +53,7 @@ import pharos/lsp/languages.{
   type WarmProbe, ProbeDocumentSymbol, ProbeNone, ProbeWorkspaceSymbol,
 }
 import pharos/lsp/lifecycle
+import pharos/lsp/position_encoding
 import pharos/lsp/proc.{type Proc}
 import pharos/lsp/server_request_handlers
 import pharos/lsp/watchers
@@ -113,6 +114,11 @@ pub type SpawnSpec {
     /// ADR-034: stop the LSP after this long with no `get` for its
     /// key, from any session. `0` never stops it.
     idle_stop_ms: Int,
+    /// #47: the column encodings the server really uses, (sent, returned).
+    position_encodings: #(
+      position_encoding.Encoding,
+      position_encoding.Encoding,
+    ),
   )
 }
 
@@ -1335,6 +1341,9 @@ fn spawn_worker(
     case recover_or_spawn(language, workspace, spec) {
       Error(err) -> process.send(self_subject, SpawnCompleted(key, Error(err)))
       Ok(spawned) -> {
+        // #47: before any request, so the first is converted too.
+        let #(sent, returned) = spec.position_encodings
+        position_encoding.register(proc.pid(spawned), sent, returned)
         // Transition Spawning → Probing so runtime_lsp_state can
         // distinguish "still doing init handshake" from "init done,
         // now warming the index via probe".
@@ -2164,6 +2173,7 @@ fn forget_proc(spawned: Proc) -> Nil {
   // ADR-043: its registered watchers and spawn time, which a scanner
   // would drop as it stops, but not every proc ever starts one.
   watchers.forget(proc.pid(spawned))
+  position_encoding.forget(proc.pid(spawned))
 }
 
 fn spawn_proc(

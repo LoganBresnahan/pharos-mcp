@@ -20,6 +20,7 @@ import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
+import gleam/erlang/process
 import gleam/int
 import gleam/json.{type Json}
 import gleam/list
@@ -29,6 +30,7 @@ import pharos/log
 import pharos/lsp/client.{type Client}
 import pharos/lsp/diagnostics_cache
 import pharos/lsp/port
+import pharos/lsp/position_encoding
 import pharos/lsp/server_request_handlers.{
   type Handler, type LspId, ErrorReply, LspIdInt, LspIdString, Reply,
   lsp_id_to_json,
@@ -382,7 +384,13 @@ fn cache_publish_diagnostics(
             uri,
             client.server_id(client),
             version,
-            params,
+            // #47: columns in UTF-16 before they're cached.
+            position_encoding.translate(
+              params,
+              uri,
+              position_encoding.FromServer,
+              { position_encoding.lookup(process.self()) }.1,
+            ),
           )
         Error(_) -> Nil
       }

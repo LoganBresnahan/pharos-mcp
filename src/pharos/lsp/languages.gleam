@@ -286,6 +286,16 @@ pub type ServerConfig {
     /// right behind a change about the text before it (20 in 200 at once,
     /// none with a 20 ms gap). 0: no wait.
     pull_after_change_ms: Int,
+    /// #47: the column encoding the server really uses, when it isn't
+    /// the UTF-16 LSP defaults to (and pharos negotiates): "utf-8"
+    /// (bytes) or "utf-32" (code points). Applies to every position pharos
+    /// sends it and gets back. None: UTF-16, or what it advertises.
+    position_encoding: Option(String),
+    /// #47: the same for positions the server returns only (responses
+    /// and publishes), for a server that reads UTF-16 but answers in
+    /// another encoding (terraform-ls). Wins over `position_encoding`
+    /// for returned positions when both are set.
+    returned_position_encoding: Option(String),
     /// ADR-043. Whether pharos scans the workspace for files changed on
     /// disk and sends this server `workspace/didChangeWatchedFiles`.
     watch_files: WatchFiles,
@@ -572,6 +582,8 @@ fn rust() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         // ADR-043: rust-analyzer watches the disk itself (its own
         // notify watcher) when its client doesn't offer watcher
         // registration, and stops when offered: measured 2026-11-20, a
@@ -622,6 +634,8 @@ fn go() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -696,6 +710,8 @@ fn typescript() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -790,6 +806,11 @@ fn elixir() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        // #47: next-ls counts code points both ways: definition answers only at
+        // the code-point column; references and documentSymbol return them
+        // (verifier-two, a compiled project, 2026-11-22).
+        position_encoding: Some("utf-32"),
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -838,6 +859,10 @@ fn ruby() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 50,
+        // #47: ruby-lsp 0.26 advertises utf-16 but counts UTF-8 bytes, both in
+        // the positions it reads and the ones it returns (measured 2026-11-22).
+        position_encoding: Some("utf-8"),
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -880,6 +905,8 @@ fn zig() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -929,6 +956,8 @@ fn cpp() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -988,6 +1017,8 @@ fn scala() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1033,6 +1064,8 @@ fn clojure() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1079,6 +1112,8 @@ fn haskell() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         // ADR-043: like rust-analyzer, haskell-language-server watches
         // the disk itself unless offered watcher registration, then
         // relies on the client: measured 2026-11-20, a new module was
@@ -1138,6 +1173,8 @@ fn perl() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1183,6 +1220,8 @@ fn html() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1238,6 +1277,8 @@ fn css() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1282,6 +1323,8 @@ fn json_lang() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1324,6 +1367,8 @@ fn yaml() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1366,6 +1411,8 @@ fn markdown() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1410,6 +1457,10 @@ fn terraform() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        // #47: terraform-ls reads UTF-16 but returns code points (references,
+        // diagnostics; measured 2026-11-22).
+        returned_position_encoding: Some("utf-32"),
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1465,6 +1516,8 @@ fn erlang() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: True,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1551,6 +1604,8 @@ fn java() -> LanguageConfig {
         generic_names_carry_params: True,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1619,6 +1674,8 @@ fn gleam() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1666,6 +1723,8 @@ fn lua() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1724,6 +1783,8 @@ fn bash() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],
@@ -1783,6 +1844,8 @@ fn python() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
       ServerConfig(
@@ -1810,6 +1873,8 @@ fn python() -> LanguageConfig {
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,
         pull_after_change_ms: 0,
+        position_encoding: None,
+        returned_position_encoding: None,
         watch_files: WatchIfRegistered,
       ),
     ],

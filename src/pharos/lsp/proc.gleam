@@ -37,6 +37,7 @@ import pharos/lsp/doc_sync.{type SyncCaps, type SyncOp}
 import pharos/lsp/inflight
 import pharos/lsp/lifecycle
 import pharos/lsp/port
+import pharos/lsp/position_encoding
 import pharos/lsp/server_request_handlers.{type Handler}
 import pharos/session_ctx
 
@@ -379,6 +380,21 @@ pub fn request(
   params: Json,
   timeout_ms: Int,
 ) -> Result(Dynamic, lifecycle.RequestError) {
+  // #47: a server whose columns aren't UTF-16 has its positions
+  // converted both ways, through the raw path.
+  case position_encoding.lookup(pid(proc)) {
+    #(position_encoding.Utf16, position_encoding.Utf16) ->
+      request_json(proc, method, params, timeout_ms)
+    _ -> request_raw(proc, method, json.to_string(params), timeout_ms)
+  }
+}
+
+fn request_json(
+  proc: Proc,
+  method: String,
+  params: Json,
+  timeout_ms: Int,
+) -> Result(Dynamic, lifecycle.RequestError) {
   let Proc(subject) = proc
   let cid = current_cid()
   // actor.call timeout (call_timeout) is intentionally longer than
@@ -415,6 +431,31 @@ pub fn request(
 /// JSON text. Mirrors `lifecycle.request_raw_params/5` but routed
 /// through the actor so the Port is read by its owning process.
 pub fn request_raw(
+  proc: Proc,
+  method: String,
+  params_text: String,
+  timeout_ms: Int,
+) -> Result(Dynamic, lifecycle.RequestError) {
+  case position_encoding.lookup(pid(proc)) {
+    #(position_encoding.Utf16, position_encoding.Utf16) ->
+      request_text(proc, method, params_text, timeout_ms)
+    #(sent, returned) -> {
+      let #(params_text, uri) =
+        position_encoding.params_to_server(params_text, sent)
+      request_text(proc, method, params_text, timeout_ms)
+      |> result.map(fn(answer) {
+        position_encoding.translate(
+          answer,
+          uri,
+          position_encoding.FromServer,
+          returned,
+        )
+      })
+    }
+  }
+}
+
+fn request_text(
   proc: Proc,
   method: String,
   params_text: String,

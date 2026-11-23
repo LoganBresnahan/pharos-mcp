@@ -1696,6 +1696,27 @@ def t_uri_shapes_teach(sb):
     check("not a file on disk (https://)" in text and "library" not in text, "https URI: %s" % text)
 
 
+def t_position_encoding_is_converted(sb):
+    """#47: ruby-lsp advertises utf-16 but counts UTF-8 bytes, both ways;
+    on a line with non-ASCII text before a token, positions pointed at the
+    wrong characters. With position_encoding = "utf-8", pharos sends the
+    server byte columns and converts what it returns to UTF-16."""
+    sb.write_toml('position_encoding = "utf-8"\ndiagnostics_mode = "push"\n')
+    a = sb.start({"STUB_LSP_UTF8": "1", "STUB_LSP_DIAGNOSTICS": "push"})
+    a.initialize()
+    line = 's = "é😀"; target = 1; ERROR'
+    uri = stub_file(sb, "enc.stub", "first\n" + line + "\ntarget\n")
+    u16 = lambda tok: len(line[:line.index(tok)].encode("utf-16-le")) // 2
+    u8 = lambda tok: len(line[:line.index(tok)].encode("utf-8"))
+    h = a.tool(10, "hover", {"uri": uri, "line": 1, "character": u16("target")})
+    check("received 1:%d" % u8("target") in h, "hover sent at the wrong column: %s (want %d)" % (h[-200:], u8("target")))
+    r = a.tool(11, "find_references", {"uri": uri, "line": 2, "character": 0})
+    check('"line":1' in r and ('"character":%d' % u16("target")) in r,
+          "references not in UTF-16 (want %d): %s" % (u16("target"), r[-400:]))
+    d = a.tool(12, "get_diagnostics", {"uri": uri, "timeout_ms": 5000})
+    check(('"character":%d' % u16("ERROR")) in d, "diagnostic not in UTF-16 (want %d): %s" % (u16("ERROR"), d[-400:]))
+
+
 def t_config_warnings_without_lsp_tools(sb):
     """#32 F4: a daemon whose sessions call only non-LSP tools still has
     its config warnings in the daemon log (where runtime_log_tail reads),
@@ -2640,6 +2661,7 @@ SCENARIOS = [
     ("watched_files_tiny_timeout_still_answers", t_watched_files_tiny_timeout_still_answers),
     ("daemon_stop_shuts_servers_down", t_daemon_stop_shuts_servers_down),
     ("uri_shapes_teach", t_uri_shapes_teach),
+    ("position_encoding_is_converted", t_position_encoding_is_converted),
     ("idle_stop_shuts_servers_down", t_idle_stop_shuts_servers_down),
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),

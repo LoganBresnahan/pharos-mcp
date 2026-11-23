@@ -171,6 +171,14 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
       Some(ranged) -> "full_change_as_range = " <> bool_text(ranged)
     },
     "pull_after_change_ms = " <> int.to_string(server.pull_after_change_ms),
+    case server.position_encoding {
+      Some(e) -> "position_encoding = \"" <> e <> "\""
+      None -> "# position_encoding unset: UTF-16 (#47)"
+    },
+    case server.returned_position_encoding {
+      Some(e) -> "returned_position_encoding = \"" <> e <> "\""
+      None -> "# returned_position_encoding unset (#47)"
+    },
     "generic_names_carry_params = "
       <> bool_text(server.generic_names_carry_params),
     "workspace_symbol_modules_only = "
