@@ -303,6 +303,32 @@ def t_share(sb):
     check(len(daemons_for(sb.socket_path())) == 1, "expected one daemon process")
 
 
+def t_toolchain_env_keys_split_servers(sb):
+    """#62: the spawn fingerprint left out where Mix and Hex live, so a
+    session with a thin env that started next-ls first (a hook, a cron job:
+    no MIX_HOME, so no Hex, so next-ls never started its runtime) was joined
+    by every later session. Elixir's bundled env_keys now hold MIX_HOME,
+    MIX_ARCHIVES and HEX_HOME: two sessions that differ in one get their
+    own servers. The stub stands in for next-ls; the language's bundled
+    env_keys are kept."""
+    with open(os.path.join(sb.fixture, ".pharos.toml"), "w") as f:
+        f.write('[languages.elixir]\nroot_markers = ["stub.root"]\ncommand = "%s"\n' % STUB)
+    path = os.path.join(sb.fixture, "app.ex")
+    with open(path, "w") as f:
+        f.write("defmodule App do\nend\n")
+    uri = "file://" + path
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "whoami", "STUB_LSP_TAG": "thin"})
+    a.initialize()
+    b = sb.start({"STUB_LSP_HOVER_RESPONSES": "whoami", "STUB_LSP_TAG": "project",
+                  "MIX_HOME": "/opt/project-mix"})
+    b.initialize()
+    ha = a.tool(10, "hover", {"uri": uri, "line": 0, "character": 1})
+    hb = b.tool(11, "hover", {"uri": uri, "line": 0, "character": 1})
+    check("tag=thin" in ha and "tag=project" in hb,
+          "a session with its own MIX_HOME joined the thin one's server: %s / %s" % (ha, hb))
+    check(len(sb.status()["lsps"]) == 2, "expected 2 LSPs: %r" % sb.status()["lsps"])
+
+
 def t_spawn_race(sb):
     """N shims starting at once get exactly one daemon."""
     shims = [sb.start() for _ in range(8)]
@@ -2947,6 +2973,7 @@ def t_resync_open_cap(sb):
 SCENARIOS = [
     ("share", t_share),
     ("spawn_race", t_spawn_race),
+    ("toolchain_env_keys_split_servers", t_toolchain_env_keys_split_servers),
     ("builds_isolated", t_builds_isolated),
     ("idle_exit", t_idle_exit),
     ("daemon_death", t_daemon_death),

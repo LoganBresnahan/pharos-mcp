@@ -842,7 +842,13 @@ fn elixir() -> LanguageConfig {
         watch_files: WatchIfRegistered,
       ),
     ],
-    env_keys: [],
+    // #62: next-ls starts the project's runtime with the env it was given,
+    // so where Mix and Hex live decides whether it starts at all ("Mix
+    // requires the Hex package manager" without them). It sets MIX_HOME and
+    // MIX_ARCHIVES only for its bundled Elixir, and never HEX_HOME
+    // (lib/next_ls/runtime.ex, 0.23). MIX_ENV isn't keyed: next-ls sets the
+    // runtime's from its init options ("dev" by default).
+    env_keys: ["MIX_HOME", "MIX_ARCHIVES", "HEX_HOME"],
     idle_stop_secs: None,
     document_language_ids: [],
     custom_uri_schemes: dict.new(),
@@ -897,7 +903,10 @@ fn ruby() -> LanguageConfig {
         watch_files: WatchIfRegistered,
       ),
     ],
-    env_keys: [],
+    // #62: with BUNDLE_GEMFILE set, ruby-lsp runs on that Gemfile instead
+    // of composing its own bundle (exe/ruby-lsp, 0.26); GEM_HOME is where
+    // that bundle's gems are installed and found.
+    env_keys: ["BUNDLE_GEMFILE", "GEM_HOME"],
     idle_stop_secs: None,
     document_language_ids: [],
     custom_uri_schemes: dict.new(),

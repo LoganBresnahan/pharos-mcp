@@ -164,6 +164,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rust-analyzer and haskell-language-server aren't offered registration and keep their own
   watchers. `watch_files = false`
   turns it off for a server, `true` forces it (#10, ADR-043).
+- A session whose env differs in where Mix and Hex live (`MIX_HOME`, `MIX_ARCHIVES`, `HEX_HOME`)
+  gets its own next-ls, and one that differs in `BUNDLE_GEMFILE` or `GEM_HOME` its own ruby-lsp.
+  A session with a thin env (a hook, a cron job) that started next-ls first was joined by every
+  later one, and next-ls without Hex never starts its runtime (#62).
 - pharos no longer moves an `erl_crash.dump` it finds in its working directory into its own
   log dir. Run in an Elixir, Erlang or Gleam project, every pharos start (even `--version`) took
   that project's crash dump, where pharos's log rotation then deleted it; pharos's own dumps

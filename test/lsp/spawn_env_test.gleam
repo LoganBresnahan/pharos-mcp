@@ -7,6 +7,7 @@ import gleam/dict
 import gleam/erlang/process
 import gleam/int
 import gleam/json
+import gleam/list
 import gleam/string
 import gleeunit/should
 import pharos/lsp/languages
@@ -128,6 +129,27 @@ pub fn fingerprint_splits_on_an_env_key_test() {
     fingerprint([#("VIRTUAL_ENV", "/proj/.venv")]),
     fingerprint([]),
   )
+}
+
+/// #62: where Mix and Hex live (next-ls) and the Gemfile and gem home
+/// (ruby-lsp) change how those servers start, so they split servers;
+/// MIX_ENV doesn't (next-ls sets its runtime's from its init options).
+pub fn toolchain_env_keys_test() {
+  let fp = fn(language, env) {
+    let assert Ok(config) = dict.get(languages.default_registry(), language)
+    let assert Ok(server) = languages.primary_server(config)
+    session.spawn_fingerprint(config, server, json.null(), env)
+  }
+  ["MIX_HOME", "MIX_ARCHIVES", "HEX_HOME"]
+  |> list.each(fn(key) {
+    should.not_equal(fp("elixir", [#(key, "/a")]), fp("elixir", [#(key, "/b")]))
+  })
+  fp("elixir", [#("MIX_ENV", "test")])
+  |> should.equal(fp("elixir", [#("MIX_ENV", "dev")]))
+  ["BUNDLE_GEMFILE", "GEM_HOME"]
+  |> list.each(fn(key) {
+    should.not_equal(fp("ruby", [#(key, "/a")]), fp("ruby", [#(key, "/b")]))
+  })
 }
 
 pub fn fingerprint_ignores_vars_outside_env_keys_test() {
