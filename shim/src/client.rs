@@ -461,6 +461,31 @@ pub fn operator_request(socket: &Path, op: &str) -> Result<String, String> {
     Ok(reply.trim_end().to_string())
 }
 
+/// The `daemon_pid` of a `stop` reply; a daemon from before polish 5
+/// sends none.
+pub fn reply_pid(reply: &str) -> Option<i32> {
+    let pid = json::parse(reply).ok()?.get("daemon_pid")?.as_f64()?;
+    (pid >= 1.0 && pid <= i32::MAX as f64).then_some(pid as i32)
+}
+
+/// Wait until process `pid` has exited, polling; false if it is still
+/// there after `limit`. ESRCH is gone; EPERM still exists.
+pub fn wait_gone(pid: i32, limit: Duration) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        // SAFETY: kill with signal 0 sends nothing; it only checks.
+        let alive = unsafe { libc::kill(pid, 0) } == 0
+            || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if !alive {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// `UnixStream::set_read_timeout`, taking EINVAL as "the peer has already
 /// closed": macOS refuses setsockopt on a Unix socket whose peer has shut
 /// down. A read then can't block anyway: it returns what the peer sent,
@@ -539,6 +564,30 @@ mod tests {
             version: "0.2.0".into(),
             build_id: "0123456789abcdef".into(),
         }
+    }
+
+    #[test]
+    fn stop_reply_names_the_daemon_pid() {
+        assert_eq!(
+            reply_pid(r#"{"pharos_stop":1,"daemon_pid":4242}"#),
+            Some(4242)
+        );
+        // A daemon from before polish 5: nothing to wait on.
+        assert_eq!(reply_pid(r#"{"pharos_stop":1}"#), None);
+        assert_eq!(reply_pid("not json"), None);
+        assert_eq!(reply_pid(r#"{"daemon_pid":0}"#), None);
+    }
+
+    #[test]
+    fn wait_gone_sees_an_exited_process() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        child.wait().unwrap();
+        assert!(wait_gone(pid, Duration::from_millis(500)));
+        assert!(!wait_gone(
+            std::process::id() as i32,
+            Duration::from_millis(120)
+        ));
     }
 
     #[test]

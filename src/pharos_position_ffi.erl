@@ -69,9 +69,13 @@ walk(X, _, _, _) ->
     X.
 
 %% A LocationLink's origin range is in the requesting document; its target
-%% ranges in targetUri's. A WorkspaceEdit's `changes` is keyed by uri.
+%% ranges in targetUri's. A WorkspaceEdit's `changes` is keyed by uri. An
+%% incoming call's fromRanges are in its caller's document, `from.uri`.
 walk_field(<<"originSelectionRange">>, V, _M, _Own, Parent, Dir, Enc) ->
     walk(V, Parent, Dir, Enc);
+walk_field(<<"fromRanges">>, V, #{<<"from">> := #{<<"uri">> := U}}, _Own, _Parent, Dir, Enc)
+  when is_binary(U) ->
+    walk(V, U, Dir, Enc);
 walk_field(<<"changes">>, V, _M, _Own, _Parent, Dir, Enc) when is_map(V) ->
     maps:map(fun(DocUri, Edits) -> walk(Edits, DocUri, Dir, Enc) end, V);
 walk_field(_K, V, _M, Own, _Parent, Dir, Enc) ->
@@ -86,6 +90,13 @@ own_uri(M, Default) ->
     end.
 
 convert(Uri, L, C, Dir, Enc) ->
+    case convert_opt(Uri, L, C, Dir, Enc) of
+        {ok, C2} -> C2;
+        pass -> C
+    end.
+
+%% {ok, Converted}, or pass: past the line's end or no such line.
+convert_opt(Uri, L, C, Dir, Enc) ->
     case line_of(Uri, L) of
         {ok, Cps} ->
             {From, To} = case Dir of
@@ -94,18 +105,16 @@ convert(Uri, L, C, Dir, Enc) ->
             end,
             count(Cps, C, From, To, 0, 0);
         error ->
-            C
+            pass
     end.
 
 %% Walk the line's code points until `From` units reach C; answer the
-%% same prefix in `To` units. Past the line's end: C unchanged.
+%% same prefix in `To` units. A C that falls inside a code point (invalid
+%% input) answers the position after that code point.
 count(_Cps, C, _From, _To, FromAcc, ToAcc) when FromAcc >= C ->
-    case FromAcc =:= C of
-        true -> ToAcc;
-        false -> ToAcc  % C falls inside a code point: its start
-    end;
-count([], C, _From, _To, _FromAcc, _ToAcc) ->
-    C;
+    {ok, ToAcc};
+count([], _C, _From, _To, _FromAcc, _ToAcc) ->
+    pass;
 count([Cp | Rest], C, From, To, FromAcc, ToAcc) ->
     count(Rest, C, From, To, FromAcc + units(From, Cp), ToAcc + units(To, Cp)).
 

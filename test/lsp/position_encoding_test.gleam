@@ -118,3 +118,34 @@ fn option_some(s: String) -> option.Option(String) {
 fn option_none() -> option.Option(String) {
   option.None
 }
+
+pub fn incoming_call_ranges_use_the_callers_document_test() {
+  // Polish 5 (N1): fromRanges are in `from.uri`'s document.
+  let path = "/tmp/pharos-position-encoding-test4.txt"
+  let assert Ok(Nil) = write_text(path, "first\n" <> line <> "\n")
+  let calls =
+    term(
+      "[{\"from\":{\"name\":\"f\",\"uri\":\"file://"
+      <> path
+      <> "\",\"range\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":1}},\"selectionRange\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":1}}},\"fromRanges\":[{\"start\":{\"line\":1,\"character\":14},\"end\":{\"line\":1,\"character\":20}}]}]",
+    )
+  let back =
+    position_encoding.translate(calls, "file:///elsewhere", FromServer, Utf8)
+  let assert Ok([[start]]) =
+    decode.run(
+      back,
+      decode.list(decode.at(
+        ["fromRanges"],
+        decode.list(decode.at(["start", "character"], decode.int)),
+      )),
+    )
+  start |> should.equal(11)
+}
+
+pub fn only_named_encodings_survive_test() {
+  // Polish 5 (N4): an invalid value is unset, as its warning says.
+  position_encoding.canonical(option.Some("UTF-8"))
+  |> should.equal(option.Some("utf-8"))
+  position_encoding.canonical(option.Some("utf-7"))
+  |> should.equal(option.None)
+}

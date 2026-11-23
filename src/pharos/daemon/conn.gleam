@@ -267,7 +267,14 @@ fn handle_hello(state: State, line: String) -> Result(State, State) {
           let _ =
             send_line(
               state.socket,
-              json.to_string(json.object([#("pharos_stop", json.int(1))])),
+              // Polish 5: the pid, so `pharos daemon stop` can wait
+              // until this daemon has really gone.
+              json.to_string(
+                json.object([
+                  #("pharos_stop", json.int(1)),
+                  #("daemon_pid", json.int(os_pid())),
+                ]),
+              ),
             )
           state.hooks.stop()
           Error(state)

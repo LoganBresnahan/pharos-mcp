@@ -411,6 +411,11 @@ Two more cases, each a per-server value (Logan's choice, polish 2):
   perlnavigator 650 ms (Critic's set came 299–394 ms after the open's first publish in
   verifier's runs, the next repeat about 1 s after it; the open's answer costs about 0.7 s),
   others 0; changes after the open are unaffected.
+- **A server limit pharos can't correct: perlnavigator's Perl::Critic lines.** After an edit,
+  perlnavigator's Critic entries keep the line numbers they had at the open ("Code before
+  warnings are enabled" stays on line 3 after edits move the code; a fresh open reports it on
+  its new line: 15 of 15 edits in verifier's chain, on every build). pharos answers what the
+  server publishes, so those entries can point at a stale line; `perl -c`'s own entries move.
 
 rust-analyzer needed no value: each edit publishes twice about 90 ms apart, and
 #30's save-check grace already holds the answer for the second (24 of 24 right).

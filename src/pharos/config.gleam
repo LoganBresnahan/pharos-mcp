@@ -42,6 +42,7 @@ import pharos/log/entry as log_entry
 import pharos/log/rotate as log_rotate
 import pharos/log/writer
 import pharos/lsp/languages.{type CustomUriScheme}
+import pharos/lsp/position_encoding
 import pharos/tools/names as tool_names
 
 // -- Types ----------------------------------------------------------------
@@ -1299,10 +1300,13 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       "workspace_symbol_modules_only",
     ),
     pull_after_change_ms: decode_optional_int(value, "pull_after_change_ms"),
-    position_encoding: decode_optional_string(value, "position_encoding"),
-    returned_position_encoding: decode_optional_string(
+    // Polish 5: an invalid value is unset, as its config warning says.
+    position_encoding: position_encoding.canonical(decode_optional_string(
       value,
-      "returned_position_encoding",
+      "position_encoding",
+    )),
+    returned_position_encoding: position_encoding.canonical(
+      decode_optional_string(value, "returned_position_encoding"),
     ),
     watch_files: decode_optional_bool(value, "watch_files"),
     custom_uri_schemes: decode_optional_custom_uri_schemes(value),
@@ -1464,10 +1468,13 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
       "workspace_symbol_modules_only",
     ),
     pull_after_change_ms: decode_optional_int(value, "pull_after_change_ms"),
-    position_encoding: decode_optional_string(value, "position_encoding"),
-    returned_position_encoding: decode_optional_string(
+    // Polish 5: an invalid value is unset, as its config warning says.
+    position_encoding: position_encoding.canonical(decode_optional_string(
       value,
-      "returned_position_encoding",
+      "position_encoding",
+    )),
+    returned_position_encoding: position_encoding.canonical(
+      decode_optional_string(value, "returned_position_encoding"),
     ),
     watch_files: decode_optional_bool(value, "watch_files"),
     initialization_options_json: decode_optional_string(

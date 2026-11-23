@@ -201,6 +201,34 @@ pub fn describe_not_local_teaches_the_fix_test() {
   )
 }
 
+pub fn path_and_line_is_named_test() {
+  // Polish 5: `main.go:12` fits RFC 3986's scheme characters; it's the
+  // path:line form, refused with what to send instead.
+  workspace_root.describe_not_local("main.go:12")
+  |> should.equal(
+    "main.go:12 looks like a path and a line: send uri=file:///absolute/path/main.go with line=11 (0-based)",
+  )
+  workspace_root.describe_not_local("src/a.ts:12:5")
+  |> should.equal(
+    "src/a.ts:12:5 looks like a path and a line: send uri=file:///absolute/path/src/a.ts with line=11 and character=4 (0-based)",
+  )
+  workspace_root.describe_not_local("/home/u/p/main.go:3")
+  |> should.equal(
+    "/home/u/p/main.go:3 looks like a path and a line: send uri=file:///home/u/p/main.go with line=2 (0-based)",
+  )
+  // Not path:line: a scheme with digits after it, a URI with a port, a
+  // file URI (its own refusals).
+  workspace_root.describe_not_local("untitled:1")
+  |> string.contains("looks like a path")
+  |> should.be_false
+  workspace_root.describe_not_local("http://host.example:8080")
+  |> string.contains("looks like a path")
+  |> should.be_false
+  workspace_root.describe_not_local("file://src/a.ts:12")
+  |> string.contains("names the host")
+  |> should.be_true
+}
+
 pub fn extra_leading_slashes_collapse_test() {
   workspace_root.uri_to_path("file:////tmp/a.ts")
   |> should.equal(Ok("/tmp/a.ts"))

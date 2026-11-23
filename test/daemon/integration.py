@@ -605,6 +605,19 @@ def t_reap_on_stop(sb):
     wait_until(lambda: not alive(grandchild), 10, "the grandchild to be reaped at stop")
 
 
+def t_daemon_stop_waits_for_exit(sb):
+    """Polish 5: `pharos daemon stop` returned as soon as the daemon
+    answered, ~1.3 s before it had gone, so a restart right after could
+    overlap it. It now returns once the daemon has exited."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    pid = sb.daemon_pid()
+    out = sb.cli("daemon", "stop")
+    check(out.returncode == 0, "daemon stop failed: %s" % out.stderr)
+    check(not alive(pid), "daemon %d still running when `daemon stop` returned" % pid)
+
+
 def t_reap_on_idle(sb):
     """An idle-stopped LSP's leftover grandchild is reaped while the
     daemon and the session carry on."""
@@ -1694,6 +1707,11 @@ def t_uri_shapes_teach(sb):
     d = a.call(14, "tools/call", {"name": "get_diagnostics", "arguments": {"uri": "https://example.com/main.stub"}})
     text = d["result"]["content"][0]["text"]
     check("not a file on disk (https://)" in text and "library" not in text, "https URI: %s" % text)
+    # Polish 5: path:line is named as such, not taken for a URI scheme.
+    r = a.call(15, "tools/call", {"name": "hover", "arguments": {"uri": "main.stub:12", "line": 0, "character": 0}})
+    text = r["result"]["content"][0]["text"]
+    check(r["result"].get("isError") and "looks like a path and a line" in text and "line=11" in text,
+          "path:line: %s" % text)
 
 
 def t_position_encoding_is_converted(sb):
@@ -2662,6 +2680,7 @@ SCENARIOS = [
     ("daemon_stop_shuts_servers_down", t_daemon_stop_shuts_servers_down),
     ("uri_shapes_teach", t_uri_shapes_teach),
     ("position_encoding_is_converted", t_position_encoding_is_converted),
+    ("daemon_stop_waits_for_exit", t_daemon_stop_waits_for_exit),
     ("idle_stop_shuts_servers_down", t_idle_stop_shuts_servers_down),
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),

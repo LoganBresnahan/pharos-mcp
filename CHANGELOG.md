@@ -14,12 +14,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- `pharos daemon stop` returns once the daemon has exited, not as soon as it answered (about
+  1.3 s earlier), so a restart right after can't overlap the old daemon. It waits up to 10 s,
+  then says the daemon is still stopping and exits 1.
+- perlnavigator's Perl::Critic diagnostics keep the line they had at the open after an edit; that
+  is the server's, now documented as a limit (ADR-038).
+- A `uri` in the path:line form (`main.go:12`, `src/a.ts:12:5`) is refused with what to send
+  instead (the file URI, and the line and character 0-based), rather than read as a URI whose
+  scheme is `main.go:`.
 - On a line with non-ASCII text before a token, ruby-lsp's, next-ls's and terraform-ls's
   positions point at the right characters. ruby-lsp advertises UTF-16 but counts UTF-8 bytes,
   next-ls counts code points, both ways, and terraform-ls returns code points; pharos converts
   every position it sends and gets back for a server set with `position_encoding` (bundled:
   ruby-lsp "utf-8", next-ls "utf-32") or `returned_position_encoding` (bundled: terraform-ls
-  "utf-32") (#47, ADR-044).
+  "utf-32"). Incoming calls' ranges are converted too, and semantic tokens are left as sent
+  (ruby-lsp's are UTF-16 already); an invalid encoding value is ignored (#47, ADR-044).
 - find_symbol says so when no match has the name asked for: a match found only in another case
   or by a partial name (ruby-lsp's `helper2` for `helper`) carries a note, "no exact match for the
   name asked; nearest by a partial name: helper2", where it read like any single match.

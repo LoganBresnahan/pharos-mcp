@@ -52,6 +52,14 @@ Bounds:
   as does any position in a file pharos can't read.
 - didChange ranges stay UTF-16: ruby-lsp applies those right (verified for #38, including a
   UTF-16 tail), so only requests and answers are converted.
+- An incoming call's `fromRanges` are converted against its caller's document (`from.uri`), not
+  the request's.
+- Semantic tokens pass through as the server sent them. They're relative integers, not positions,
+  and of the three servers only ruby-lsp serves them (next-ls and terraform-ls answer -32601), in
+  UTF-16 already: `helper` after `"é😀😀😀"` comes at (19, 6), its UTF-16 column, where its
+  other positions count bytes (26). Converting them as bytes put it at (14, 4).
+- An invalid value (`"utf-7"`) is unset, so it behaves and prints as UTF-16, as its config
+  warning says.
 
 ## Consequences
 

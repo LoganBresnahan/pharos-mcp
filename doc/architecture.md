@@ -343,6 +343,8 @@ condition surfaces when it does.
 | 12 | **`sessions.{issue,validate,attach,detach}` `actor.call`** | `sessions.gleam` | 60s (`default_call_timeout_ms`) | not exposed | HTTP session bookkeeping — should never fire in practice. |
 | 13 | **HTTP request timeout** | mist | mist defaults | not exposed | Per-HTTP-request wall-clock. |
 | 15 | **Daemon idle exit** | `daemon.gleam` | 1800s | `PHAROS_DAEMON_IDLE_SECS` | No session connected for this long: the daemon stops itself (ADR-034). |
+| 15b | **LSP shutdown at close** | `proc.gleam` (`shutdown_wait_ms`) | 1000ms | not exposed | An LSP being closed (idle stop, eviction, daemon stop) gets LSP `shutdown`, this long for its reply, then `exit` and stdin EOF (#48). Idle stop and eviction close in a spawned process; daemon stop waits for every LSP (`pool.close_all`) before the VM stops, so this bounds it. |
+| 15c | **`pharos daemon stop` wait** | `shim/src/main.rs` (`STOP_WAIT`) | 10s | not exposed | The CLI returns once the daemon's pid has exited (the daemon answers before it stops), so a restart right after can't overlap it. Past the limit it says the daemon is still stopping and exits 1. |
 | 17 | **LSP idle stop** | `pool.gleam` (`IdleSweep`) | 1800s; java, scala, haskell 7200s | `PHAROS_LSP_IDLE_SECS` (all languages), `[languages.<id>] idle_stop_secs` | No `pool.get` for the key, from any session: the LSP is evicted (stdin closed) and respawns on the next call (ADR-034). |
 | 16 | **Session drain on disconnect** | `daemon/conn.gleam` | 2000ms | `PHAROS_SHUTDOWN_DRAIN_MS` | A closed connection's in-flight requests get this long before they are cancelled. |
 | 18 | **LSP group reap** | `pharos_instance_track_ffi.erl` (`REAP_*`) | 3000ms grace, then TERM, 2000ms, then KILL | not exposed | After an LSP's actor goes, whatever is left in its process group gets the grace, then TERM, then KILL (ADR-037). Runs in the LSP's own reaper; blocks nothing. |
@@ -440,9 +442,13 @@ lsp_proc actor                    LSP child (OS process)
     │  ◄── reply / error / notification ─
     │   ... interleaved with $/progress, $/log, diagnostics, server requests
     │                                  │
-    │   on Close (or the actor dies):   │
+    │   on Close (#48), in a spawned closer so the pool never waits:
+    │   write shutdown request         ─►
+    │  ◄── shutdown reply (≤ 1 s)      ─  (no reply in time: go on)
+    │   write exit notification        ─►
     │   the port closes                ─►  stdin EOF ── process exits
-    │   actor.stop                      │  (no LSP shutdown/exit is sent)
+    │   actor.stop                      │
+    │   (if the actor just dies, no shutdown/exit is sent)
     │                                  │
 reaper (one per LSP, unlinked)         │  …and whatever it started in its
     │   DOWN of the actor, or a        │  process group (rust-analyzer's

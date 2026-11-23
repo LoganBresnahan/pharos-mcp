@@ -128,13 +128,32 @@ fn daemon_command(release: &Release, args: &[OsString]) -> ExitCode {
                 return ExitCode::from(if *op == "status" { 3 } else { 0 });
             }
             let mut failed = false;
+            let mut stopping = Vec::new();
             for socket in sockets {
                 match client::operator_request(&socket, op) {
-                    Ok(reply) => println!("{}", reply),
+                    Ok(reply) => {
+                        println!("{}", reply);
+                        if *op == "stop" {
+                            stopping.extend(client::reply_pid(&reply));
+                        }
+                    }
                     Err(e) => {
                         eprintln!("pharos: {}", e);
                         failed = true;
                     }
+                }
+            }
+            // The daemon answers before it stops (each server gets
+            // shutdown and exit first, #48): wait until it has gone, so a
+            // restart right after can't overlap it.
+            for pid in stopping {
+                if !client::wait_gone(pid, STOP_WAIT) {
+                    eprintln!(
+                        "pharos: daemon (pid {}) still stopping after {} s",
+                        pid,
+                        STOP_WAIT.as_secs()
+                    );
+                    failed = true;
                 }
             }
             ExitCode::from(failed as u8)
@@ -147,6 +166,9 @@ fn daemon_command(release: &Release, args: &[OsString]) -> ExitCode {
         }
     }
 }
+
+/// How long `pharos daemon stop` waits for a daemon to exit.
+const STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn all_sockets(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut sockets: Vec<_> = std::fs::read_dir(dir)

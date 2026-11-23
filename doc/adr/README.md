@@ -75,3 +75,4 @@ Written when the corresponding decision actually arises with tradeoffs — not p
 | 024 | Bridge port discovery mechanism | Extension repo bootstraps |
 | 026 | Error surfacing: MCP error vs content-block-with-error | LSP error scenarios surface in tool tests |
 | 027 | Config file format and location (formalize) | Override registry promoted to first-class config |
+| — | A native file watcher, [ADR-043](043-files-changed-on-disk.md)'s option (c): a separate executable (inotify, FSEvents) behind the same interface as the bounded scan | A tree too large for the per-question scan to keep answers fresh |

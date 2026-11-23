@@ -444,6 +444,8 @@ pub fn request_raw(
         position_encoding.params_to_server(params_text, sent)
       request_text(proc, method, params_text, timeout_ms)
       |> result.map(fn(answer) {
+        // Semantic tokens are relative integers, not positions, and pass
+        // through as sent: ruby-lsp's are UTF-16 already (ADR-044).
         position_encoding.translate(
           answer,
           uri,

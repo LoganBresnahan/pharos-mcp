@@ -18,6 +18,7 @@ import gleam/dynamic/decode
 import gleam/erlang/process.{type Pid}
 import gleam/json
 import gleam/option.{type Option, None, Some}
+import gleam/string
 
 pub type Encoding {
   Utf16
@@ -32,9 +33,9 @@ pub type Direction {
 
 /// A config value as an encoding; anything else is UTF-16.
 pub fn parse(value: Option(String)) -> Encoding {
-  case value {
-    Some("utf-8") | Some("UTF-8") -> Utf8
-    Some("utf-32") | Some("UTF-32") -> Utf32
+  case canonical(value) {
+    Some("utf-8") -> Utf8
+    Some("utf-32") -> Utf32
     _ -> Utf16
   }
 }
@@ -111,6 +112,22 @@ pub fn params_to_server(
         _ -> #(encode(translate(term, uri, ToServer, encoding)), uri)
       }
     }
+  }
+}
+
+/// A config value as given, if it names an encoding (any case), as
+/// pharos spells it; None otherwise, so an invalid value behaves and
+/// prints as unset (the config warning already says it's ignored).
+pub fn canonical(value: Option(String)) -> Option(String) {
+  case value {
+    Some(v) ->
+      case string.lowercase(v) {
+        "utf-8" -> Some("utf-8")
+        "utf-16" -> Some("utf-16")
+        "utf-32" -> Some("utf-32")
+        _ -> None
+      }
+    None -> None
   }
 }
 

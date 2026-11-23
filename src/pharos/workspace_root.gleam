@@ -95,6 +95,13 @@ fn local_path(rest: String) -> Result(String, Nil) {
 /// error message: agents write `file://src/a.ts` meaning a relative path,
 /// and RFC 8089 reads `src` as a host.
 pub fn describe_not_local(uri: String) -> String {
+  case path_and_line(uri) {
+    Ok(#(path, line, column)) -> describe_path_and_line(uri, path, line, column)
+    Error(Nil) -> describe_shape(uri)
+  }
+}
+
+fn describe_shape(uri: String) -> String {
   case string.starts_with(uri, "file://") {
     False ->
       case uri_scheme(uri), string.starts_with(uri, "file:") {
@@ -123,6 +130,78 @@ pub fn describe_not_local(uri: String) -> String {
         _ -> uri <> " has no path: use file:///absolute/path"
       }
   }
+}
+
+/// Polish 5: `main.go:12` or `src/a.ts:12:5`, the path:line form editors
+/// and compilers print. Its "scheme" fits RFC 3986, so without this it
+/// read as a URI. A path (it has a `.` or a `/`, and no `://`) followed by
+/// one or two all-digit parts: the path, the line and the column if any.
+/// Refused, not accepted: the tools take the line and character as their
+/// own arguments, and a line in the uri would be a second, conflicting
+/// way to give one.
+fn path_and_line(uri: String) -> Result(#(String, String, String), Nil) {
+  let path_like = fn(p) {
+    p != ""
+    && !string.contains(p, "://")
+    && !string.starts_with(p, "file:")
+    && { string.contains(p, ".") || string.contains(p, "/") }
+  }
+  case trailing_number(uri) {
+    Error(Nil) -> Error(Nil)
+    Ok(#(head, last)) ->
+      case trailing_number(head) {
+        Ok(#(path, line)) ->
+          case path_like(path) {
+            True -> Ok(#(path, line, last))
+            False -> Error(Nil)
+          }
+        Error(Nil) ->
+          case path_like(head) {
+            True -> Ok(#(head, last, ""))
+            False -> Error(Nil)
+          }
+      }
+  }
+}
+
+/// `text` as what's before its last `:` and the all-digit part after it.
+fn trailing_number(text: String) -> Result(#(String, String), Nil) {
+  case list.reverse(string.split(text, ":")) {
+    [last, ..rest] if rest != [] && last != "" ->
+      case list.all(string.to_graphemes(last), is_digit) {
+        True -> Ok(#(string.join(list.reverse(rest), ":"), last))
+        False -> Error(Nil)
+      }
+    _ -> Error(Nil)
+  }
+}
+
+fn describe_path_and_line(
+  uri: String,
+  path: String,
+  line: String,
+  column: String,
+) -> String {
+  let file = case string.starts_with(path, "/") {
+    True -> "file://" <> path
+    False -> "file:///absolute/path/" <> path
+  }
+  let zero = fn(n) {
+    case int.parse(n) {
+      Ok(i) if i > 0 -> int.to_string(i - 1)
+      _ -> n
+    }
+  }
+  let position = case column {
+    "" -> "line=" <> zero(line) <> " (0-based)"
+    _ ->
+      "line=" <> zero(line) <> " and character=" <> zero(column) <> " (0-based)"
+  }
+  uri
+  <> " looks like a path and a line: send uri="
+  <> file
+  <> " with "
+  <> position
 }
 
 /// The scheme part of a URI (`jdt://`, `untitled:`), RFC 3986's
