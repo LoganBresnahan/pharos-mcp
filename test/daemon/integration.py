@@ -2324,7 +2324,12 @@ def t_unadvertised_methods_say_unsupported(sb):
              ("code_actions", rng, "textDocument/codeAction", "codeActionProvider"),
              ("format_document", {"uri": uri, "timeout_ms": 5000}, "textDocument/formatting", "documentFormattingProvider"),
              ("rename_preview", dict(pos, new_name="one"), "textDocument/rename", "renameProvider"),
-             ("workspace_symbols", {"query": "zero", "workspace_uri_hint": uri, "timeout_ms": 5000}, "workspace/symbol", "workspaceSymbolProvider")]
+             ("workspace_symbols", {"query": "zero", "workspace_uri_hint": uri, "timeout_ms": 5000}, "workspace/symbol", "workspaceSymbolProvider"),
+             # #43: the chained hierarchy calls, gated like their prepare.
+             ("call_hierarchy_incoming_calls", {"item": {"uri": uri, "name": "zero", "kind": 12, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}, "selectionRange": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}}, "timeout_ms": 5000}, "callHierarchy/incomingCalls", "callHierarchyProvider"),
+             ("call_hierarchy_outgoing_calls", {"item": {"uri": uri, "name": "zero", "kind": 12, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}, "selectionRange": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}}, "timeout_ms": 5000}, "callHierarchy/outgoingCalls", "callHierarchyProvider"),
+             ("type_hierarchy_supertypes", {"item": {"uri": uri, "name": "zero", "kind": 12, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}, "selectionRange": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}}, "timeout_ms": 5000}, "typeHierarchy/supertypes", "typeHierarchyProvider"),
+             ("type_hierarchy_subtypes", {"item": {"uri": uri, "name": "zero", "kind": 12, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}, "selectionRange": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 4}}}, "timeout_ms": 5000}, "typeHierarchy/subtypes", "typeHierarchyProvider")]
     for i, (name, args, method, cap) in enumerate(cases):
         t0 = time.time()
         r = a.call(30 + i, "tools/call", {"name": name, "arguments": args}, 30)

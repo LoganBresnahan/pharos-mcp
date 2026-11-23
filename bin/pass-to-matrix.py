@@ -91,6 +91,10 @@ def collapse(cell_results: list[str]) -> str:
 
     OK    iff every tool is OK
     G     iff every tool is OK or GAP, and at least one is GAP
+    S     iff the rest are OK and some are SKIP: not exercised (#43: a
+          hierarchy prepare found nothing at this target, so its chained
+          calls had no item; the target is a type, not a function, or
+          the reverse)
     F     iff any tool is FAIL
     -     iff missing/SKIP
     """
@@ -98,10 +102,10 @@ def collapse(cell_results: list[str]) -> str:
         return "—"
     if any(r == "FAIL" for r in cell_results):
         return "F"
-    if any(r == "SKIP" for r in cell_results) and not all(r == "SKIP" for r in cell_results):
-        return "F"  # partial skip = treat as failure for transparency
     if all(r == "SKIP" for r in cell_results):
         return "—"
+    if any(r == "SKIP" for r in cell_results):
+        return "S"
     if any(r == "GAP" for r in cell_results):
         return "G"
     return "✓"

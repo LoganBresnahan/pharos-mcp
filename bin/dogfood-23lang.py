@@ -1232,6 +1232,9 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
             _POOL_POLLER.tick(f"lang_start:{t.id}", force=True)
         prepared_call_item = None
         prepared_type_item = None
+        # #43: what each prepare answered, so a chained call can say why it
+        # has no item: a server gap (GAP) or nothing found (SKIP), not FAIL.
+        prepare_summary = {"call": "", "type": ""}
         prepared_symbol_handle = None
         # Broken-LSP fast-path: if a lang's first N tools all
         # retry-exhaust, the LSP itself isn't responding. No point
@@ -1269,14 +1272,16 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
             if tool in ("call_hierarchy_incoming_calls", "call_hierarchy_outgoing_calls"):
                 args = build_args(tool, t, prepared_call_item)
                 if args is None:
-                    rows.append((t.id, tool, False, "prepare returned no item"))
-                    print(f"  SKIP {tool}: no prepared call item", flush=True)
+                    note = chained_without_item(prepare_summary["call"])
+                    rows.append((t.id, tool, True, note))
+                    print(f"  SKIP {tool}: {note}", flush=True)
                     continue
             elif tool in ("type_hierarchy_supertypes", "type_hierarchy_subtypes"):
                 args = build_args(tool, t, prepared_type_item)
                 if args is None:
-                    rows.append((t.id, tool, False, "prepare returned no item"))
-                    print(f"  SKIP {tool}: no prepared type item", flush=True)
+                    note = chained_without_item(prepare_summary["type"])
+                    rows.append((t.id, tool, True, note))
+                    print(f"  SKIP {tool}: {note}", flush=True)
                     continue
             elif tool in ("find_referencing_symbols", "edit_at_symbol"):
                 args = build_args(tool, t, prepared_symbol_handle)
@@ -1418,6 +1423,10 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
                         flush=True,
                     )
 
+            if tool == "call_hierarchy_prepare":
+                prepare_summary["call"] = summary
+            elif tool == "type_hierarchy_prepare":
+                prepare_summary["type"] = summary
             if tool == "call_hierarchy_prepare" and ok and result:
                 prepared_call_item = first_item_from(result)
             elif tool == "type_hierarchy_prepare" and ok and result:
@@ -1558,6 +1567,8 @@ def write_report(rows, out_path: str, label: str, transport_name: str,
             mark = "OK" if ok else "FAIL"
             if "server gap" in summary:
                 mark = "GAP"
+            elif summary.startswith("skipped:"):
+                mark = "SKIP"
             elif "filter rejected" in summary:
                 mark = "FILT"
             elif "after retry" in summary:
@@ -1568,6 +1579,16 @@ def write_report(rows, out_path: str, label: str, transport_name: str,
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:
         f.write("\n".join(lines))
+
+
+def chained_without_item(prepare_summary):
+    """#43: why a chained hierarchy call has no item. A prepare that hit a
+    server gap makes the chained call a gap too; one that found nothing
+    makes it a skip (the target isn't a function, or a type, for this
+    hierarchy). Neither is a pharos failure."""
+    if "server gap" in prepare_summary:
+        return "server gap (its prepare was a server gap)"
+    return "skipped: prepare found nothing at this target"
 
 
 def main():

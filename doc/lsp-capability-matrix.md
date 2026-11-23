@@ -98,7 +98,16 @@ is the source for these cells.
 | zig        | ✓ | ✓ | ✓ | ✓ | ✓ | |
 
 Legend: `✓` = OK. `F` = FAIL. `G` = GAP (-32601 / cap not advertised
-— legitimate, not a defect).
+— legitimate, not a defect). `S` = not exercised: a hierarchy prepare
+found nothing at the language's target (a type for call hierarchy, a
+function for type hierarchy), so its chained calls had no item (#43).
+
+**Note (2026-11-22, #43):** the `call-h` and `type-h` columns below are
+from pass 27, before the harness stopped counting an unsupported or
+item-less chained call as FAIL. Their F's are that artifact, not pharos
+or server failures (every failed chained call in pass 27 reads "prepare
+returned no item"); they await a re-run with separate call- and
+type-hierarchy targets per language.
 
 **Summary.** 21/23 langs fully green on the symbol layer (all five
 tools ✓). 2/23 hard-fail on LSP-side issues:
@@ -238,9 +247,10 @@ default JSON-RPC + LSP framing:
 ## Per-LSP notes
 
 - **jdtls (java)** — cold Gradle build of `kafka` fixture takes 5–10 min;
-  fixture carries `timeout_override_ms=600_000`. `call_hierarchy_*` and
-  `type_hierarchy_supertypes/_subtypes` FAIL on the prepare result —
-  jdtls's prepare returns items but the chained calls reject them.
+  fixture carries `timeout_override_ms=600_000`. Its call-h and type-h
+  F's in pass 27 aren't rejections: the target is `interface KafkaClient`,
+  and prepareCallHierarchy returns null there, so the chained calls had
+  no item (#43).
   ADR-029's `jdt://` flow (navigation into JAR dependencies) is
   validated by the separate `bin/dogfood-adr-029.py` harness.
 - **gleam-lsp** — `workspace/symbol` and `textDocument/diagnostic`
@@ -256,11 +266,12 @@ default JSON-RPC + LSP framing:
   timeout out on cold workspace.
 - **perlnavigator (perl)** — replaced PLS in pass 20+ era. Stable; no
   per-call tuning beyond the 240s override carried from PLS era.
-- **gopls (go)** — `call_hierarchy_prepare` returns an item but the
-  chained `_incoming` / `_outgoing` reject it for the dogfood target;
-  unclear if a real bug or test position. `type_hierarchy_*` works.
-- **clangd (cpp)** — `call_hierarchy_*` chain fails like gopls; treat
-  as a known limitation on the protobuf fixture position.
+- **gopls (go)** — the call-h F in pass 27 is the target, not gopls:
+  it's the struct `flagConfig`, and gopls rightly answers that it isn't
+  a function, so the chained calls had no item (#43). `type_hierarchy_*`
+  works.
+- **clangd (cpp)** — the same: the target is `class Message`, where
+  prepareCallHierarchy returns [] (#43).
 - **next-ls (elixir)** — most aggressive non-cap failure list across
   the 23: `workspace_symbols`, `find_references`, `goto_definition`,
   `format_document`, `signature_help` all F. Considered swapping for

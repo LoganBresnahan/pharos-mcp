@@ -116,7 +116,11 @@ fn call_with_item(
 
       case
         session.with_session_and_retry(pool, file_uri, fn(lsp) {
-          proc.request_raw(lsp, method, params_text, timeout_ms)
+          // #43: gated on its capability, like the prepare (#37), so a
+          // server without the provider says so plainly, not -32601.
+          tool_helpers.with_capability_gate(lsp, method, fn() {
+            proc.request_raw(lsp, method, params_text, timeout_ms)
+          })
         })
       {
         Ok(result_value) -> Ok(tool_helpers.json_encode(result_value))

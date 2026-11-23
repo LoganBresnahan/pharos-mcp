@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- The call- and type-hierarchy chained tools (incoming/outgoing calls, supertypes/subtypes) say
+  plainly when the server doesn't support them, as their prepare tools do, instead of passing a
+  raw -32601 through. The capability matrix's call-h and type-h failures were the dogfood
+  harness's: a chained call with no prepared item was counted as FAIL; it's now GAP when the
+  prepare was a server gap and "not exercised" when it found nothing, and the gopls, jdtls and
+  clangd notes no longer say those servers reject their items (#43).
 - The README notes that ruby-lsp never indexes a method defined outside a class or module (a
   server limit): definition and hover on a call to a top-level `def` answer nothing, and
   find_symbol finds one only with scope_uri set to the file that defines it (#41).
