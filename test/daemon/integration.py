@@ -244,6 +244,21 @@ def alive(pid):
         return True
 
 
+def exited(pid):
+    """Polish 9: gone, or exited and not yet reaped by its parent (a
+    zombie), which is what `pharos daemon stop` waits for since polish 6.
+    The daemon is its spawning shim's child, so alive() (kill(pid, 0))
+    still found it until the shim reaped it: daemon_stop_waits_for_exit
+    failed 2 runs in 12. Only that check uses this: a zombie thread-group
+    leader can still have threads tearing down (a SIGKILLed daemon's
+    socket was still accepting), so alive() stays as it was."""
+    if not alive(pid):
+        return True
+    out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    stat = out.stdout.strip()
+    return stat == "" or stat.startswith("Z")
+
+
 def daemons_for(socket_path):
     """Pids of beam processes serving `socket_path`."""
     out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "args="],
@@ -772,7 +787,7 @@ def t_daemon_stop_waits_for_exit(sb):
     pid = sb.daemon_pid()
     out = sb.cli("daemon", "stop")
     check(out.returncode == 0, "daemon stop failed: %s" % out.stderr)
-    check(not alive(pid), "daemon %d still running when `daemon stop` returned" % pid)
+    check(exited(pid), "daemon %d still running when `daemon stop` returned" % pid)
 
 
 def t_daemon_stop_sees_a_zombie_as_gone(sb):

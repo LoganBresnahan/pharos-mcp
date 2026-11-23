@@ -162,8 +162,3 @@ timestamp_filename() ->
     lists:flatten(
         io_lib:format("~4..0B-~2..0B-~2..0B-~2..0B~2..0B~2..0B",
                       [Y, Mo, D, H, Mi, S])).
-
-mtime_to_stamp({{Y, Mo, D}, {H, Mi, S}}) ->
-    lists:flatten(
-        io_lib:format("~4..0B-~2..0B-~2..0B-~2..0B~2..0B~2..0B",
-                      [Y, Mo, D, H, Mi, S])).
