@@ -45,6 +45,14 @@ pub fn read_file(path: String) -> Result(BitArray, String)
 /// (`file://localhost/path`, RFC 8089). Any other host names a file on
 /// another machine, and is refused as not a local file URI.
 pub fn uri_to_path(uri: String) -> Result(String, DiscoveryError) {
+  // #42: `file:/abs` (no authority at all) is RFC 8089's form too, and
+  // jdtls sends it: the same file as `file:///abs`.
+  let uri = case
+    string.starts_with(uri, "file:/") && !string.starts_with(uri, "file://")
+  {
+    True -> "file://" <> string.drop_start(uri, 5)
+    False -> uri
+  }
   case string.starts_with(uri, "file://") {
     True -> {
       let rest = string.drop_start(uri, 7)
@@ -88,7 +96,22 @@ fn local_path(rest: String) -> Result(String, Nil) {
 /// and RFC 8089 reads `src` as a host.
 pub fn describe_not_local(uri: String) -> String {
   case string.starts_with(uri, "file://") {
-    False -> "not a local file:// URI: " <> uri
+    False ->
+      case string.split_once(uri, "://"), string.starts_with(uri, "file:") {
+        // A virtual URI (jdt://): the tool works on files on disk.
+        Ok(#(scheme, _)), False if scheme != "" ->
+          uri
+          <> " is not a file on disk ("
+          <> scheme
+          <> "://): this tool works on local files only; use file:///absolute/path"
+        _, True -> uri <> " has a relative path: use file:///absolute/path"
+        _, False ->
+          case string.starts_with(uri, "/") {
+            True -> uri <> " is a path, not a URI: use file://" <> uri
+            False ->
+              uri <> " is a relative path, not a URI: use file:///absolute/path"
+          }
+      }
     True ->
       case string.split_once(string.drop_start(uri, 7), "/") {
         Ok(#(host, _)) if host != "" ->

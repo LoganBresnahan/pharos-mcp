@@ -2986,7 +2986,16 @@ fn decode_workspace_symbols_arguments(
 
 pub fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
   case err {
-    diagnostics.NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
+    diagnostics.NotAFileUri(uri) ->
+      case session.is_custom_uri(uri) {
+        // #42: a library file the server serves (jdt://) is read-only,
+        // and pharos neither syncs nor diagnoses it.
+        True ->
+          "get_diagnostics covers files on disk only: "
+          <> uri
+          <> " names a read-only file the language server serves (a library's source), which has no diagnostics of its own; ask about a file:///… file in the workspace"
+        False -> workspace_root.describe_not_local(uri)
+      }
     diagnostics.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
     diagnostics.SpawnFailed(reason) -> "LSP spawn failed: " <> reason

@@ -194,8 +194,11 @@ pub fn describe_not_local_teaches_the_fix_test() {
   |> should.equal("file:// has no path: use file:///absolute/path")
   workspace_root.describe_not_local("file://localhost")
   |> should.equal("file://localhost has no path: use file:///absolute/path")
+  // #42: a virtual URI says the tool takes files on disk.
   workspace_root.describe_not_local("untitled:///x")
-  |> should.equal("not a local file:// URI: untitled:///x")
+  |> should.equal(
+    "untitled:///x is not a file on disk (untitled://): this tool works on local files only; use file:///absolute/path",
+  )
 }
 
 pub fn extra_leading_slashes_collapse_test() {
@@ -203,4 +206,26 @@ pub fn extra_leading_slashes_collapse_test() {
   |> should.equal(Ok("/tmp/a.ts"))
   workspace_root.canonical_uri("file:///////tmp/a.ts")
   |> should.equal("file:///tmp/a.ts")
+}
+
+pub fn file_uri_without_authority_is_accepted_test() {
+  // #42: RFC 8089's `file:/abs`, as jdtls sends it.
+  workspace_root.uri_to_path("file:/home/oof/a.ts")
+  |> should.equal(Ok("/home/oof/a.ts"))
+  workspace_root.canonical_uri("file:/home/oof/a.ts")
+  |> should.equal("file:///home/oof/a.ts")
+}
+
+pub fn refused_shapes_say_what_to_send_test() {
+  let says = fn(uri, text) {
+    workspace_root.describe_not_local(uri)
+    |> string.contains(text)
+    |> should.be_true
+  }
+  says("file:src/a.ts", "has a relative path: use file:///absolute/path")
+  says("src/a.ts", "is a relative path, not a URI")
+  says("/home/oof/a.ts", "use file:///home/oof/a.ts")
+  says("jdt://contents/rt.jar/java.lang/String.class", "local files only")
+  says("untitled:///x", "not a file on disk (untitled://)")
+  says("file://src/a.ts", "names the host `src`")
 }

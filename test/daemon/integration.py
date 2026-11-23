@@ -1671,6 +1671,26 @@ def t_idle_stop_shuts_servers_down(sb):
     check(methods.index("shutdown") < methods.index("exit"), "order: %s" % methods[-6:])
 
 
+def t_uri_shapes_teach(sb):
+    """#42: `file:/abs` (RFC 8089, as jdtls sends it) is accepted; other
+    refused shapes say what to send; get_diagnostics on a virtual URI says
+    it covers files on disk only."""
+    sb.write_toml("custom_uri_schemes.stubvirt.fetch_method = \"stub/contents\"\n")
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    single = "file:" + sb.uri[len("file://"):]
+    r = a.call(11, "tools/call", {"name": "hover", "arguments": {"uri": single, "line": 0, "character": 0}})
+    check(not r["result"].get("isError") and "line 0" in r["result"]["content"][0]["text"],
+          "file:/abs: %s" % r["result"])
+    r = a.call(12, "tools/call", {"name": "hover", "arguments": {"uri": "src/main.stub", "line": 0, "character": 0}})
+    text = r["result"]["content"][0]["text"]
+    check(r["result"].get("isError") and "relative path, not a URI" in text, "relative path: %s" % text)
+    d = a.call(13, "tools/call", {"name": "get_diagnostics", "arguments": {"uri": "stubvirt://lib/X.stub"}})
+    text = d["result"]["content"][0]["text"]
+    check("files on disk only" in text, "virtual URI: %s" % text)
+
+
 def t_config_warnings_without_lsp_tools(sb):
     """#32 F4: a daemon whose sessions call only non-LSP tools still has
     its config warnings in the daemon log (where runtime_log_tail reads),
@@ -2593,6 +2613,7 @@ SCENARIOS = [
     ("watched_file_change_isnt_answered_from_cache", t_watched_file_change_isnt_answered_from_cache),
     ("watched_files_tiny_timeout_still_answers", t_watched_files_tiny_timeout_still_answers),
     ("daemon_stop_shuts_servers_down", t_daemon_stop_shuts_servers_down),
+    ("uri_shapes_teach", t_uri_shapes_teach),
     ("idle_stop_shuts_servers_down", t_idle_stop_shuts_servers_down),
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),
