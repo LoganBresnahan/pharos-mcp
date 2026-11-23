@@ -3005,6 +3005,10 @@ pub fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
     diagnostics.TransportFailed(reason) -> "LSP transport error: " <> reason
     diagnostics.UnsupportedFileType(uri) ->
       workspace_root.describe_unsupported(uri)
+    diagnostics.FileNotFound(uri) ->
+      "file not found: "
+      <> uri
+      <> " (get_diagnostics answers about files on disk)"
     diagnostics.UnknownCustomUriScheme(uri) ->
       "custom URI scheme not registered for any language: " <> uri
     diagnostics.NoActiveSessionForLanguage(uri, language) ->

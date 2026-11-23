@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file's own or an ancestor's (`Class::Struct::Tie_ISA`, `Env::Array::VMS`) is looked for in
   that file: all were not found. This applies to modules-only servers only, so jdtls's
   `package` line keeps its classes beside it.
+- get_diagnostics on a file that doesn't exist fails at once ("file not found"), as an unserved
+  extension does; it answered "no publish" after its whole timeout, which a caller couldn't
+  tell from a slow server (#61).
 - get_diagnostics on lua-language-server answers a file clean from its open in about 2 s, marked
   `assumed_current`, instead of waiting its whole timeout: the server publishes nothing for such
   a file. That holds once its workspace is loaded and diagnosed; before then (about 30 s on a

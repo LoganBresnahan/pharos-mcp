@@ -56,6 +56,7 @@ import pharos/lsp/proc
 import pharos/lsp/tsserver_diagnostics
 import pharos/tools/session
 import pharos/tools/tool_helpers
+import pharos/workspace_root
 
 const default_drain_window_ms: Int = 8000
 
@@ -77,6 +78,9 @@ pub type DiagnosticsError {
   TransportFailed(reason: String)
   /// Tool was called on a file with an unsupported extension.
   UnsupportedFileType(uri: String)
+  /// #61: the file doesn't exist on disk (get_diagnostics answers about
+  /// files on disk; no server would ever publish for it).
+  FileNotFound(uri: String)
   /// ADR-029: URI used a non-file scheme that no language declared.
   UnknownCustomUriScheme(uri: String)
   /// ADR-029: custom URI's language has no Ready session in the pool.
@@ -107,9 +111,12 @@ pub fn handle(
   file_uri: String,
   timeout_ms: Int,
 ) -> Result(DiagnosticsResult, DiagnosticsError) {
-  case session.config_for_uri(file_uri) {
-    Error(err) -> Error(map_session_error(err))
-    Ok(config) -> {
+  case session.config_for_uri(file_uri), on_disk(file_uri) {
+    Error(err), _ -> Error(map_session_error(err))
+    // #61: a file that isn't on disk fails at once, as an unserved
+    // extension does; it answered "no publish" after the whole timeout.
+    Ok(_), False -> Error(FileNotFound(file_uri))
+    Ok(config), True -> {
       let covering =
         languages.servers_covering_method(config, diagnostic_method)
       // Every wait below comes out of this call's own budget.
@@ -1350,6 +1357,19 @@ fn evict_for_uri(pool: Pool, file_uri: String, config: LanguageConfig) -> Nil {
 }
 
 // -- Error description helpers -------------------------------------------
+
+/// #61: is `file_uri` a regular file on disk? A URI pharos can't read as a
+/// local path counts as on disk here: the session's own checks say what's
+/// wrong with it.
+fn on_disk(file_uri: String) -> Bool {
+  case workspace_root.uri_to_path(file_uri) {
+    Ok(path) -> is_regular_file(path)
+    Error(_) -> True
+  }
+}
+
+@external(erlang, "pharos_fs_ffi", "is_regular_file")
+fn is_regular_file(path: String) -> Bool
 
 fn map_session_error(err: session.SessionError) -> DiagnosticsError {
   case err {

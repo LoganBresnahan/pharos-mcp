@@ -731,6 +731,27 @@ def t_elp_close_clear_is_not_an_answer(sb):
     check('"diagnostics":[]' not in d, "the close's clear was the answer: %s" % d[-300:])
 
 
+def t_diagnostics_missing_file_fails_at_once(sb):
+    """#61: get_diagnostics on a file that isn't on disk answered "no
+    publish" after its whole timeout, which a caller can't tell from a slow
+    server. It now fails at once, as an unserved extension does."""
+    sb.write_toml('diagnostics_mode = "push"\n')
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push"})
+    a.initialize()
+    missing = "file://" + os.path.join(sb.fixture, "nope.stub")
+    t0 = time.time()
+    r = a.call(10, "tools/call", {"name": "get_diagnostics",
+                                  "arguments": {"uri": missing, "timeout_ms": 6000}})
+    took = time.time() - t0
+    text = r["result"]["content"][0]["text"]
+    check(r["result"].get("isError") is True and "file not found" in text and took < 3,
+          "missing file (%.1fs): %s" % (took, text[-300:]))
+    # A file that exists still gets its set.
+    real = stub_file(sb, "real.stub", "ERROR here\n")
+    d = a.tool(11, "get_diagnostics", {"uri": real, "timeout_ms": 6000})
+    check("stub error on line 0" in d, "existing file: %s" % d[-300:])
+
+
 def t_silence_never_claims_a_late_edit(sb):
     """#46 B1 (verifier-two): lua-language-server published a change 1.33 s
     after it on Kong with no load. With a 600 ms silence after edits, the
@@ -3034,6 +3055,7 @@ SCENARIOS = [
     ("silence_is_settled", t_silence_is_settled),
     ("silence_waits_out_the_open", t_silence_waits_out_the_open),
     ("silence_never_claims_a_late_edit", t_silence_never_claims_a_late_edit),
+    ("diagnostics_missing_file_fails_at_once", t_diagnostics_missing_file_fails_at_once),
     ("silence_waits_out_the_progress_end", t_silence_waits_out_the_progress_end),
     ("elp_change_before_open", t_elp_change_before_open),
     ("elp_close_clear_is_not_an_answer", t_elp_close_clear_is_not_an_answer),
