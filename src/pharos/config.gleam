@@ -137,6 +137,9 @@ pub type ServerOverride {
     silence_settle_ms: Option(Int),
     /// #46. The same, at least this long after a didOpen.
     silence_open_floor_ms: Option(Int),
+    /// #56. true: an empty set without a version after a didClose is the
+    /// server's clear of the closed document, not an answer.
+    empty_after_close_is_clear: Option(Bool),
     /// ADR-038 amendment (A). true: send changes as a ranged
     /// whole-document replace; false: the range-less full text. Unset:
     /// the form the server's sync kind asks for.
@@ -249,6 +252,9 @@ pub type LanguageOverride {
     silence_settle_ms: Option(Int),
     /// #46. The same, at least this long after a didOpen.
     silence_open_floor_ms: Option(Int),
+    /// #56. true: an empty set without a version after a didClose is the
+    /// server's clear of the closed document, not an answer.
+    empty_after_close_is_clear: Option(Bool),
     /// ADR-038 amendment (A). true: send changes as a ranged
     /// whole-document replace; false: the range-less full text. Unset:
     /// the form the server's sync kind asks for.
@@ -1306,6 +1312,10 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
     open_settle_ms: decode_optional_int(value, "open_settle_ms"),
     silence_settle_ms: decode_optional_int(value, "silence_settle_ms"),
     silence_open_floor_ms: decode_optional_int(value, "silence_open_floor_ms"),
+    empty_after_close_is_clear: decode_optional_bool(
+      value,
+      "empty_after_close_is_clear",
+    ),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     generic_names_carry_params: decode_optional_bool(
       value,
@@ -1476,6 +1486,10 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
     open_settle_ms: decode_optional_int(value, "open_settle_ms"),
     silence_settle_ms: decode_optional_int(value, "silence_settle_ms"),
     silence_open_floor_ms: decode_optional_int(value, "silence_open_floor_ms"),
+    empty_after_close_is_clear: decode_optional_bool(
+      value,
+      "empty_after_close_is_clear",
+    ),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     generic_names_carry_params: decode_optional_bool(
       value,

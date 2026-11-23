@@ -80,6 +80,20 @@ version, applies didOpen / didChange / didClose, and logs what it got:
                               a change that leaves its set as it was;
                               STUB_LSP_SILENT_OPEN_MS delays the open's
                               publish, STUB_LSP_SILENT_CHANGE_MS a change's
+                              "push-cancel" (#56, elp): like push-silent,
+                              the open's set STUB_LSP_SILENT_OPEN_MS later,
+                              but a write while a set is pending drops it
+                              with nothing re-running it: a didChange, a
+                              didClose of a document whose text differs
+                              from its file, or a didChangeWatchedFiles for
+                              a file new or changed on disk (both 20 ms
+                              later, from "another thread"). A didOpen or
+                              didSave re-runs every open document's set. A
+                              didClose publishes [] without a version.
+                              STUB_LSP_LOADER_MS (default 20): how long
+                              after it those loader writes land.
+                              STUB_LSP_DROP_REOPEN=1: a document's didOpen
+                              after its didClose loses its run.
                               "push-open-late" (#45, perlnavigator): after
                               a didOpen, [] and the real set PHASE_MS
                               later, both without a version; after a
@@ -716,6 +730,125 @@ def handle_tsserver_request(req):
                        "request_seq": 0, "success": True, "body": body}}
 
 
+CANCEL_LOCK = threading.Lock()
+CANCEL_PENDING: dict = {}
+DISK_SEEN: dict = {}
+CLOSED_ONCE: set = set()
+
+
+def cancel_mode():
+    return os.environ.get("STUB_LSP_DIAGNOSTICS") == "push-cancel"
+
+
+def cancel_schedule(stdout, uri, delay):
+    """#56: run `uri`'s set; it publishes `delay` s later unless a write
+    drops it first, and only if it differs from the last one published."""
+    if uri not in DOCS:
+        return
+    diagnostics = stub_diagnostics(DOCS[uri]["text"])
+    version = DOCS[uri]["version"]
+
+    def fire():
+        with CANCEL_LOCK:
+            if CANCEL_PENDING.get(uri) is not timer:
+                return
+            del CANCEL_PENDING[uri]
+            if LAST_PUBLISHED.get(uri, []) == diagnostics:
+                return
+            LAST_PUBLISHED[uri] = diagnostics
+        write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                               "params": {"uri": published_uri(uri), "diagnostics": diagnostics,
+                                          "version": version}})
+    timer = threading.Timer(delay, fire)
+    timer.daemon = True
+    with CANCEL_LOCK:
+        old = CANCEL_PENDING.get(uri)
+        if old is not None:
+            old.cancel()
+        CANCEL_PENDING[uri] = timer
+    timer.start()
+
+
+def cancel_drop_pending(why):
+    with CANCEL_LOCK:
+        dropped = list(CANCEL_PENDING)
+        for timer in CANCEL_PENDING.values():
+            timer.cancel()
+        CANCEL_PENDING.clear()
+    if dropped:
+        log_line("cancel: %s dropped %s" % (why, ",".join(os.path.basename(u) for u in dropped)))
+
+
+def cancel_rerun_all(stdout, delay):
+    for uri in list(DOCS):
+        cancel_schedule(stdout, uri, delay)
+
+
+def cancel_later(why):
+    """A write from elp's loader thread: it lands after the batch."""
+    delay = int(os.environ.get("STUB_LSP_LOADER_MS", "20")) / 1000.0
+    timer = threading.Timer(delay, lambda: cancel_drop_pending(why))
+    timer.daemon = True
+    timer.start()
+
+
+def handle_cancel_mode(stdout, msg, method):
+    """#56, elp: True when the message is fully handled here."""
+    params = msg.get("params") or {}
+    uri = (params.get("textDocument") or {}).get("uri")
+    open_delay = int(os.environ.get("STUB_LSP_SILENT_OPEN_MS", "0")) / 1000.0
+    change_delay = int(os.environ.get("STUB_LSP_SILENT_CHANGE_MS", "0")) / 1000.0
+    if method == "textDocument/didOpen":
+        apply_sync(method, params)
+        drop = os.environ.get("STUB_LSP_DROP_REOPEN") and uri in CLOSED_ONCE
+        cancel_rerun_all(stdout, open_delay)
+        if drop:
+            with CANCEL_LOCK:
+                timer = CANCEL_PENDING.pop(uri, None)
+            if timer is not None:
+                timer.cancel()
+            log_line("cancel: reopen of %s lost its run" % os.path.basename(uri))
+        return True
+    if method == "textDocument/didChange":
+        apply_sync(method, params)
+        cancel_drop_pending("didChange " + os.path.basename(uri or ""))
+        return True
+    if method == "textDocument/didSave":
+        cancel_rerun_all(stdout, change_delay)
+        return True
+    if method == "textDocument/didClose":
+        text = DOCS.get(uri, {}).get("text")
+        apply_sync(method, params)
+        CLOSED_ONCE.add(uri)
+        write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                               "params": {"uri": published_uri(uri), "diagnostics": []}})
+        try:
+            on_disk = open(uri_path(uri), encoding="utf-8", newline="").read()
+        except OSError:
+            on_disk = None
+        if text is not None and on_disk != text:
+            cancel_later("didClose " + os.path.basename(uri))
+        return True
+    if method == "workspace/didChangeWatchedFiles":
+        wrote = False
+        for change in params.get("changes") or []:
+            path = uri_path(change.get("uri", ""))
+            if change.get("type") == 3:
+                wrote = wrote or DISK_SEEN.pop(path, None) is not None
+                continue
+            try:
+                content = open(path, encoding="utf-8", newline="").read()
+            except OSError:
+                continue
+            if DISK_SEEN.get(path) != content:
+                DISK_SEEN[path] = content
+                wrote = True
+        if wrote:
+            cancel_later("watched files")
+        return True
+    return False
+
+
 def maybe_publish(stdout, uri):
     mode = os.environ.get("STUB_LSP_DIAGNOSTICS", "")
     if not mode or uri not in DOCS or mode == "push-stale":
@@ -1105,6 +1238,8 @@ def main():
                 else:
                     suffix = sync_log_suffix(method, msg.get("params") or {})
                     log.write(f"{os.getpid()} {method}{suffix}\n")
+        if cancel_mode() and handle_cancel_mode(stdout, msg, method):
+            continue
         if method == "initialize":
             resp = handle_initialize(msg)
             if resp is not None:

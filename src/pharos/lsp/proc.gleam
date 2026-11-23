@@ -1116,8 +1116,15 @@ fn write_ops(
               diagnostics_cache.mark_synced(uri, server_id, version)
               diagnostics_cache.mark_opened(uri, server_id, version)
             }
-            doc_sync.OpChange(uri:, version:, ..) ->
+            doc_sync.OpChange(uri:, version:, ..) -> {
+              // #56: a change sent as a close and reopen: the server's
+              // clear of the closed document can land after the reopen.
+              case doc_sync.reopens(state.sync, op) {
+                True -> diagnostics_cache.mark_closed_since(uri, server_id)
+                False -> Nil
+              }
               diagnostics_cache.mark_synced(uri, server_id, version)
+            }
             doc_sync.OpClose(uri:) ->
               diagnostics_cache.mark_closed(uri, server_id)
             // No document to stamp: the batch's own stamp covers it.

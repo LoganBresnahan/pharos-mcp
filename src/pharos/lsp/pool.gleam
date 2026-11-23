@@ -1967,8 +1967,14 @@ fn handle_sync_documents(
       let #(language, workspace, server_id) = proc_key
       let key = fn(uri) { #(language, workspace, server_id, uri) }
       let clock = state.clock + 1
+      // #56: the asked document's sync goes after the other documents'.
+      // elp applies a didChange as it reads it, so one written before the
+      // asked file's didOpen can't cancel that file's check, while one
+      // after it can (verifier: 16 of 16 kept before, 16 of 16 lost after).
+      let #(others, asked) =
+        list.partition(disk, fn(entry) { entry.0 != subject })
       let #(docs, ops) =
-        list.fold(disk, #(state.docs, []), fn(acc, entry) {
+        list.fold(list.append(others, asked), #(state.docs, []), fn(acc, entry) {
           let #(docs, ops) = acc
           let #(uri, on_disk) = entry
           plan_one(

@@ -662,6 +662,60 @@ def t_silence_waits_out_the_progress_end(sb):
     check("stub error on line 0" in d and "assumed_current" not in d, "false clean after the progress: %s" % d[-300:])
 
 
+# #56: elp's way (bin/_stub_lsp.py push-cancel): nothing for a clean file,
+# an open's set 600 ms later, and a write in between drops it for good.
+# No didSave, so a didChange re-runs nothing (elp's didChange re-runs its
+# lints only, not its compiler).
+ELP_ENV = {"STUB_LSP_DIAGNOSTICS": "push-cancel", "STUB_LSP_SILENT_OPEN_MS": "600",
+           "STUB_LSP_SYNC_KIND": "2", "STUB_LSP_SYNC_SAVE": "none"}
+NO_PUBLISH = "No textDocument/publishDiagnostics"
+
+
+def t_elp_change_before_open(sb):
+    """#56: the asked file's didOpen now goes after the other documents'
+    syncs in its batch. The stub models elp getting no didSave (real elp
+    does, and its didSave re-runs every open file's check): a didChange
+    applied after a file's didOpen cancels its check for good, so the set
+    never came and the answer waited out its timeout."""
+    sb.write_toml('diagnostics_mode = "push"\n')
+    a = sb.start(dict(ELP_ENV))
+    a.initialize()
+    other = stub_file(sb, "other.stub", "fine\n")
+    a.tool(10, "get_diagnostics", {"uri": other, "timeout_ms": 2000})
+    with open(other[len("file://"):], "w") as f:
+        f.write("fine\nstill fine\n")
+    bad = stub_file(sb, "bad.stub", "ERROR here\n")
+    d = a.tool(11, "get_diagnostics", {"uri": bad, "timeout_ms": 4000})
+    order = [l.split(" ", 1) for l in sync_lines(sb)][-2:]
+    check("stub error on line 0" in d, "lost: %s\n%s" % (d[-300:], order))
+    check([o[0] for o in order] == ["textDocument/didChange", "textDocument/didOpen"],
+          "batch order: %s" % order)
+
+
+def t_elp_close_clear_is_not_an_answer(sb):
+    """#56: elp publishes `[]` without a version on a didClose. On a close
+    and reopen in one batch (pharos reopens a document whose text had a
+    lone CR, ADR-038 amendment (A)) it lands after the reopen. When the
+    reopen's check is lost too (the stub drops it, with no didSave to run
+    it again), pharos answered that clear as the reopened text's set,
+    `[]`, at the deadline. It is never the answer now: no publish."""
+    sb.write_toml('diagnostics_mode = "push"\nempty_after_close_is_clear = true\n')
+    a = sb.start(dict(ELP_ENV, STUB_LSP_DROP_REOPEN="1"))
+    a.initialize()
+    path = os.path.join(sb.fixture, "cr.stub")
+    with open(path, "w", newline="") as f:
+        f.write("ERROR here\rmore\n")
+    uri = "file://" + path
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 6000})
+    check("stub error on line 0" in d, "first answer: %s" % d[-300:])
+    with open(path, "w", newline="") as f:
+        f.write("ERROR here\rmore\nand more\n")
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 3000})
+    syncs = [l.split(" ", 1)[0] for l in sync_lines(sb)]
+    check(syncs[-2:] == ["textDocument/didClose", "textDocument/didOpen"], "not a reopen: %s" % syncs[-4:])
+    check('"diagnostics":[]' not in d, "the close's clear was the answer: %s" % d[-300:])
+
+
 def t_silence_never_claims_a_late_edit(sb):
     """#46 B1 (verifier-two): lua-language-server published a change 1.33 s
     after it on Kong with no load. With a 600 ms silence after edits, the
@@ -2966,6 +3020,8 @@ SCENARIOS = [
     ("silence_waits_out_the_open", t_silence_waits_out_the_open),
     ("silence_never_claims_a_late_edit", t_silence_never_claims_a_late_edit),
     ("silence_waits_out_the_progress_end", t_silence_waits_out_the_progress_end),
+    ("elp_change_before_open", t_elp_change_before_open),
+    ("elp_close_clear_is_not_an_answer", t_elp_close_clear_is_not_an_answer),
     ("idle_stop_shuts_servers_down", t_idle_stop_shuts_servers_down),
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),

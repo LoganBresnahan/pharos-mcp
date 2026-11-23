@@ -481,6 +481,37 @@ raised for that. Bundled: lua-language-server 600 and 2000, others 0.
 rust-analyzer needed no value: each edit publishes twice about 90 ms apart, and
 #30's save-check grace already holds the answer for the second (24 of 24 right).
 
+**Amendment (#56, 2026-11-23): elp, a reopen's clear and batch order; silence rejected.** elp 1.1
+publishes a file only when its set changes (crates/ide/src/diagnostics_collection.rs: empty to
+empty is no change), so a clean Erlang file gets no publish and `get_diagnostics` waits out its
+timeout. It has no pull diagnostics. Two hardening changes ship; neither changes what elp answers
+in pharos's usual traffic, where every change goes with a didSave (elp's sync capability asks for
+it) and elp's didSave runs its checks of every open file again:
+
+- **A reopen's clear isn't an answer** (`empty_after_close_is_clear`, elp). elp publishes `[]`
+  without a version as it reads a didClose; on a close and reopen in one batch (a change to a text
+  with a lone CR, amendment (A)) it lands after the reopen. The #45 rule already holds such a set
+  as interim while the versioned one may follow (it came 108 ms later on real elp). If the reopen's
+  checks are lost and none follows, the answer is now "no publish", not the close's `[]` at the
+  deadline.
+- **The asked file's didOpen goes last in its batch.** elp checks open files on a task pool, a
+  write to its database cancels a running check, elp 1.1 drops a cancelled check's result (`.ok()`
+  in crates/elp/src/snapshot.rs), and only a didOpen or didSave runs its checks again. Measured on
+  elp directly, a didChange with no didSave after a file's didOpen lost that file's set 16 of 16
+  times (none before it). In pharos's traffic the didSave that follows re-runs the check; the order
+  covers a server whose changes go without one.
+
+Rejected for 0.4.0, the #46 silence rule for elp (silence after an open counts as clean). It was
+built with guards (no write after the open or in its batch, no outstanding project reload) and
+failed verification: elp's lint run is one task over every open document, file by file, with no
+progress and its results sent at the end (+1.17 s with 10 open documents), so a file was answered
+`[]` while elp still computed findings for it. elp's per-file `telemetry/event`
+(`NativeDiagnostics`, `ParseServerDiagnostics`) marks each file's end, but a run cancelled by a
+didOpen sends one for every file it cut short, after that didOpen, so "every open file has
+reported since the latest didOpen" can be met early. A rule with one open document per elp and
+that telemetry is the plan after 0.4.0 (#56). A limit that predates 0.4.0: a first answer can be
+elp's compiler set before its lint set arrives, unmarked.
+
 ## Alternatives considered
 
 - **A batch of only `didOpen`s doesn't count for freshness.** It fixes the case the review hit

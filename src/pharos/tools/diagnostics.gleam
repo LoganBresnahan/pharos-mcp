@@ -437,10 +437,13 @@ pub type Settle {
     open_ms: Int,
     silence_ms: Int,
     silence_open_ms: Int,
+    /// #56: an empty set without a version after a didClose is the
+    /// server's clear of the closed document, never the answer (elp).
+    close_clear: Bool,
   )
 }
 
-const no_settle = Settle(0, 0, 0, 0, 0)
+const no_settle = Settle(0, 0, 0, 0, 0, False)
 
 fn settle_of(server: ServerConfig) -> Settle {
   Settle(
@@ -449,6 +452,7 @@ fn settle_of(server: ServerConfig) -> Settle {
     server.open_settle_ms,
     server.silence_settle_ms,
     server.silence_open_floor_ms,
+    server.empty_after_close_is_clear,
   )
 }
 
@@ -521,6 +525,28 @@ fn settle_for(
   int.max(empty, open)
 }
 
+/// The cache's entry for `file_uri` on proc `pid`. #56: for a server with
+/// `empty_after_close_is_clear`, an empty set without a version that came
+/// after a didClose of the file is the server's clear of the closed
+/// document (elp sends it as the didClose is read, so in a close and reopen
+/// it can land after the reopen), never the reopened text's set: missing.
+fn cache_lookup(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  settle: Settle,
+) -> diagnostics_cache.Lookup {
+  let found = diagnostics_cache.lookup(file_uri, server_id, pid)
+  case settle.close_clear, found {
+    True, diagnostics_cache.Fresh(_) | True, diagnostics_cache.CarriedOver(_) ->
+      case diagnostics_cache.latest_is_close_clear(file_uri, server_id, pid) {
+        True -> diagnostics_cache.Missing
+        False -> found
+      }
+    _, _ -> found
+  }
+}
+
 /// #45 polish 3: the empty-set and open waits are a fixed window from the
 /// sync's first publish, not quiet: jdtls republishes `[]` about 0.95 s
 /// after a clean edit, and perlnavigator repeats its set at about 1035
@@ -532,12 +558,13 @@ fn settle_window(
   file_uri: String,
   server_id: String,
   pid: Pid,
+  settle: Settle,
   window_ms: Int,
   deadline_ms: Int,
   params: Dynamic,
 ) -> PushEntry {
   let latest = fn() {
-    case diagnostics_cache.lookup(file_uri, server_id, pid) {
+    case cache_lookup(file_uri, server_id, pid, settle) {
       diagnostics_cache.Fresh(newer) -> newer
       _ -> params
     }
@@ -583,6 +610,7 @@ fn resolve_push(
                 file_uri,
                 server_id,
                 pid,
+                settle,
                 window_ms,
                 deadline_ms,
                 params,
@@ -594,6 +622,7 @@ fn resolve_push(
                 file_uri,
                 server_id,
                 pid,
+                settle,
                 quiet_ms,
                 deadline_ms,
                 params,
@@ -604,7 +633,15 @@ fn resolve_push(
         other -> other
       }
     False ->
-      case resolve_push_now(file_uri, server_id, pid, now_ms(), no_settle) {
+      case
+        resolve_push_now(
+          file_uri,
+          server_id,
+          pid,
+          now_ms(),
+          Settle(..no_settle, close_clear: settle.close_clear),
+        )
+      {
         FreshEntry(params) -> CarriedEntry(params)
         other -> other
       }
@@ -661,12 +698,13 @@ fn settle_publishes(
   file_uri: String,
   server_id: String,
   pid: Pid,
+  settle: Settle,
   settle_ms: Int,
   deadline_ms: Int,
   latest: Dynamic,
 ) -> PushEntry {
   let age = diagnostics_cache.publish_age_ms(file_uri, server_id, pid)
-  let current = case diagnostics_cache.lookup(file_uri, server_id, pid) {
+  let current = case cache_lookup(file_uri, server_id, pid, settle) {
     diagnostics_cache.Fresh(params) -> params
     _ -> latest
   }
@@ -681,6 +719,7 @@ fn settle_publishes(
             file_uri,
             server_id,
             pid,
+            settle,
             settle_ms,
             deadline_ms,
             current,
@@ -698,7 +737,7 @@ fn resolve_push_now(
   settle: Settle,
 ) -> PushEntry {
   let silent = fn() { silence_holds(file_uri, server_id, pid, settle) }
-  case diagnostics_cache.lookup(file_uri, server_id, pid) {
+  case cache_lookup(file_uri, server_id, pid, settle) {
     diagnostics_cache.Fresh(params) -> FreshEntry(params)
     diagnostics_cache.CarriedOver(params) ->
       case
@@ -706,6 +745,7 @@ fn resolve_push_now(
           file_uri,
           server_id,
           pid,
+          settle,
           int.min(now_ms() + diagnostics_cache.settle_left_ms(pid), deadline_ms),
           fresh_only: True,
           silent: silent,
@@ -732,6 +772,7 @@ fn resolve_push_now(
               file_uri,
               server_id,
               pid,
+              settle,
               int.min(
                 now_ms() + diagnostics_cache.settle_left_ms(pid),
                 deadline_ms,
@@ -750,6 +791,7 @@ fn resolve_push_now(
               file_uri,
               server_id,
               pid,
+              settle,
               deadline_ms,
               fresh_only: False,
               silent: silent,
@@ -782,17 +824,19 @@ fn await_lookup(
   file_uri: String,
   server_id: String,
   pid: Pid,
+  settle: Settle,
   until_ms: Int,
   fresh_only fresh_only: Bool,
   silent silent: fn() -> Bool,
 ) -> #(diagnostics_cache.Lookup, Bool) {
-  poll_lookup(file_uri, server_id, pid, until_ms, fresh_only, silent)
+  poll_lookup(file_uri, server_id, pid, settle, until_ms, fresh_only, silent)
 }
 
 fn poll_lookup(
   file_uri: String,
   server_id: String,
   pid: Pid,
+  settle: Settle,
   deadline_ms: Int,
   fresh_only: Bool,
   silent: fn() -> Bool,
@@ -801,7 +845,7 @@ fn poll_lookup(
   // the deadline: when the deadline is the end of a settle window, that
   // lookup already counts the window as passed.
   let expired = now_ms() >= deadline_ms
-  let current = diagnostics_cache.lookup(file_uri, server_id, pid)
+  let current = cache_lookup(file_uri, server_id, pid, settle)
   let wanted = case current, fresh_only {
     diagnostics_cache.Fresh(_), _ -> True
     diagnostics_cache.CarriedOver(_), False -> True
@@ -813,7 +857,15 @@ fn poll_lookup(
     False, False, True -> #(current, False)
     False, False, False -> {
       process.sleep(poll_step_ms)
-      poll_lookup(file_uri, server_id, pid, deadline_ms, fresh_only, silent)
+      poll_lookup(
+        file_uri,
+        server_id,
+        pid,
+        settle,
+        deadline_ms,
+        fresh_only,
+        silent,
+      )
     }
   }
 }

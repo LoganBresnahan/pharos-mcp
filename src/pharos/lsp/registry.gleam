@@ -218,6 +218,10 @@ fn synth_primary(key: String, override: LanguageOverride) -> ServerConfig {
     open_settle_ms: option.unwrap(override.open_settle_ms, 0),
     silence_settle_ms: option.unwrap(override.silence_settle_ms, 0),
     silence_open_floor_ms: option.unwrap(override.silence_open_floor_ms, 0),
+    empty_after_close_is_clear: option.unwrap(
+      override.empty_after_close_is_clear,
+      False,
+    ),
     full_change_as_range: override.full_change_as_range,
     generic_names_carry_params: option.unwrap(
       override.generic_names_carry_params,
@@ -422,6 +426,10 @@ fn merge_server(default: ServerConfig, ovr: ServerOverride) -> ServerConfig {
       ovr.silence_open_floor_ms,
       default.silence_open_floor_ms,
     ),
+    empty_after_close_is_clear: option.unwrap(
+      ovr.empty_after_close_is_clear,
+      default.empty_after_close_is_clear,
+    ),
     full_change_as_range: option.or(
       ovr.full_change_as_range,
       default.full_change_as_range,
@@ -478,6 +486,10 @@ fn server_from_override(
     open_settle_ms: option.unwrap(ovr.open_settle_ms, 0),
     silence_settle_ms: option.unwrap(ovr.silence_settle_ms, 0),
     silence_open_floor_ms: option.unwrap(ovr.silence_open_floor_ms, 0),
+    empty_after_close_is_clear: option.unwrap(
+      ovr.empty_after_close_is_clear,
+      False,
+    ),
     full_change_as_range: ovr.full_change_as_range,
     generic_names_carry_params: option.unwrap(
       ovr.generic_names_carry_params,
@@ -574,6 +586,10 @@ fn merge_primary(
     silence_open_floor_ms: option.unwrap(
       override.silence_open_floor_ms,
       primary.silence_open_floor_ms,
+    ),
+    empty_after_close_is_clear: option.unwrap(
+      override.empty_after_close_is_clear,
+      primary.empty_after_close_is_clear,
     ),
     full_change_as_range: option.or(
       override.full_change_as_range,

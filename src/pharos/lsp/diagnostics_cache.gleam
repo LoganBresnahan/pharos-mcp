@@ -275,3 +275,15 @@ pub type AssumedClean {
 
 @external(erlang, "pharos_diagnostics_cache_ffi", "assumed_clean")
 pub fn assumed_clean(uri: String, server_id: String, pid: Pid) -> AssumedClean
+
+/// #56: is the entry proc `pid` holds for `uri` an empty publish without a
+/// version that came after a didClose of it (the server's clear of the
+/// closed document), with no publish with a version since?
+@external(erlang, "pharos_diagnostics_cache_ffi", "latest_is_close_clear")
+pub fn latest_is_close_clear(uri: String, server_id: String, pid: Pid) -> Bool
+
+/// #56: called by the proc when it sends a change as a didClose and
+/// didOpen: until a publish with a version, an empty one without is the
+/// server's clear of the closed document.
+@external(erlang, "pharos_diagnostics_cache_ffi", "mark_closed_since")
+pub fn mark_closed_since(uri: String, server_id: String) -> Nil

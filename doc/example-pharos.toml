@@ -344,6 +344,12 @@
 #
 # [languages.lua]
 # silence_open_floor_ms = 3000
+#
+# #56: `empty_after_close_is_clear = true` takes an empty set without a
+# version that comes after a didClose of the file as the server's clear of
+# the closed document, never the reopened file's set (elp publishes one on
+# a didClose, and on a close and reopen it can land after the reopen).
+# Bundled: elp; others false.
 
 # 4d) How a server is sent an edit (ADR-038 amendment (A)).
 #

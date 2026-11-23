@@ -292,6 +292,20 @@ pub fn notifications(caps: SyncCaps, op: SyncOp) -> List(String) {
   }
 }
 
+/// #56: does `op` go out as a `didClose` + `didOpen` (a change to a server
+/// with sync kind None, or a ranged change after a text with a lone `\r`)?
+pub fn reopens(caps: SyncCaps, op: SyncOp) -> Bool {
+  case op, caps.change {
+    OpChange(..), 0 -> True
+    OpChange(previous_end:, form:, previous_lone_cr:, ..), kind ->
+      case ranged_end(kind, form, previous_end), previous_lone_cr {
+        Some(_), True -> True
+        _, _ -> False
+      }
+    _, _ -> False
+  }
+}
+
 /// A change carried out as `didClose` + `didOpen`, then the `didSave` a
 /// server that asks for saves gets after any change (#45): without it
 /// rust-analyzer's cargo check didn't re-run, and its entries from the

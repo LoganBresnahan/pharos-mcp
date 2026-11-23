@@ -502,3 +502,36 @@ pub fn a_reopen_is_saved_when_the_server_asks_test() {
     )
   save |> string.contains("textDocument/didSave") |> should.be_true
 }
+
+/// #56: `reopens` says when a change goes out as a didClose and didOpen,
+/// exactly when `notifications` sends it that way.
+pub fn reopens_matches_the_notifications_sent_test() {
+  let incremental = SyncCaps(change: 2, save: NoSave, open_close: True)
+  let none = SyncCaps(change: 0, save: NoSave, open_close: True)
+  let change = fn(previous_end, lone_cr) {
+    OpChange("file:///a.x", "x", 2, "t", previous_end, None, lone_cr)
+  }
+  [
+    #(incremental, change(Some(#(0, 3)), True)),
+    #(incremental, change(Some(#(0, 3)), False)),
+    #(incremental, change(None, True)),
+    #(none, change(None, False)),
+    #(incremental, OpOpen("file:///a.x", "x", 1, "t")),
+  ]
+  |> list.map(fn(c) {
+    #(
+      doc_sync.reopens(c.0, c.1),
+      list.contains(
+        methods(doc_sync.notifications(c.0, c.1)),
+        "textDocument/didClose",
+      ),
+    )
+  })
+  |> should.equal([
+    #(True, True),
+    #(False, False),
+    #(False, False),
+    #(True, True),
+    #(False, False),
+  ])
+}

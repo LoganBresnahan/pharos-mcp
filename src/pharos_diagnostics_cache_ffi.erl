@@ -56,7 +56,7 @@
          progress_active/2, sync_age_ms/3, publish_age_ms/3,
          mark_opened/3, last_sync_was_open/3, first_publish_age_ms/3, first_open_age_ms/1,
          mark_assumed_clean/3, assumed_clean/3,
-         progress_ended_within/2]).
+         progress_ended_within/2, latest_is_close_clear/3, mark_closed_since/2]).
 
 -define(TABLE, pharos_diagnostics_cache).
 -define(SYNCED, pharos_diagnostics_synced).
@@ -104,13 +104,16 @@ put_publish(Uri0, ServerId, Version, Term) when is_binary(Uri0), is_binary(Serve
         _ -> false
     end,
     case Version of
-        {some, _} -> ets:insert(?PROGRESS, {{versioned, self()}, true});
+        {some, _} ->
+            ets:insert(?PROGRESS, {{versioned, self()}, true}),
+            ets:delete(?PROGRESS, {closed_since, Uri, ServerId, self()});
         _ -> ok
     end,
     case Stale of
         true -> nil;
         false ->
             put(Uri, ServerId, Term),
+            note_close_clear(Uri, ServerId, Version, Term),
             ets:insert(?PROGRESS, {{published, Uri, ServerId, self()}, now_ms()}),
             note_first_publish(Uri, ServerId),
             Key = {provisional, Uri, ServerId, self()},
@@ -121,6 +124,39 @@ put_publish(Uri0, ServerId, Version, Term) when is_binary(Uri0), is_binary(Serve
                 false -> ets:delete(?PROGRESS, Key)
             end,
             nil
+    end.
+
+%% #56: an empty publish without a version, after a didClose of the
+%% document and before any publish of it with a version, is the server
+%% clearing the closed document (elp publishes `[]` without a version on a
+%% didClose; on a close and reopen in one batch it lands after the reopen).
+%% Recorded with its entry's seq; get_diagnostics, for a server with
+%% `empty_after_close_is_clear`, never takes it as the reopened text's set.
+note_close_clear(Uri, ServerId, none, Term) when is_map(Term) ->
+    Key = {Uri, ServerId, self()},
+    case {maps:get(<<"diagnostics">>, Term, undefined),
+          ets:lookup(?PROGRESS, {closed_since, Uri, ServerId, self()})} of
+        {[], [_]} ->
+            [{_, Seq, _}] = ets:lookup(?TABLE, Key),
+            ets:insert(?PROGRESS, {{close_clear, Uri, ServerId, self()}, Seq});
+        _ ->
+            ets:delete(?PROGRESS, {close_clear, Uri, ServerId, self()})
+    end;
+note_close_clear(Uri, ServerId, _, _) ->
+    ets:delete(?PROGRESS, {close_clear, Uri, ServerId, self()}).
+
+%% #56: called by the proc when it sends a change as a close and reopen.
+mark_closed_since(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
+    ets:insert(?PROGRESS, {{closed_since, key(Uri0), ServerId, self()}, true}),
+    nil.
+
+%% #56: is the entry proc `Pid` holds for `Uri0` that clear?
+latest_is_close_clear(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
+    case {ets:lookup(?TABLE, {Uri, ServerId, Pid}),
+          ets:lookup(?PROGRESS, {close_clear, Uri, ServerId, Pid})} of
+        {[{_, Seq, _}], [{_, Seq}]} -> true;
+        _ -> false
     end.
 
 %% #45: an empty publish without a version, from a server that versions
@@ -207,6 +243,9 @@ mark_closed(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
     ets:delete(?PROGRESS, {opened, Uri, ServerId, self()}),
     %% #46: and gets its own answer after it.
     ets:delete(?PROGRESS, {assumed_clean, Uri, ServerId, self()}),
+    %% #56: until a publish with a version, an empty one without is the
+    %% server's clear of the closed document.
+    ets:insert(?PROGRESS, {{closed_since, Uri, ServerId, self()}, true}),
     nil.
 
 %% #46. get_diagnostics answered `[]` for `Uri0` from the server's silence
@@ -342,6 +381,8 @@ forget_proc(Pid) ->
     ets:delete(?PROGRESS, {versioned, Pid}),
     ets:delete(?PROGRESS, {first_open, Pid}),
     ets:delete(?PROGRESS, {progress_end, Pid}),
+    ets:match_delete(?PROGRESS, {{closed_since, '_', '_', Pid}, '_'}),
+    ets:match_delete(?PROGRESS, {{close_clear, '_', '_', Pid}, '_'}),
     nil.
 
 %% fresh | carried_over | missing for the entry proc `Pid` cached, as

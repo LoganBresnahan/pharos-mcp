@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in about 2 s. After any edit silence doesn't count: a change
   can publish over a second later, so the answer waits as before (`silence_settle_ms`,
   `silence_open_floor_ms`; #46, ADR-038 amendment).
+- Hardening for elp (#56; neither changes what elp answers in pharos's usual traffic, where every
+  change is followed by a didSave that re-runs elp's checks): an empty set without a version that
+  comes after a didClose of the file is never taken as the reopened file's set, so a reopen whose
+  checks were lost ends as "no publish", not as the close's `[]` (`empty_after_close_is_clear`);
+  and the asked file's didOpen now goes after the other documents' syncs in a batch, so a
+  change elp applies after it can't cancel its check where no didSave follows.
 - get_diagnostics on lua-language-server no longer answers the first, partial or stale phase of
   a change: it publishes a change in phases, up to 0.7 s apart on a large project, and pharos
   now waits for 1 s of quiet after its latest publish (`publish_settle_ms`; #46).
