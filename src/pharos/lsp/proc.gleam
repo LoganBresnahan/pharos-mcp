@@ -22,6 +22,7 @@
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/erlang/atom
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/json.{type Json}
 import gleam/list
@@ -106,6 +107,9 @@ pub opaque type Msg {
   /// subsequent request, and otherwise hangs.
   PortMessage(payload: Dynamic)
   Close
+  /// #48: the LSP shutdown sequence (`shutdown`, its reply or
+  /// `shutdown_wait_ms`, `exit`), then close. Replies when done.
+  ShutDown(reply: Subject(Nil))
 }
 
 type State {
@@ -662,11 +666,93 @@ pub fn sync_batch(proc: Proc, batch: Int, ops: List(SyncOp)) -> Nil {
 /// pool's evict / kill_lsp paths handle the bridge cleanup since
 /// pool has the key.
 pub fn close(proc: Proc) -> Nil {
-  let p = pid(proc)
-  let _ = dyn_sup_terminate_child(p)
-  let Proc(subject) = proc
-  actor.send(subject, Close)
+  // #48: the server gets `shutdown` and `exit` first, as LSP asks:
+  // closing its stdin alone made gleam panic and elp exit 101. Off the
+  // caller's process (the pool), so no question waits on it; the
+  // supervisor's terminate follows, so a server that doesn't answer
+  // stops anyway.
+  let _ = process.spawn_unlinked(fn() { shut_down_then_terminate(proc) })
+  Nil
 }
+
+/// #48: closes each proc as `close/1` does, and returns once all have
+/// gone through the shutdown sequence or `shutdown_wait_ms` plus a margin
+/// has passed. For a pharos that is stopping: it must not halt the VM
+/// under the servers mid-shutdown.
+pub fn close_all_and_wait(procs: List(Proc)) -> Nil {
+  let done = process.new_subject()
+  list.each(procs, fn(proc) {
+    process.spawn_unlinked(fn() {
+      shut_down_then_terminate(proc)
+      process.send(done, Nil)
+    })
+  })
+  await_closed(
+    done,
+    list.length(procs),
+    monotonic_ms() + shutdown_wait_ms + 500,
+  )
+}
+
+fn await_closed(done: Subject(Nil), left: Int, deadline: Int) -> Nil {
+  case left {
+    0 -> Nil
+    _ ->
+      case process.receive(done, int_max(deadline - monotonic_ms(), 0)) {
+        Ok(Nil) -> await_closed(done, left - 1, deadline)
+        Error(Nil) -> Nil
+      }
+  }
+}
+
+fn shut_down_then_terminate(proc: Proc) -> Nil {
+  let Proc(subject) = proc
+  let _ =
+    safe_call_0(fn() { actor.call(subject, shutdown_wait_ms + 500, ShutDown) })
+  let _ = dyn_sup_terminate_child(pid(proc))
+  Nil
+}
+
+/// #48: how long a server gets to answer `shutdown`.
+const shutdown_wait_ms = 1000
+
+/// `shutdown`, then `exit` whether or not it answered, then close the
+/// port. A server that is already gone fails the request at once.
+fn shut_down(state: State) -> Nil {
+  let _ =
+    safe_call_0(fn() {
+      lifecycle.request(
+        state.client,
+        "shutdown",
+        json.null(),
+        next_id(),
+        shutdown_wait_ms,
+      )
+    })
+  let _ =
+    client.send_body(
+      state.client,
+      bit_array.from_string(
+        json.to_string(
+          json.object([
+            #("jsonrpc", json.string("2.0")),
+            #("method", json.string("exit")),
+          ]),
+        ),
+      ),
+    )
+  client.close(state.client)
+}
+
+@external(erlang, "erlang", "max")
+fn int_max(a: Int, b: Int) -> Int
+
+fn monotonic_ms() -> Int {
+  monotonic_time_ms(atom.create("millisecond"))
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn monotonic_time_ms(unit: atom.Atom) -> Int
 
 @external(erlang, "pharos_lsp_dyn_sup", "terminate_child")
 fn dyn_sup_terminate_child(pid: Pid) -> Nil
@@ -745,6 +831,12 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
     Close -> {
       client.close(state.client)
+      actor.stop()
+    }
+
+    ShutDown(reply) -> {
+      shut_down(state)
+      process.send(reply, Nil)
       actor.stop()
     }
   }

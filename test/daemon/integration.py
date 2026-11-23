@@ -1643,6 +1643,34 @@ def t_first_answer_after_open_settles(sb):
     check(time.time() - t0 < 0.45, "a change waited the open settle: %.2f s" % (time.time() - t0))
 
 
+def t_daemon_stop_shuts_servers_down(sb):
+    """#48: `pharos daemon stop` closed each server's stdin without
+    shutdown and exit; gleam panicked, elp exited 101. Each server now
+    gets shutdown, then exit, then its stdin closes."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    sb.cli("daemon", "stop")
+    log = os.path.join(sb.fixture, "stub.log")
+    wait_until(lambda: " exit" in open(log).read(), 10, "the server's exit")
+    methods = [l.split(" ", 2)[1] for l in open(log).read().splitlines() if l.count(" ") >= 1]
+    check("shutdown" in methods and "exit" in methods
+          and methods.index("shutdown") < methods.index("exit"),
+          "expected shutdown then exit: %s" % methods[-6:])
+
+
+def t_idle_stop_shuts_servers_down(sb):
+    """#48: an LSP stopped for being idle gets shutdown and exit too."""
+    sb.write_toml("idle_stop_secs = 1\n")
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    log = os.path.join(sb.fixture, "stub.log")
+    wait_until(lambda: " exit" in open(log).read(), 15, "the idle server's exit")
+    methods = [l.split(" ", 2)[1] for l in open(log).read().splitlines() if l.count(" ") >= 1]
+    check(methods.index("shutdown") < methods.index("exit"), "order: %s" % methods[-6:])
+
+
 def t_config_warnings_without_lsp_tools(sb):
     """#32 F4: a daemon whose sessions call only non-LSP tools still has
     its config warnings in the daemon log (where runtime_log_tail reads),
@@ -2564,6 +2592,8 @@ SCENARIOS = [
     ("watched_files_unfinished_scan_says_so", t_watched_files_unfinished_scan_says_so),
     ("watched_file_change_isnt_answered_from_cache", t_watched_file_change_isnt_answered_from_cache),
     ("watched_files_tiny_timeout_still_answers", t_watched_files_tiny_timeout_still_answers),
+    ("daemon_stop_shuts_servers_down", t_daemon_stop_shuts_servers_down),
+    ("idle_stop_shuts_servers_down", t_idle_stop_shuts_servers_down),
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),
     ("unversioned_interim_empty_is_provisional", t_unversioned_interim_empty_is_provisional),

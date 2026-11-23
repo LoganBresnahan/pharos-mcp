@@ -226,7 +226,7 @@ pub opaque type Msg {
   /// a single transport failure clears every server for the failing
   /// workspace, not just the one that hit the error.
   EvictAllServers(language: String, workspace: String)
-  CloseAll
+  CloseAll(reply: Subject(Nil))
   /// ADR-038: the URIs of the documents pharos holds open on one LSP.
   OpenDocuments(
     language: String,
@@ -625,10 +625,16 @@ pub fn kill_lsp(
   })
 }
 
-/// Close every cached LSP. Called on graceful shutdown.
+/// Close every cached LSP, each through the LSP shutdown sequence, and
+/// return once they're done or about 1.5 s has passed. Called on
+/// graceful shutdown, before the application stops (#48).
 pub fn close_all(pool: Pool) -> Nil {
   let Pool(subject) = pool
-  actor.send(subject, CloseAll)
+  let _ =
+    safe_call_0(fn() {
+      actor.call(subject, 5000, fn(reply) { CloseAll(reply) })
+    })
+  Nil
 }
 
 /// ADR-024: read-only snapshot of every per-LSP state entry pool
@@ -853,7 +859,7 @@ fn handle_message(state: State, msg: Msg) -> actor.Next(State, Msg) {
     EvictAllServers(language, workspace) ->
       handle_evict_all(state, language, workspace)
 
-    CloseAll -> handle_close_all(state)
+    CloseAll(reply) -> handle_close_all(state, reply)
 
     OpenDocuments(language, workspace, server_id, reply) -> {
       process.send(
@@ -1770,10 +1776,14 @@ fn handle_evict_all(
   actor.continue(State(..state, cache: cache, docs: docs, lsp_state: lsp_state))
 }
 
-fn handle_close_all(state: State) -> actor.Next(State, Msg) {
-  state.cache
-  |> dict.values
-  |> close_each
+fn handle_close_all(
+  state: State,
+  reply: Subject(Nil),
+) -> actor.Next(State, Msg) {
+  let procs = dict.values(state.cache)
+  list.each(procs, forget_proc)
+  proc.close_all_and_wait(procs)
+  process.send(reply, Nil)
   actor.continue(
     State(
       ..state,
@@ -2154,17 +2164,6 @@ fn forget_proc(spawned: Proc) -> Nil {
   // ADR-043: its registered watchers and spawn time, which a scanner
   // would drop as it stops, but not every proc ever starts one.
   watchers.forget(proc.pid(spawned))
-}
-
-fn close_each(procs: List(Proc)) -> Nil {
-  case procs {
-    [] -> Nil
-    [first, ..rest] -> {
-      forget_proc(first)
-      proc.close(first)
-      close_each(rest)
-    }
-  }
 }
 
 fn spawn_proc(

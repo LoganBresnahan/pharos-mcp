@@ -333,6 +333,12 @@ fn now_ms() -> Int
 /// daemon, not join this one as it goes.
 fn stop_daemon() -> Nil {
   cleanup()
+  // #48: each language server gets shutdown and exit before the
+  // application stops under it.
+  case pool.global() {
+    Ok(p) -> pool.close_all(p)
+    Error(_) -> Nil
+  }
   init_stop()
 }
 

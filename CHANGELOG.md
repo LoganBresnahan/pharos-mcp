@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- Stopping the daemon, or a language server idle past its limit, now sends the server LSP's
+  `shutdown` and `exit` before closing its stdin. Closing stdin alone made gleam panic ("Fatal
+  compiler bug") and elp exit with status 101; a server that doesn't answer within 1 s is stopped
+  as before (#48).
 - `find_symbol` on a cold session retries an empty search on every server for 3 s after the
   first file opens, and for 1.5 s after a server's indexing progress ends, instead of a
   per-server table counted from spawn: servers missing from the table got no wait at all, and a
