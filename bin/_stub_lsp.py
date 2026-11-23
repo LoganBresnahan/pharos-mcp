@@ -154,6 +154,8 @@ Symbols (#21):
                               case-insensitively, like jdtls (#29)
   STUB_LSP_SYMBOL_PARAMS=1    documentSymbol names functions with a
                               parameter list, "helper(int)", as jdtls does
+  STUB_LSP_SYMBOL_NULL_FOR=s  documentSymbol answers null for a file whose
+                              uri contains s (#57)
   STUB_LSP_WORKSPACE_SYMBOL=packages  perlnavigator (#51): each file's
                               first `sym 4` package, kind 2, any query
   STUB_LSP_WORKSPACE_SYMBOL=substring  pyright (#51): every function whose
@@ -923,6 +925,10 @@ def handle_document_symbol(req):
             text = open(uri_path(uri)).read()
         except OSError:
             text = ""
+    null_for = os.environ.get("STUB_LSP_SYMBOL_NULL_FOR")
+    if null_for and null_for in uri:
+        # #57: perlnavigator answers null for a file that isn't valid UTF-8.
+        return {"jsonrpc": "2.0", "id": req["id"], "result": None}
     result = []
     params = os.environ.get("STUB_LSP_SYMBOL_PARAMS")
     if os.environ.get("STUB_LSP_SYMBOL_GENERICS"):

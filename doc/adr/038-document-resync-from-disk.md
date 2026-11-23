@@ -377,7 +377,10 @@ answer taken between the steps was unmarked and wrong (verifier's sweep on 74352
   and answers the latest. If the deadline comes first, the latest is answered marked as carried
   over. Bundled: elp 50 ms (it publishes `[]` then the real set at the same version on 280 of
   288 edits, at most 7 ms apart; pharos answered the `[]` about 5% of the time) and
-  perlnavigator 100 ms (`perl -c`'s set, then one with Perl::Critic's, at most 58 ms apart),
+  perlnavigator 1000 ms (polish 8: each check publishes `perl -c`'s new set with the previous
+  check's Perl::Critic set, then the right set 307-336 ms later up to load 4 and 385-807 ms at
+  load 10; the first measurement, "at most 58 ms apart", came from edits sent faster than the
+  checks ran, and was 100 ms),
   and, since #46, lua-language-server 1000 ms (a partial or stale set, then the full one: on
   Kong up to 0.4 s apart quiet and at load ~4, 0.7 s with every core busy; 1-6 ms on a small
   project; verifier-two saw its first phase answered in 23 of 64 answers at 0).
@@ -429,11 +432,12 @@ Two more cases, each a per-server value (Logan's choice, polish 2):
   perlnavigator 650 ms (Critic's set came 299–394 ms after the open's first publish in
   verifier's runs, the next repeat about 1 s after it; the open's answer costs about 0.7 s),
   others 0; changes after the open are unaffected.
-- **A server limit pharos can't correct: perlnavigator's Perl::Critic lines.** After an edit,
-  perlnavigator's Critic entries keep the line numbers they had at the open ("Code before
-  warnings are enabled" stays on line 3 after edits move the code; a fresh open reports it on
-  its new line: 15 of 15 edits in verifier's chain, on every build). pharos answers what the
-  server publishes, so those entries can point at a stale line; `perl -c`'s own entries move.
+- **perlnavigator's stale Perl::Critic lines were pharos answering too early (polish 8).** After
+  an edit, Critic entries seemed to keep the lines they had before it (15 of 15 edits in
+  verifier's chain). That set was the first of the check's two publishes, which carries the
+  previous check's Critic findings; the right set follows about 0.3 s later. It was listed here
+  as a server limit until verifier read perlnavigator's validatePerlDocument; with a 1000 ms
+  settle the answer is the right set.
 
 **Amendment (#46, 2026-11-22): silence after an open, lua-language-server.** lua-language-server
 publishes nothing for a file clean from its open, and nothing after a change that leaves a file's

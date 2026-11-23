@@ -1,6 +1,6 @@
 %% ADR-030 C2: session-log default path + LRU rotation.
 %%
-%% Three pieces:
+%% Two pieces:
 %%
 %% 1. `default_session_log_path/0` — compute a per-PID per-timestamp
 %%    path under the log dir (`log_dir/0`). Returned to the Gleam
@@ -15,10 +15,12 @@
 %%    once at boot for `session-*.log` (keep 10) and
 %%    `erl_crash-*.dump` (keep 5).
 %%
-%% 3. `migrate_cwd_crash_dump/0` — if a legacy `erl_crash.dump`
-%%    exists in the current working directory, move it into the
-%%    cache dir with an mtime-stamped name. Handles pre-ADR-030
-%%    crash dumps left behind by users who upgraded mid-incident.
+%% #55: there was a third, moving any `erl_crash.dump` in the working
+%% directory into the log dir at every boot. pharos's own dumps go to
+%% the log dir already (ERL_CRASH_DUMP, set by the shim and at boot), so
+%% the only dumps it found in a cwd were other programs': an Elixir,
+%% Erlang or Gleam project's own, taken into pharos's log dir and lost to
+%% its rotation. Removed.
 %%
 %% All operations are best-effort: ENOENT, ENOSPC, EACCES, and
 %% missing $HOME all degrade silently. Pharos's hot path never
@@ -31,7 +33,6 @@
     log_dir/0,
     log_cache_dir/0,
     rotate_lru/2,
-    migrate_cwd_crash_dump/0,
     secure_crash_files/0
 ]).
 
@@ -118,31 +119,6 @@ rotate_lru(Prefix, Keep)
                 _:_ -> 0
             end
     end.
-
-%% If `erl_crash.dump` exists in the current working directory,
-%% move it under the cache dir renamed to `erl_crash-<mtime>.dump`
-%% so it participates in LRU rotation. Best-effort.
-migrate_cwd_crash_dump() ->
-    try
-        case file:read_file_info("erl_crash.dump") of
-            {ok, #file_info{mtime = MTime}} ->
-                case log_dir() of
-                    none -> nil;
-                    {ok, Dir} ->
-                        ok = filelib:ensure_dir(filename:join(Dir, "x")),
-                        Stamp = mtime_to_stamp(MTime),
-                        NewName = lists:flatten(
-                            io_lib:format("erl_crash-~s.dump", [Stamp])),
-                        NewPath = filename:join(Dir, NewName),
-                        _ = file:rename("erl_crash.dump", NewPath),
-                        nil
-                end;
-            _ -> nil
-        end
-    catch
-        _:_ -> nil
-    end,
-    nil.
 
 %% Tighten every crash dump and crash log in the log dir to `0600`.
 %% The BEAM writes a dump with the default umask, and the dump holds

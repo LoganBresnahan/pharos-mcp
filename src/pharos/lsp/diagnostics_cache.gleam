@@ -265,5 +265,13 @@ pub fn first_publish_age_ms(uri: String, server_id: String, pid: Pid) -> Int
 @external(erlang, "pharos_diagnostics_cache_ffi", "mark_assumed_clean")
 pub fn mark_assumed_clean(uri: String, server_id: String, pid: Pid) -> Nil
 
+/// Polish 8: whether the file was answered `[]` from its open's silence,
+/// and whether it has been synced since.
+pub type AssumedClean {
+  No
+  SameSync
+  SyncedSince
+}
+
 @external(erlang, "pharos_diagnostics_cache_ffi", "assumed_clean")
-pub fn assumed_clean(uri: String, server_id: String, pid: Pid) -> Bool
+pub fn assumed_clean(uri: String, server_id: String, pid: Pid) -> AssumedClean

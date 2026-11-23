@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- find_symbol no longer fails when a file it searches answers its outline with `null` (valid
+  LSP; perlnavigator does for a file that isn't valid UTF-8): that file has no symbols, and the
+  rest of the answer stands (#57).
 - find_symbol drills at most 16 files per call: scope_uri, then the files the workspace search
   named with a symbol named exactly the query, then ones starting with it, then the rest. It
   used to open every file the search named: pyright's substring search named 1186 files for
@@ -32,8 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - get_diagnostics on lua-language-server answers a file clean from its open in about 2 s, marked
   `assumed_current`, instead of waiting its whole timeout: the server publishes nothing for such
   a file. That holds once its workspace is loaded and diagnosed; before then (about 30 s on a
-  project the size of Kong) the answer waits as before. After an edit of it, still clean, the
-  answer is `[]` marked carried over in about 2 s. After any edit silence doesn't count: a change
+  project the size of Kong) the answer waits as before. Asked again with nothing changed, the
+  answer is the same. After an edit of it, still clean, the answer is `[]` marked carried over
+  in about 2 s. After any edit silence doesn't count: a change
   can publish over a second later, so the answer waits as before (`silence_settle_ms`,
   `silence_open_floor_ms`; #46, ADR-038 amendment).
 - get_diagnostics on lua-language-server no longer answers the first, partial or stale phase of
@@ -151,6 +155,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rust-analyzer and haskell-language-server aren't offered registration and keep their own
   watchers. `watch_files = false`
   turns it off for a server, `true` forces it (#10, ADR-043).
+- pharos no longer moves an `erl_crash.dump` it finds in its working directory into its own
+  log dir. Run in an Elixir, Erlang or Gleam project, every pharos start (even `--version`) took
+  that project's crash dump, where pharos's log rotation then deleted it; pharos's own dumps
+  already go to its log dir (#55).
 - A pharos.toml warning is logged once, not twice, when the daemon's boot-time recheck and the
   first session's config check run at the same moment (the check for "already logged" wasn't
   atomic; an integration run caught it).

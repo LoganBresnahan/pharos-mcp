@@ -216,11 +216,22 @@ mark_closed(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
 %% for a publish and answer `[]` marked carried over, not wait out its
 %% whole timeout.
 mark_assumed_clean(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
-    true = ets:insert(?PROGRESS, {{assumed_clean, key(Uri0), ServerId, Pid}, true}),
+    %% Polish 8: with the sync it was answered at, so a repeat ask with no
+    %% sync since answers the same, not "carried over".
+    Uri = key(Uri0),
+    true = ets:insert(?PROGRESS, {{assumed_clean, Uri, ServerId, Pid}, sync_seq(Uri, ServerId, Pid)}),
     nil.
 
 assumed_clean(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
-    ets:member(?PROGRESS, {assumed_clean, key(Uri0), ServerId, Pid}).
+    Uri = key(Uri0),
+    case ets:lookup(?PROGRESS, {assumed_clean, Uri, ServerId, Pid}) of
+        [{_, Seq}] ->
+            case sync_seq(Uri, ServerId, Pid) of
+                Seq -> same_sync;
+                _ -> synced_since
+            end;
+        [] -> no
+    end.
 
 %% reached | pending | failed: has `Pid` written the document's sync at
 %% `Version` (or later), or closed it since?

@@ -2081,8 +2081,13 @@ fn document_symbol_query(
       )
     })
   {
+    // #57: `null` is a valid answer (LSP: `DocumentSymbol[] |
+    // SymbolInformation[] | null`) and means no symbols; perlnavigator
+    // gives it for a file that isn't valid UTF-8. It failed the whole
+    // find_symbol call.
     Ok(raw) ->
-      decode.run(raw, decode.list(document_symbol_decoder()))
+      decode.run(raw, decode.optional(decode.list(document_symbol_decoder())))
+      |> result.map(option.unwrap(_, []))
       |> result.map_error(fn(_) {
         DecodeFailed(
           "textDocument/documentSymbol returned an unrecognised shape",

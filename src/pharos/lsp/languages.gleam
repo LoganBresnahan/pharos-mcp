@@ -1190,11 +1190,15 @@ fn perl() -> LanguageConfig {
         warm_probe: ProbeWorkspaceSymbol(""),
         lazy_workspace_index_ms: 0,
         save_check_grace_ms: 0,
-        // #45: perlnavigator publishes perl -c's set and then, within 58 ms,
-        // one with Perl::Critic's too; after an open it publishes at about
-        // 35, 340, 1035 and 1345 ms, then stops, so the settle must stay
-        // well under those gaps.
-        publish_settle_ms: 100,
+        // Polish 8: perlnavigator 0.8.20 publishes each check twice: when
+        // perl -c ends, its new set plus the PREVIOUS check's Critic set
+        // ("to avoid blinking"); when Critic ends, the right set, 307-336 ms
+        // later up to load 4, 385-807 ms at load 10 (verifier). pharos's
+        // change sends didSave (a check at once) and didChange (another
+        // after 1 s), so the 4 publishes come at about 30, 340, 1030 and
+        // 1340 ms. 1000 waits out the first check's two (it was 100 on a
+        // mismeasured "58 ms" gap); the faster exact rule is #54.
+        publish_settle_ms: 1000,
         empty_publish_settle_ms: 0,
         // #45: Critic's set came 299–394 ms after the open's first publish
         // (verifier); the next repeat about 1 s after it. 650 leaves

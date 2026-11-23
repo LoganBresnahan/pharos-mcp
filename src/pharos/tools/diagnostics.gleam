@@ -720,10 +720,13 @@ fn resolve_push_now(
     diagnostics_cache.Missing -> {
       let none = synthesized_none(file_uri)
       case diagnostics_cache.assumed_clean(file_uri, server_id, pid), none {
+        // Polish 8: asked again with no sync since that answer: the same
+        // answer, `[]` assumed current (it was "carried over" at once).
+        diagnostics_cache.SameSync, Ok(none) -> SilentEntry(none, False)
         // #46: answered `[]` from the silence after its open, and still
         // nothing published: wait the settle for a publish about this
         // change, as for a carried-over set, then `[]` marked carried over.
-        True, Ok(none) ->
+        diagnostics_cache.SyncedSince, Ok(none) ->
           case
             await_lookup(
               file_uri,

@@ -621,6 +621,11 @@ def t_silence_is_settled(sb):
     took = time.time() - t0
     check('"diagnostics":[]' in d and "assumed_current" in d and took < 4.5,
           "clean open: %.1fs %s" % (took, d[-300:]))
+    # Polish 8: asked again with nothing changed, the same answer (it was
+    # "carried over" at once).
+    d = a.tool(19, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    check('"diagnostics":[]' in d and "assumed_current" in d and "carried_over" not in d,
+          "repeat ask: %s" % d[-300:])
     # Still clean after an edit: carried over `[]` after the settle (~2 s),
     # not the whole timeout, and never "current".
     open(path, "w").write("all fine\nstill fine\n")
@@ -683,6 +688,24 @@ def t_silence_waits_out_the_open(sb):
     uri = stub_file(sb, "late.stub", "ERROR at once\n")
     d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
     check("stub error on line 0" in d, "false clean after open: %s" % d[-300:])
+
+
+def t_cwd_crash_dump_is_left_alone(sb):
+    """#55: every pharos boot moved an erl_crash.dump in its working
+    directory into pharos's log dir (and its rotation), so run in an
+    Elixir, Erlang or Gleam project it took that project's own dump.
+    pharos's own dumps go to its log dir by ERL_CRASH_DUMP; a cwd dump is
+    left alone."""
+    dump = os.path.join(sb.fixture, "erl_crash.dump")
+    with open(dump, "w") as f:
+        f.write("=erl_crash_dump:0.5\nnot pharos's\n")
+    a = sb.start()
+    a.initialize()
+    check("pong" in a.tool(10, "echo", {"message": "pong"}), "echo failed")
+    check(os.path.exists(dump) and "not pharos's" in open(dump).read(),
+          "the project's erl_crash.dump was moved away")
+    sb.cli("--version", cwd=sb.fixture)
+    check(os.path.exists(dump), "`pharos --version` moved the dump")
 
 
 def t_daemon_stop_waits_for_exit(sb):
@@ -2134,6 +2157,21 @@ def t_find_symbol_null_result(sb):
     check('"matches":[]' in out.replace(" ", ""), "workspace_symbols: %s" % out[-300:])
 
 
+def t_find_symbol_null_outline_is_empty(sb):
+    """#57: a documentSymbol answer of null (valid LSP; perlnavigator gives
+    it for a file that isn't valid UTF-8) failed the whole find_symbol call
+    ("unrecognised shape"). It now means that file has no symbols, and the
+    other files' answer stands."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "all", "STUB_LSP_SYMBOL_NULL_FOR": "broken"})
+    a.initialize()
+    stub_file(sb, "broken.stub", "function helper() {\n}\n")
+    target = stub_file(sb, "target.stub", "function helper() {\n}\n")
+    scope = stub_file(sb, "scope.stub", "nothing here\n")
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": scope})
+    check('"status":"single"' in out and "target.stub" in out and "unrecognised" not in out,
+          "null outline: %s" % out[-300:])
+
+
 def t_find_symbol_caps_its_drills(sb):
     """#51: pyright's substring search named 1186 files for `get`, and
     find_symbol drilled every one (19.6 s). It now drills scope_uri, then
@@ -2917,7 +2955,9 @@ SCENARIOS = [
     ("uri_shapes_teach", t_uri_shapes_teach),
     ("position_encoding_is_converted", t_position_encoding_is_converted),
     ("daemon_stop_waits_for_exit", t_daemon_stop_waits_for_exit),
+    ("cwd_crash_dump_is_left_alone", t_cwd_crash_dump_is_left_alone),
     ("find_symbol_caps_its_drills", t_find_symbol_caps_its_drills),
+    ("find_symbol_null_outline_is_empty", t_find_symbol_null_outline_is_empty),
     ("find_symbol_perl_package_layout", t_find_symbol_perl_package_layout),
     ("find_symbol_perl_namespaced_packages", t_find_symbol_perl_namespaced_packages),
     ("find_symbol_perl_block_packages", t_find_symbol_perl_block_packages),
