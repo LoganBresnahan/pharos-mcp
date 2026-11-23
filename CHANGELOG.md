@@ -23,30 +23,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a second package in its file like `Tie::StdHash/TIEHASH`) drills that package's file and is
   found, where it wasn't before; a bare sub name from another file gets the advice to ask
   `Package/sub` or pass scope_uri (#51, ADR-026 amendment).
+- On perlnavigator, a sub after an inner `{ package X; ... }` block (Class::Struct's `struct`)
+  belongs to the package the block interrupted, and a helper package named under its file's own
+  (`Class::Struct::Tie_ISA`) is looked for in the parent's file: both were not found.
 - get_diagnostics on lua-language-server answers a file clean from its open in about 2 s, marked
   `assumed_current`, instead of waiting its whole timeout: the server publishes nothing for such
   a file. That holds once its workspace is loaded and diagnosed; before then (about 30 s on a
-  project the size of Kong) the answer waits as before. After an edit of it, still clean, the answer is `[]` marked carried over in about 2 s.
-  After any edit silence doesn't count: a change can publish over a second later, so the answer
-  waits as before (`silence_settle_ms`, `silence_open_floor_ms`; #46, ADR-038 amendment).
+  project the size of Kong) the answer waits as before. After an edit of it, still clean, the
+  answer is `[]` marked carried over in about 2 s. After any edit silence doesn't count: a change
+  can publish over a second later, so the answer waits as before (`silence_settle_ms`,
+  `silence_open_floor_ms`; #46, ADR-038 amendment).
 - get_diagnostics on lua-language-server no longer answers the first, partial or stale phase of
   a change: it publishes a change in phases, up to 0.7 s apart on a large project, and pharos
   now waits for 1 s of quiet after its latest publish (`publish_settle_ms`; #46).
 - `pharos daemon stop` returns once the daemon has exited, not as soon as it answered (about
   1.3 s earlier), so a restart right after can't overlap the old daemon. It waits up to 10 s,
-  then says the daemon is still stopping and exits 1.
+  then says the daemon is still stopping and exits 1. A daemon that has exited but not been
+  reaped yet (a zombie: its spawning shim suspended, or a container whose PID 1 never reaps)
+  counts as gone.
 - perlnavigator's Perl::Critic diagnostics keep the line they had at the open after an edit; that
   is the server's, now documented as a limit (ADR-038).
-- A `uri` in the path:line form (`main.go:12`, `src/a.ts:12:5`) is refused with what to send
-  instead (the file URI, and the line and character 0-based), rather than read as a URI whose
-  scheme is `main.go:`.
+- A `uri` in the path:line form (`main.go:12`, `src/a.ts:12:5`, `file:///abs/main.go:4`) is
+  refused with what to send instead (the file URI, and the line and character 0-based), rather
+  than read as a URI whose scheme is `main.go:` or as an unsupported file type. A bare name with
+  no extension or directory (`Makefile:12`) can't be told from a URI scheme (`untitled:1`) and is
+  still answered as one.
 - On a line with non-ASCII text before a token, ruby-lsp's, next-ls's and terraform-ls's
   positions point at the right characters. ruby-lsp advertises UTF-16 but counts UTF-8 bytes,
   next-ls counts code points, both ways, and terraform-ls returns code points; pharos converts
   every position it sends and gets back for a server set with `position_encoding` (bundled:
   ruby-lsp "utf-8", next-ls "utf-32") or `returned_position_encoding` (bundled: terraform-ls
   "utf-32"). Incoming calls' ranges are converted too, and semantic tokens are left as sent
-  (ruby-lsp's are UTF-16 already); an invalid encoding value is ignored (#47, ADR-044).
+  (ruby-lsp's are UTF-16 already); an invalid encoding value is ignored, and a padded one
+  (`" utf-8"`) is read trimmed (#47, ADR-044).
 - find_symbol says so when no match has the name asked for: a match found only in another case
   or by a partial name (ruby-lsp's `helper2` for `helper`) carries a note, "no exact match for the
   name asked; nearest by a partial name: helper2", where it read like any single match.
@@ -139,6 +148,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rust-analyzer and haskell-language-server aren't offered registration and keep their own
   watchers. `watch_files = false`
   turns it off for a server, `true` forces it (#10, ADR-043).
+- A pharos.toml warning is logged once, not twice, when the daemon's boot-time recheck and the
+  first session's config check run at the same moment (the check for "already logged" wasn't
+  atomic; an integration run caught it).
 - pharos.toml values that used to do harm are ignored, with a warning, and the default stays
   (#32):
   - an unknown `diagnostics_mode` keeps the bundled mode (it was read as push, which left a

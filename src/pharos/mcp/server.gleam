@@ -3003,7 +3003,8 @@ pub fn describe_diagnostics_error(err: diagnostics.DiagnosticsError) -> String {
     diagnostics.HandshakeFailed(reason) ->
       "LSP initialize handshake failed: " <> reason
     diagnostics.TransportFailed(reason) -> "LSP transport error: " <> reason
-    diagnostics.UnsupportedFileType(uri) -> "unsupported file type: " <> uri
+    diagnostics.UnsupportedFileType(uri) ->
+      workspace_root.describe_unsupported(uri)
     diagnostics.UnknownCustomUriScheme(uri) ->
       "custom URI scheme not registered for any language: " <> uri
     diagnostics.NoActiveSessionForLanguage(uri, language) ->

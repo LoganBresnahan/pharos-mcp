@@ -148,4 +148,7 @@ pub fn only_named_encodings_survive_test() {
   |> should.equal(option.Some("utf-8"))
   position_encoding.canonical(option.Some("utf-7"))
   |> should.equal(option.None)
+  // Polish 6: padded, as the config check accepts it.
+  position_encoding.canonical(option.Some(" utf-32 "))
+  |> should.equal(option.Some("utf-32"))
 }

@@ -698,6 +698,26 @@ def t_daemon_stop_waits_for_exit(sb):
     check(not alive(pid), "daemon %d still running when `daemon stop` returned" % pid)
 
 
+def t_daemon_stop_sees_a_zombie_as_gone(sb):
+    """Polish 6: the daemon is the spawning shim's child. With that shim
+    stopped (its client suspended), the exited daemon stays a zombie and
+    kill(pid, 0) still finds it: `daemon stop` waited 10 s and said "still
+    stopping". A zombie now counts as gone."""
+    a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
+    a.initialize()
+    hover_line(a, sb.uri, 10)
+    pid = sb.daemon_pid()
+    os.kill(a.proc.pid, signal.SIGSTOP)
+    try:
+        t0 = time.time()
+        out = sb.cli("daemon", "stop")
+        took = time.time() - t0
+    finally:
+        os.kill(a.proc.pid, signal.SIGCONT)
+    check(out.returncode == 0 and took < 6,
+          "daemon stop with a zombie daemon: rc %d in %.1fs %r" % (out.returncode, took, out.stderr.strip()))
+
+
 def t_reap_on_idle(sb):
     """An idle-stopped LSP's leftover grandchild is reaped while the
     daemon and the session carry on."""
@@ -1641,7 +1661,9 @@ def _phased_answers(sb, mode, settle_ms):
 
 def _phased_answers_with(sb, mode, toml, phase_ms):
     sb.write_toml(toml)
-    a = sb.start({"STUB_LSP_DIAGNOSTICS": mode, "STUB_LSP_PHASE_MS": str(phase_ms)})
+    publog = os.path.join(sb.fixture, "publish.log")
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": mode, "STUB_LSP_PHASE_MS": str(phase_ms),
+                  "STUB_LSP_PUBLISH_LOG": publog})
     a.initialize()
     path = os.path.join(sb.fixture, "main.stub")
     # A first question, so the server has published (and versioned) once.
@@ -1654,9 +1676,20 @@ def _phased_answers_with(sb, mode, toml, phase_ms):
         err = i % 2 == 0
         with open(path, "w") as f:
             f.write("ERROR here\n" if err else "fine\n")
+        t_ask = time.time()
         d = a.tool(10 + i, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+        t_answer = time.time()
         if err and "stub error on line 0" not in d:
-            wrong.append((i, d[-200:]))
+            # Which side was late: the stub's publishes around this question
+            # (ms from the question), and when the answer came.
+            pubs = []
+            if os.path.exists(publog):
+                time.sleep(1.0)
+                for line in open(publog).read().split("\n"):
+                    parts = line.split()
+                    if len(parts) == 3 and float(parts[0]) >= t_ask - 0.05:
+                        pubs.append("%+dms %s %s" % ((float(parts[0]) - t_ask) * 1000, parts[1], parts[2]))
+            wrong.append((i, d[-120:], "answered %+dms" % ((t_answer - t_ask) * 1000), pubs))
     return wrong
 
 
@@ -1664,8 +1697,13 @@ def t_phased_publish_settles(sb):
     """#45: elp publishes [] and then the real set, at the same version. An
     answer taken from the first said "no errors", unmarked. With the
     server's publish_settle_ms, get_diagnostics waits for it to go quiet
-    and answers the real set."""
-    wrong = _phased_answers(sb, "push-phased", 300)
+    and answers the real set. The setting is well over the stub's 150 ms
+    phase: at 300 a slow macOS runner answered the [] (CI run 45104043734),
+    and under load ~30 the stub's own timer wrote the real set 0.4-0.7 s
+    after the [] (its publish log), with pharos answering after at least
+    the 300 ms of quiet asked, before the real set came. The stub was
+    late, not pharos."""
+    wrong = _phased_answers(sb, "push-phased", 1000)
     check(wrong == [], "answered the interim []: %s" % wrong)
 
 
@@ -2330,6 +2368,28 @@ def t_find_symbol_perl_namespaced_packages(sb):
               "%s/TIEHASH: %s" % (pkg, out[-400:]))
 
 
+def t_find_symbol_perl_block_packages(sb):
+    """Polish 6 (verifier's N2, N3 on #51): in Class/Struct.pm,
+    perlnavigator ends Class::Struct's range where an inner
+    `{ package Class::Struct::Tie_ISA; ... }` begins and doesn't resume it,
+    so `import` and `struct` after the block sat in no package; and the
+    helper package, named under its file's own, was never drilled. Subs
+    after the block now go to the package it interrupted, and the parent
+    module is searched for a helper named under it."""
+    sb.write_toml("workspace_symbol_modules_only = true\n")
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "packages", "STUB_LSP_SYMBOL_RAW": "1"})
+    a.initialize()
+    stub_file(sb, "Struct.stub", "sym 4 Class::Struct ~1\nsym 12 printem\nsym 4 Class::Struct::Tie_ISA ~3\n"
+              "sym 12 TIEARRAY\nsym 12 import\nsym 12 struct\n")
+    uri = stub_file(sb, "main.stub", "sym 12 run\n")
+    for i, (path, line) in enumerate((("Class::Struct/struct", 5), ("Class::Struct/printem", 1),
+                                       ("Class::Struct::Tie_ISA/TIEARRAY", 3))):
+        out = a.tool(10 + i, "find_symbol", {"name_path": path, "scope_uri": uri})
+        j = json.loads(out)
+        check(j.get("status") == "single" and j["match"]["range"]["start"]["line"] == line,
+              "%s: %s" % (path, out[-400:]))
+
+
 def t_find_symbol_fuzzy_only_says_so(sb):
     """Polish 4: a find_symbol whose only match came by a partial name
     answered "single" like an exact one: ruby-lsp's `helper2` for the
@@ -2845,6 +2905,8 @@ SCENARIOS = [
     ("find_symbol_caps_its_drills", t_find_symbol_caps_its_drills),
     ("find_symbol_perl_package_layout", t_find_symbol_perl_package_layout),
     ("find_symbol_perl_namespaced_packages", t_find_symbol_perl_namespaced_packages),
+    ("find_symbol_perl_block_packages", t_find_symbol_perl_block_packages),
+    ("daemon_stop_sees_a_zombie_as_gone", t_daemon_stop_sees_a_zombie_as_gone),
     ("silence_is_settled", t_silence_is_settled),
     ("silence_waits_out_the_open", t_silence_waits_out_the_open),
     ("silence_never_claims_a_late_edit", t_silence_never_claims_a_late_edit),

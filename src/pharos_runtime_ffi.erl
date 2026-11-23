@@ -62,6 +62,7 @@
     config_store/1,
     config_load/0,
     first_config_check/3,
+    config_checks_init/0,
     session_overrides_store/1,
     session_overrides_load/0,
     argv/0,
@@ -1016,14 +1017,33 @@ config_load() ->
 %% A new persistent_term key costs no global GC (only replacing or
 %% erasing one does), and there is one per distinct file content with a
 %% problem in it. Two sessions racing here may both warn; harmless.
+%% Polish 6: atomic. A get-then-put on persistent_term let the boot-time
+%% recheck and the first session's config check both see "not yet" and
+%% log a warning twice (an integration run caught it). ETS insert_new is
+%% atomic; the table is made at boot by a long-lived process
+%% (config_checks_init/0). The very first check, at boot before that, runs
+%% in one process, so persistent_term is safe there.
 first_config_check(Path, Bytes, WriterUp) ->
-    Key = {pharos_config_checked, Path, erlang:phash2(Bytes), WriterUp},
-    case persistent_term:get(Key, false) of
-        true -> false;
-        false ->
-            persistent_term:put(Key, true),
-            true
+    Key = {Path, erlang:phash2(Bytes), WriterUp},
+    Boot = {pharos_config_checked, Key},
+    try persistent_term:get(Boot, false) orelse
+            not ets:insert_new(pharos_config_checked, {Key}) of
+        Seen -> not Seen
+    catch error:badarg ->
+        case persistent_term:get(Boot, false) of
+            true -> false;
+            false ->
+                persistent_term:put(Boot, true),
+                true
+        end
     end.
+
+config_checks_init() ->
+    case ets:info(pharos_config_checked) of
+        undefined -> ets:new(pharos_config_checked, [named_table, public, set]);
+        _ -> ok
+    end,
+    nil.
 
 %% Session-scoped tool_config overrides (ADR 021 layer 4). The
 %% runtime_set_tool_timeout MCP tool writes here; resolve_tool_timeout

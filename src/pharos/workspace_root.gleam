@@ -132,13 +132,30 @@ fn describe_shape(uri: String) -> String {
   }
 }
 
+/// Polish 6: the refusal for a file whose language pharos can't tell.
+/// A file URI whose path ends in `:N` or `:N:M` (`file:///abs/main.go:4`,
+/// the commonest way an agent writes path:line) is named as such, with
+/// what to send instead; anything else is an unsupported file type.
+pub fn describe_unsupported(uri: String) -> String {
+  case string.starts_with(uri, "file:"), uri_to_path(uri) {
+    True, Ok(path) ->
+      case path_and_line(path) {
+        Ok(#(file, line, column)) ->
+          describe_path_and_line("file://" <> path, file, line, column)
+        Error(Nil) -> "unsupported file type: " <> uri
+      }
+    _, _ -> "unsupported file type: " <> uri
+  }
+}
+
 /// Polish 5: `main.go:12` or `src/a.ts:12:5`, the path:line form editors
 /// and compilers print. Its "scheme" fits RFC 3986, so without this it
 /// read as a URI. A path (it has a `.` or a `/`, and no `://`) followed by
 /// one or two all-digit parts: the path, the line and the column if any.
 /// Refused, not accepted: the tools take the line and character as their
 /// own arguments, and a line in the uri would be a second, conflicting
-/// way to give one.
+/// way to give one. A bare name with neither (`Makefile:12`) stays a URI
+/// scheme: nothing tells it from `untitled:1`.
 fn path_and_line(uri: String) -> Result(#(String, String, String), Nil) {
   let path_like = fn(p) {
     p != ""
@@ -184,7 +201,12 @@ fn describe_path_and_line(
 ) -> String {
   let file = case string.starts_with(path, "/") {
     True -> "file://" <> path
-    False -> "file:///absolute/path/" <> path
+    False ->
+      "file:///absolute/path/"
+      <> case string.starts_with(path, "./") {
+        True -> string.drop_start(path, 2)
+        False -> path
+      }
   }
   let zero = fn(n) {
     case int.parse(n) {

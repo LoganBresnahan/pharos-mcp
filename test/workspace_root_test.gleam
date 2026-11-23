@@ -229,6 +229,25 @@ pub fn path_and_line_is_named_test() {
   |> should.be_true
 }
 
+pub fn path_and_line_in_a_file_uri_is_named_test() {
+  // Polish 6: the commonest agent spelling, as a file URI.
+  workspace_root.describe_unsupported("file:///home/u/p/main.go:4")
+  |> should.equal(
+    "file:///home/u/p/main.go:4 looks like a path and a line: send uri=file:///home/u/p/main.go with line=3 (0-based)",
+  )
+  // Percent-encoded, as pharos's canonical form writes the colon.
+  workspace_root.describe_unsupported("file:///home/u/p/main.go%3A4%3A2")
+  |> should.equal(
+    "file:///home/u/p/main.go:4:2 looks like a path and a line: send uri=file:///home/u/p/main.go with line=3 and character=1 (0-based)",
+  )
+  workspace_root.describe_unsupported("file:///home/u/p/notes.xyz")
+  |> should.equal("unsupported file type: file:///home/u/p/notes.xyz")
+  workspace_root.describe_not_local("./main.go:3")
+  |> should.equal(
+    "./main.go:3 looks like a path and a line: send uri=file:///absolute/path/main.go with line=2 (0-based)",
+  )
+}
+
 pub fn extra_leading_slashes_collapse_test() {
   workspace_root.uri_to_path("file:////tmp/a.ts")
   |> should.equal(Ok("/tmp/a.ts"))

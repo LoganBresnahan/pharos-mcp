@@ -164,6 +164,9 @@ fn do_boot() -> Result(Pid, String) {
   // #47: each LSP proc's column encodings, owned by this long-lived
   // process (an ETS table dies with the process that made it).
   position_encoding.init()
+  // Polish 6: config warnings logged once, even when the boot recheck and
+  // the first session check the config at the same moment.
+  config.checks_init()
   // ADR-030 S3: create `~/.local/share/pharos/instances/<our-pid>/`
   // so client.start can write tracking files for each LSP it
   // spawns. Idempotent. No-op on platforms where $HOME is unset

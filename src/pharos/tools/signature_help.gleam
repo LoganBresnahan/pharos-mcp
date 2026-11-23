@@ -74,7 +74,7 @@ fn describe_session_error(err: session.SessionError) -> String {
     session.NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
     session.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
-    session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri
+    session.UnsupportedFileType(uri) -> workspace_root.describe_unsupported(uri)
     session.SpawnFailed(reason) -> "LSP spawn failed: " <> reason
     session.HandshakeFailed(reason) ->
       "LSP initialize handshake failed: " <> reason

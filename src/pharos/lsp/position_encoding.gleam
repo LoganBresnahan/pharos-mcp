@@ -121,7 +121,9 @@ pub fn params_to_server(
 pub fn canonical(value: Option(String)) -> Option(String) {
   case value {
     Some(v) ->
-      case string.lowercase(v) {
+      // Polish 6: trimmed, as the config check folds it (" utf-8" was
+      // accepted there, then dropped to UTF-16 here).
+      case string.lowercase(string.trim(v)) {
         "utf-8" -> Some("utf-8")
         "utf-16" -> Some("utf-16")
         "utf-32" -> Some("utf-32")

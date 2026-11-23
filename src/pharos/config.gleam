@@ -945,9 +945,15 @@ fn option_field(
 }
 
 /// True the first time this process checks `path` with these contents
-/// while the log writer is (or isn't) running.
+/// while the log writer is (or isn't) running. Atomic once
+/// `checks_init/0` has run (polish 6).
 @external(erlang, "pharos_runtime_ffi", "first_config_check")
 fn first_config_check(path: String, bytes: BitArray, writer_up: Bool) -> Bool
+
+/// Polish 6: the table that makes `first_config_check` atomic, owned by
+/// the calling (long-lived) process. Call at boot, before sessions start.
+@external(erlang, "pharos_runtime_ffi", "config_checks_init")
+pub fn checks_init() -> Nil
 
 fn read_toml(path: String) -> Result(#(BitArray, Dynamic), String) {
   use bytes <- result.try(read_bytes(path))

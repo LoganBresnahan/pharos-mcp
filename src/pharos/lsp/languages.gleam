@@ -264,9 +264,10 @@ pub type ServerConfig {
     /// after an open, Perl::Critic's findings from the second on.
     open_settle_ms: Int,
     /// #46: a server that publishes nothing for a file clean from its open
-    /// (lua-language-server). No publish since the didOpen counts as clean
-    /// once no progress has run for this long (and the open is
-    /// `silence_open_floor_ms` old). Never after an edit. 0: off.
+    /// (lua-language-server). Non-zero turns the rule on: no publish since
+    /// the didOpen counts as clean once the open and the last progress end
+    /// are both max(this, `silence_open_floor_ms`) old and no progress is
+    /// running. Never after an edit. 0: off.
     silence_settle_ms: Int,
     /// #46: how old the open must be before its silence counts:
     /// lua-language-server's first publish after an open can come about
@@ -1777,8 +1778,9 @@ fn lua() -> LanguageConfig {
         // #46: lua-language-server publishes nothing for a file clean from
         // its open. Its first publish after an open comes up to 0.9 s later
         // without progress, 1.42 s with every core busy (measured
-        // 2026-11-22), so the floor keeps ~0.6 s over that; it publishes
-        // 0.1-0.3 s after its load progress ends, inside the 600.
+        // 2026-11-22), so the floor keeps ~0.6 s over that. The floor also
+        // counts from its last progress end: it publishes a big opened file
+        // 0.5-0.9 s after its workspace load ends (#46 B2).
         silence_settle_ms: 600,
         silence_open_floor_ms: 2000,
         full_change_as_range: None,

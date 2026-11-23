@@ -241,6 +241,9 @@ Watched files (ADR-043):
 
 Position encodings (#47):
 
+  STUB_LSP_PUBLISH_LOG=path   append "<time> v<version> n<count>" for each
+                              publish written, for a test that fails on
+                              timing to say which side was late
   STUB_LSP_UTF8=1             ruby-lsp's way: advertises utf-16 but reads
                               and writes UTF-8 byte columns: hover answers
                               "received L:C", references returns each
@@ -346,6 +349,12 @@ def write_message(stream, msg):
         stream.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
         stream.write(body)
         stream.flush()
+        log = os.environ.get("STUB_LSP_PUBLISH_LOG")
+        if log and msg.get("method") == "textDocument/publishDiagnostics":
+            # When each publish was written, for a test that fails on timing.
+            p = msg["params"]
+            with open(log, "a") as f:
+                f.write("%.3f v%s n%d\n" % (time.time(), p.get("version"), len(p.get("diagnostics", []))))
 
 
 CLIENT_PROGRESS = threading.Event()

@@ -1046,7 +1046,7 @@ fn describe_session_error(err: SessionError) -> String {
       "no workspace root marker found ascending from " <> uri
     SpawnFailed(reason) -> "LSP spawn failed: " <> reason
     HandshakeFailed(reason) -> "initialize handshake failed: " <> reason
-    UnsupportedFileType(uri) -> "unsupported file type: " <> uri
+    UnsupportedFileType(uri) -> workspace_root.describe_unsupported(uri)
     UnknownCustomUriScheme(uri) ->
       "custom URI scheme not registered for any language: " <> uri
     NoActiveSessionForLanguage(uri, language) ->

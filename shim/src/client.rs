@@ -469,13 +469,18 @@ pub fn reply_pid(reply: &str) -> Option<i32> {
 }
 
 /// Wait until process `pid` has exited, polling; false if it is still
-/// there after `limit`. ESRCH is gone; EPERM still exists.
+/// there after `limit`. ESRCH is gone; EPERM still exists. A zombie is
+/// gone too (polish 6): the daemon is the spawning shim's child, and when
+/// that shim isn't reading (its client suspended) or PID 1 never reaps (a
+/// container without an init), the exited daemon stays a zombie, which
+/// kill(pid, 0) still finds.
 pub fn wait_gone(pid: i32, limit: Duration) -> bool {
     let deadline = std::time::Instant::now() + limit;
     loop {
         // SAFETY: kill with signal 0 sends nothing; it only checks.
-        let alive = unsafe { libc::kill(pid, 0) } == 0
+        let exists = unsafe { libc::kill(pid, 0) } == 0
             || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        let alive = exists && !is_zombie(pid);
         if !alive {
             return true;
         }
@@ -484,6 +489,43 @@ pub fn wait_gone(pid: i32, limit: Duration) -> bool {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Linux: the state field of /proc/<pid>/stat, after the parenthesised
+/// command name (which may itself hold spaces or parentheses).
+#[cfg(target_os = "linux")]
+fn is_zombie(pid: i32) -> bool {
+    std::fs::read_to_string(format!("/proc/{}/stat", pid))
+        .ok()
+        .and_then(|stat| {
+            stat.rfind(')')
+                .and_then(|i| stat[i + 1..].trim_start().chars().next())
+        })
+        == Some('Z')
+}
+
+/// macOS: the BSD info's status.
+#[cfg(target_os = "macos")]
+fn is_zombie(pid: i32) -> bool {
+    // SAFETY: proc_bsdinfo is plain old data; proc_pidinfo fills at most
+    // the size given and returns how much it wrote.
+    unsafe {
+        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let got = libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        );
+        got == size && info.pbi_status == libc::SZOMB
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn is_zombie(_pid: i32) -> bool {
+    false
 }
 
 /// `UnixStream::set_read_timeout`, taking EINVAL as "the peer has already
@@ -576,6 +618,17 @@ mod tests {
         assert_eq!(reply_pid(r#"{"pharos_stop":1}"#), None);
         assert_eq!(reply_pid("not json"), None);
         assert_eq!(reply_pid(r#"{"daemon_pid":0}"#), None);
+    }
+
+    #[test]
+    fn wait_gone_counts_a_zombie_as_gone() {
+        // Polish 6: a child that exited but isn't reaped yet.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(is_zombie(pid));
+        assert!(wait_gone(pid, Duration::from_millis(200)));
+        child.wait().unwrap();
     }
 
     #[test]

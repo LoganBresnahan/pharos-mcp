@@ -295,7 +295,7 @@ fn drill_plan(
   head: String,
   generic: Bool,
   modules_only: Bool,
-) -> #(List(String), Int, Int) {
+) -> #(List(String), Int, Int, Bool) {
   let bare = fn(name) {
     case generic {
       True -> strip_type_params(name)
@@ -315,9 +315,13 @@ fn drill_plan(
     True ->
       case exact, string.split(head, "::") |> list.reverse {
         [], [_, first, ..more] -> {
-          let namespace =
-            string.join(list.reverse([first, ..more]), "::") <> "::"
-          list.filter(hits, fn(s) { string.starts_with(s.name, namespace) })
+          let parent = string.join(list.reverse([first, ..more]), "::")
+          // Polish 6 (verifier's N3): and the parent itself, which can hold
+          // a helper named under it (Class::Struct::Tie_ISA, in
+          // Class/Struct.pm; JSON::PP's helpers in JSON/PP.pm).
+          list.filter(hits, fn(s) {
+            s.name == parent || string.starts_with(s.name, parent <> "::")
+          })
         }
         _, _ -> exact
       }
@@ -331,13 +335,17 @@ fn drill_plan(
   let named = list.map(ranked, fn(s) { s.uri }) |> list.unique
   let uris = list.take(list.unique([scope_uri, ..named]), drill_cap)
   let searched = list.length(list.filter(named, list.contains(uris, _)))
-  #(uris, searched, list.length(named))
+  #(uris, searched, list.length(named), !list.contains(named, scope_uri))
 }
 
 /// #51: the answer's note when the cap left files undrilled: `searched`
 /// of the `named` files the workspace search named were drilled, besides
 /// scope_uri.
-fn capped_note(searched: Int, named: Int) -> option.Option(String) {
+fn capped_note(
+  searched: Int,
+  named: Int,
+  plus_scope: Bool,
+) -> option.Option(String) {
   case named > searched {
     False -> None
     True ->
@@ -346,7 +354,12 @@ fn capped_note(searched: Int, named: Int) -> option.Option(String) {
         <> int.to_string(searched)
         <> " of the "
         <> int.to_string(named)
-        <> " files the workspace search named (exact names first), and scope_uri; pass scope_uri in the file that defines it, or a fuller name_path (Type/member), to narrow",
+        <> " files the workspace search named (exact names first)"
+        <> case plus_scope {
+          True -> ", and scope_uri"
+          False -> ""
+        }
+        <> "; pass scope_uri in the file that defines it, or a fuller name_path (Type/member), to narrow",
       )
   }
 }
@@ -401,9 +414,9 @@ pub fn find_symbol(
       // respond — and still gives the LLM a usable handle for the
       // common "edit a symbol I know lives in this file" workflow.
       use ws_supported <- result.try(workspace_symbol_supported(pool, scope_uri))
-      use #(#(unique_uris, searched, named), module_hits) <- result.try(
+      use #(#(unique_uris, searched, named, plus_scope), module_hits) <- result.try(
         case ws_supported {
-          False -> Ok(#(#([scope_uri], 0, 0), []))
+          False -> Ok(#(#([scope_uri], 0, 0, True), []))
           True -> {
             use ws_results <- result.try(workspace_symbol_query(
               pool,
@@ -476,7 +489,7 @@ pub fn find_symbol(
       }
       use trees <- result.try(drill_files(unique_uris))
       let strict = strict_in(trees)
-      let drill_note = capped_note(searched, named)
+      let drill_note = capped_note(searched, named, plus_scope)
       let matches = case strict {
         [] -> {
           let fuzzy =
@@ -946,7 +959,14 @@ fn nest_in_packages(
     [] -> Error(Nil)
     _ -> {
       // The innermost package holding a symbol, if any.
-      let home = fn(s: DocumentSymbolDecoded) {
+      let by_start =
+        list.sort(packages, fn(a, b) {
+          case position_le(a.range.start, b.range.start) {
+            True -> order.Lt
+            False -> order.Gt
+          }
+        })
+      let inside = fn(s: DocumentSymbolDecoded) {
         packages
         |> list.filter(fn(p) { p != s && within(s, p) })
         |> list.sort(fn(a, b) {
@@ -956,6 +976,39 @@ fn nest_in_packages(
           }
         })
         |> list.first
+      }
+      // Polish 6 (verifier's N2): perlnavigator ends a package's range
+      // where an inner `{ package X; ... }` block begins and doesn't
+      // resume it after, so Class::Struct's `import` and `struct` (after
+      // its Tie_ISA block) sat in no range. A sub in none goes to the
+      // package the last block before it interrupted (the one whose range
+      // ended where that block began), else to the file's first package.
+      let interrupted = fn(s: DocumentSymbolDecoded) {
+        let before =
+          list.filter(by_start, fn(p) {
+            position_le(p.range.end, s.range.start)
+          })
+        case list.last(before) {
+          Error(Nil) -> Error(Nil)
+          Ok(block) ->
+            case
+              list.find(before, fn(q) {
+                q != block
+                && position_le(q.range.end, block.range.start)
+                && block.range.start.line - q.range.end.line <= 1
+              })
+            {
+              Ok(q) -> Ok(q)
+              Error(Nil) -> list.first(by_start)
+            }
+        }
+      }
+      let home = fn(s: DocumentSymbolDecoded) {
+        case inside(s), list.contains(packages, s) {
+          Ok(p), _ -> Ok(p)
+          Error(Nil), True -> Error(Nil)
+          Error(Nil), False -> interrupted(s)
+        }
       }
       let homes = list.map(tree, fn(s) { #(s, home(s)) })
       Ok(
@@ -2182,7 +2235,7 @@ fn describe_session_error(err: session.SessionError) -> String {
     session.NotAFileUri(uri) -> workspace_root.describe_not_local(uri)
     session.WorkspaceNotFound(uri) ->
       "no workspace root marker found ascending from " <> uri
-    session.UnsupportedFileType(uri) -> "unsupported file type: " <> uri
+    session.UnsupportedFileType(uri) -> workspace_root.describe_unsupported(uri)
     session.SpawnFailed(reason) -> "LSP spawn failed: " <> reason
     session.HandshakeFailed(reason) ->
       "LSP initialize handshake failed: " <> reason
