@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- find_symbol says so when no match has the name asked for: a match found only in another case
+  or by a partial name (ruby-lsp's `helper2` for `helper`) carries a note, "no exact match for the
+  name asked; nearest by a partial name: helper2", where it read like any single match.
+- A URI whose scheme has no `//` (`untitled:Untitled-1`) is answered as a URI that isn't a file on
+  disk, not as a relative path, and get_diagnostics on a scheme no language registers (`https://`)
+  no longer calls it a library file the server serves (#42 notes).
 - The call- and type-hierarchy chained tools (incoming/outgoing calls, supertypes/subtypes) say
   plainly when the server doesn't support them, as their prepare tools do, instead of passing a
   raw -32601 through. The capability matrix's call-h and type-h failures were the dogfood
@@ -34,9 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `find_symbol` on a cold session retries an empty search on every server for 3 s after the
   first file opens, and for 1.5 s after a server's indexing progress ends, instead of a
   per-server table counted from spawn: servers missing from the table got no wait at all, and a
-  real miss on bash-language-server or next-ls in the first 20 s could take up to 15 s. pyright
-  (10 s) and bash-language-server (6 s) keep longer graces, for big projects they index without
-  reporting progress, and bash-language-server now analyses up to 5000 files in the background
+  real miss on bash-language-server or next-ls in the first 20 s could take up to 15 s.
+  bash-language-server keeps a longer grace (6 s), for big projects it indexes without
+  reporting progress, and now analyses up to 5000 files in the background
   (its default 500 left half of a large shell repo unfindable) (#44).
 - `find_symbol` on elp resolves `module/function` and a module. elp 1.1's workspace search finds
   modules only, and its documentSymbol has no module node, so `util/helper` and `util` were

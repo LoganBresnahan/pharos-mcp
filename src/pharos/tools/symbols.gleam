@@ -1658,7 +1658,7 @@ const progress_settle_ms = 1500
 /// the server has a progress running, or one that ended under
 /// `progress_settle_ms` ago, or its session's first didOpen was under
 /// max(`cold_grace_ms`, the server's `lazy_workspace_index_ms`) ago
-/// (pyright and bash-language-server index big projects without
+/// (bash-language-server indexes big projects without
 /// reporting progress). Any other empty answer is taken as it is, so a
 /// typo or a missing symbol answers at once (#27, #44).
 fn retry_while_cold(
@@ -2145,11 +2145,13 @@ fn resolution_fields(res: Resolution) -> List(#(String, json.Json)) {
     Single(m) -> [
       #("status", json.string("single")),
       #("match", symbol_match_to_json(m)),
+      ..fuzzy_note([m])
     ]
     Multiple(ms) -> [
       #("status", json.string("multiple")),
       #("count", json.int(list.length(ms))),
       #("matches", json.preprocessed_array(list.map(ms, symbol_match_to_json))),
+      ..fuzzy_note(ms)
     ]
     NotFound(near_misses, note) -> [
       #("status", json.string("not_found")),
@@ -2162,6 +2164,38 @@ fn resolution_fields(res: Resolution) -> List(#(String, json.Json)) {
         None -> []
       }
     ]
+  }
+}
+
+/// A note at the top of the answer when no match has the name asked for:
+/// every one came by a fuzzy strategy (another case, a substring). An
+/// agent reading only "single" took ruby-lsp's `helper2` for the
+/// `helper` asked (polish 4).
+fn fuzzy_note(ms: List(SymbolMatch)) -> List(#(String, json.Json)) {
+  let fuzzy = fn(m: SymbolMatch) {
+    m.matched_via == "substring" || m.matched_via == "case_insensitive"
+  }
+  case ms != [] && list.all(ms, fuzzy) {
+    False -> []
+    True -> {
+      let how = case
+        list.all(ms, fn(m) { m.matched_via == "case_insensitive" })
+      {
+        True -> "in another case"
+        False -> "by a partial name"
+      }
+      [
+        #(
+          "note",
+          json.string(
+            "no exact match for the name asked; nearest "
+            <> how
+            <> ": "
+            <> string.join(list.map(ms, fn(m) { m.name }), ", "),
+          ),
+        ),
+      ]
+    }
   }
 }
 

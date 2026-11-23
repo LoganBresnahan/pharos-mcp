@@ -1675,7 +1675,6 @@ def t_uri_shapes_teach(sb):
     """#42: `file:/abs` (RFC 8089, as jdtls sends it) is accepted; other
     refused shapes say what to send; get_diagnostics on a virtual URI says
     it covers files on disk only."""
-    sb.write_toml("custom_uri_schemes.stubvirt.fetch_method = \"stub/contents\"\n")
     a = sb.start({"STUB_LSP_HOVER_RESPONSES": "line"})
     a.initialize()
     hover_line(a, sb.uri, 10)
@@ -1686,9 +1685,15 @@ def t_uri_shapes_teach(sb):
     r = a.call(12, "tools/call", {"name": "hover", "arguments": {"uri": "src/main.stub", "line": 0, "character": 0}})
     text = r["result"]["content"][0]["text"]
     check(r["result"].get("isError") and "relative path, not a URI" in text, "relative path: %s" % text)
-    d = a.call(13, "tools/call", {"name": "get_diagnostics", "arguments": {"uri": "stubvirt://lib/X.stub"}})
+    # A scheme a bundled language registers (java's jdt://; a user-defined
+    # language's custom_uri_schemes isn't read, ADR-029).
+    d = a.call(13, "tools/call", {"name": "get_diagnostics", "arguments": {"uri": "jdt://contents/rt.jar/java.lang/String.class"}})
     text = d["result"]["content"][0]["text"]
     check("files on disk only" in text, "virtual URI: %s" % text)
+    # Polish 4: a scheme no language registers isn't a library file.
+    d = a.call(14, "tools/call", {"name": "get_diagnostics", "arguments": {"uri": "https://example.com/main.stub"}})
+    text = d["result"]["content"][0]["text"]
+    check("not a file on disk (https://)" in text and "library" not in text, "https URI: %s" % text)
 
 
 def t_config_warnings_without_lsp_tools(sb):
@@ -2123,6 +2128,21 @@ def t_elp_module_handle_and_arity(sb):
     edit = a.tool(12, "edit_at_symbol", {"symbol_handle": _handle_of(out), "mode": "insert_after",
                                          "content": "%% appended\n"})
     check("stale handle" not in edit and "error" not in edit.lower()[:80], "edit on util: %s" % edit[-400:])
+
+
+def t_find_symbol_fuzzy_only_says_so(sb):
+    """Polish 4: a find_symbol whose only match came by a partial name
+    answered "single" like an exact one: ruby-lsp's `helper2` for the
+    `helper` asked. The answer now carries a note saying no match has the
+    name asked; an exact match carries none."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "all"})
+    a.initialize()
+    uri = stub_file(sb, "util.stub", "function helper2() {\n}\nfunction exact() {\n}\n")
+    out = a.tool(10, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check('"note":"no exact match for the name asked; nearest by a partial name: helper2"' in out,
+          "fuzzy-only answer: %s" % out[-400:])
+    out = a.tool(11, "find_symbol", {"name_path": "exact", "scope_uri": uri})
+    check('"status":"single"' in out and '"note"' not in out, "exact answer: %s" % out[-400:])
 
 
 def t_find_symbol_library_guess_is_a_near_miss(sb):
@@ -2582,6 +2602,7 @@ SCENARIOS = [
     ("find_symbol_library_outside_the_root", t_find_symbol_library_outside_the_root),
     ("find_symbol_library_guess_is_a_near_miss", t_find_symbol_library_guess_is_a_near_miss),
     ("find_symbol_generic_class", t_find_symbol_generic_class),
+    ("find_symbol_fuzzy_only_says_so", t_find_symbol_fuzzy_only_says_so),
     ("find_symbol_cold_grace_for_every_server", t_find_symbol_cold_grace_for_every_server),
     ("find_symbol_modules_only_server", t_find_symbol_modules_only_server),
     ("find_symbol_type_member_layouts", t_find_symbol_type_member_layouts),

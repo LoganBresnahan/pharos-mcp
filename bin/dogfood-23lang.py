@@ -1234,7 +1234,7 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
         prepared_type_item = None
         # #43: what each prepare answered, so a chained call can say why it
         # has no item: a server gap (GAP) or nothing found (SKIP), not FAIL.
-        prepare_summary = {"call": "", "type": ""}
+        prepare_summary = {"call": ("", True), "type": ("", True)}
         prepared_symbol_handle = None
         # Broken-LSP fast-path: if a lang's first N tools all
         # retry-exhaust, the LSP itself isn't responding. No point
@@ -1424,9 +1424,9 @@ def run_pass(transport: Transport, filter_langs: list[str] | None,
                     )
 
             if tool == "call_hierarchy_prepare":
-                prepare_summary["call"] = summary
+                prepare_summary["call"] = (summary, ok)
             elif tool == "type_hierarchy_prepare":
-                prepare_summary["type"] = summary
+                prepare_summary["type"] = (summary, ok)
             if tool == "call_hierarchy_prepare" and ok and result:
                 prepared_call_item = first_item_from(result)
             elif tool == "type_hierarchy_prepare" and ok and result:
@@ -1581,13 +1581,17 @@ def write_report(rows, out_path: str, label: str, transport_name: str,
         f.write("\n".join(lines))
 
 
-def chained_without_item(prepare_summary):
-    """#43: why a chained hierarchy call has no item. A prepare that hit a
-    server gap makes the chained call a gap too; one that found nothing
-    makes it a skip (the target isn't a function, or a type, for this
-    hierarchy). Neither is a pharos failure."""
-    if "server gap" in prepare_summary:
+def chained_without_item(prepare):
+    """#43: why a chained hierarchy call has no item, from its prepare's
+    (summary, ok). A prepare that hit a server gap makes the chained call a
+    gap too; one that failed makes it a skip that says so (the prepare's own
+    row carries the failure); one that found nothing makes it a skip (the
+    target isn't a function, or a type, for this hierarchy)."""
+    summary, ok = prepare
+    if "server gap" in summary:
         return "server gap (its prepare was a server gap)"
+    if not ok:
+        return "skipped: its prepare failed"
     return "skipped: prepare found nothing at this target"
 
 

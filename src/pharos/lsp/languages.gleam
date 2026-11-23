@@ -233,7 +233,7 @@ pub type ServerConfig {
     /// #27, #44: how long, in ms after its session's first didOpen, the
     /// server may still answer workspace searches empty (or with an
     /// internal error) while it indexes a big project without reporting
-    /// progress (pyright, bash-language-server). find_symbol retries an
+    /// progress (bash-language-server). find_symbol retries an
     /// empty search within max(this, a uniform 3 s grace every server
     /// gets), while the server reports progress, and for 1.5 s after it
     /// ends. 0: the 3 s grace only.
@@ -1771,7 +1771,10 @@ fn python() -> LanguageConfig {
         ready_timeout_ms: None,
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
-        lazy_workspace_index_ms: 10_000,
+        // #44 note: through pharos the readiness wait already holds the
+        // first search until pyright is ready (django 8/8 cold with no
+        // override), so it gets the 3 s grace like the rest.
+        lazy_workspace_index_ms: 0,
         save_check_grace_ms: 0,
         publish_settle_ms: 0,
         empty_publish_settle_ms: 0,

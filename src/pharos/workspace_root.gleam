@@ -97,13 +97,14 @@ fn local_path(rest: String) -> Result(String, Nil) {
 pub fn describe_not_local(uri: String) -> String {
   case string.starts_with(uri, "file://") {
     False ->
-      case string.split_once(uri, "://"), string.starts_with(uri, "file:") {
-        // A virtual URI (jdt://): the tool works on files on disk.
-        Ok(#(scheme, _)), False if scheme != "" ->
+      case uri_scheme(uri), string.starts_with(uri, "file:") {
+        // A URI of another scheme (jdt://, untitled:): the tool works on
+        // files on disk.
+        Ok(scheme), False ->
           uri
           <> " is not a file on disk ("
           <> scheme
-          <> "://): this tool works on local files only; use file:///absolute/path"
+          <> "): this tool works on local files only; use file:///absolute/path"
         _, True -> uri <> " has a relative path: use file:///absolute/path"
         _, False ->
           case string.starts_with(uri, "/") {
@@ -122,6 +123,44 @@ pub fn describe_not_local(uri: String) -> String {
         _ -> uri <> " has no path: use file:///absolute/path"
       }
   }
+}
+
+/// The scheme part of a URI (`jdt://`, `untitled:`), RFC 3986's
+/// `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"`, with its `//` when
+/// it has one. Error for a path. A one-letter scheme is taken as a
+/// Windows drive (`C:`), not a URI.
+fn uri_scheme(uri: String) -> Result(String, Nil) {
+  case string.split_once(uri, ":") {
+    Ok(#(scheme, rest)) ->
+      case string.length(scheme) > 1 && is_scheme(scheme) {
+        True ->
+          case string.starts_with(rest, "//") {
+            True -> Ok(scheme <> "://")
+            False -> Ok(scheme <> ":")
+          }
+        False -> Error(Nil)
+      }
+    Error(Nil) -> Error(Nil)
+  }
+}
+
+fn is_scheme(text: String) -> Bool {
+  case string.to_graphemes(text) {
+    [first, ..rest] ->
+      is_alpha(first)
+      && list.all(rest, fn(c) {
+        is_alpha(c) || is_digit(c) || c == "+" || c == "-" || c == "."
+      })
+    [] -> False
+  }
+}
+
+fn is_alpha(c: String) -> Bool {
+  string.contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", c)
+}
+
+fn is_digit(c: String) -> Bool {
+  string.contains("0123456789", c)
 }
 
 /// Encode an absolute filesystem path as a `file://` URI, the inverse of

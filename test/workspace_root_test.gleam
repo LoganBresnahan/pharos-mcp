@@ -227,5 +227,7 @@ pub fn refused_shapes_say_what_to_send_test() {
   says("/home/oof/a.ts", "use file:///home/oof/a.ts")
   says("jdt://contents/rt.jar/java.lang/String.class", "local files only")
   says("untitled:///x", "not a file on disk (untitled://)")
+  // A scheme without `//` is a URI too, not a relative path (polish 4).
+  says("untitled:Untitled-1", "not a file on disk (untitled:)")
   says("file://src/a.ts", "names the host `src`")
 }

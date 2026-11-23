@@ -276,7 +276,7 @@
 # progress, for 1.5 s after it ends, and for 3 s after the session's first
 # file is opened, on every server (#44). `lazy_workspace_index_ms`
 # lengthens that grace for a server that indexes a big project without
-# reporting progress. Bundled: pyright 10000, bash-language-server 6000;
+# reporting progress. Bundled: bash-language-server 6000;
 # others use the 3 s. Raise it for a big project, or set it for your own
 # server:
 #
