@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- The README notes that ruby-lsp never indexes a method defined outside a class or module (a
+  server limit): definition and hover on a call to a top-level `def` answer nothing, and
+  find_symbol finds one only with scope_uri set to the file that defines it (#41).
 - `file:/absolute/path` (RFC 8089's form without an authority, which jdtls sends) is accepted as
   `file:///absolute/path`. Other refused shapes say what to send: a relative path, a bare path, a
   `file:` URI with a relative path, a virtual URI given to a tool that takes files on disk; and

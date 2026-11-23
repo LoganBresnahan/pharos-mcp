@@ -198,6 +198,10 @@ SPECS = {
         workspace="/home/oof/ruby_dev",
         file_uri="file:///home/oof/ruby_dev/main.rb",
         point_decl_line=6,  # `class Point` line 7 (1-based)
+        # #41: ruby-lsp never indexes a method outside a class or module,
+        # so this top-level `new_point` is never found by workspace/symbol,
+        # definition or hover (a server limit). `Point` and methods inside
+        # it are the class-based case that is.
         constructor_name="new_point",
         # ruby-lsp emits diagnostics for unused locals + ambiguous
         # syntax. Cold-start tolerance covers the empty-result case.

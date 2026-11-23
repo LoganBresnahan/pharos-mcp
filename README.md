@@ -663,7 +663,7 @@ benchmarked five — follow each LSP's own install instructions.
 | Scala | [metals](https://github.com/scalameta/metals) | First-run bootstraps Bloop (~2-3 min); pharos timeout config covers it |
 | Clojure | [clojure-lsp](https://github.com/clojure-lsp/clojure-lsp) | Native binary, no JVM cold-start |
 | Haskell | [haskell-language-server](https://github.com/haskell/haskell-language-server) (`haskell-language-server-wrapper`) | Use `ghcup` to keep GHC/cabal/HLS in sync |
-| Ruby | [ruby-lsp](https://github.com/Shopify/ruby-lsp) | Project needs `Gemfile.lock` (run `bundle install` first) |
+| Ruby | [ruby-lsp](https://github.com/Shopify/ruby-lsp) | Project needs `Gemfile.lock` (run `bundle install` first). ruby-lsp never indexes a method defined outside a class or module, so its workspace search never returns a top-level `def`: definition and hover on a call to one answer nothing, and find_symbol finds it only with scope_uri set to the file that defines it (from another file it may answer a similarly named method instead); methods in classes and modules are found from anywhere |
 | Lua | [lua-language-server](https://github.com/LuaLS/lua-language-server) | |
 | Bash | [bash-language-server](https://github.com/bash-lsp/bash-language-server) | Diagnostics need `shellcheck` on PATH |
 | Zig | [zls](https://github.com/zigtools/zls) | Match your zig version |
