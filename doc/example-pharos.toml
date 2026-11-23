@@ -307,7 +307,8 @@
 # Perl::Critic's. `publish_settle_ms` makes get_diagnostics wait, after
 # the first publish that follows a sync, until the server has published
 # nothing more for that long (never past the call's timeout), and answer
-# the latest. Bundled: elp and perlnavigator (see `--print-language-config`),
+# the latest. Bundled: elp, perlnavigator and lua-language-server (see
+# `--print-language-config`),
 # others 0. Set it for a server of your own that does the same:
 #
 # [languages.mylang]
@@ -325,6 +326,24 @@
 #
 # empty_publish_settle_ms = 600
 # open_settle_ms = 650
+#
+# A server that publishes nothing for a file clean from its open
+# (lua-language-server) would make get_diagnostics wait its whole timeout.
+# With `silence_settle_ms` set, no publish since the open means "clean" once
+# the open and the last progress end are both `silence_open_floor_ms` old
+# and no progress is running (a big file is diagnosed a while after the
+# workspace load ends): `[]` is answered with a
+# `pharos.assumed_current` note. After an edit silence never counts (a
+# change can publish over a second later): the answer waits as for any
+# server, then the last set is marked carried over. While the server reports
+# progress (a large workspace's first load and diagnosis) silence doesn't
+# count either. Bundled: lua-language-server 600 and 2000; others 0 (off).
+# A lua-language-server answer after an open's silence is assumed current;
+# on a slow machine, where its first publish after an open can come later
+# (1.4 s with every core of an 8-core machine busy), raise the floor:
+#
+# [languages.lua]
+# silence_open_floor_ms = 3000
 
 # 4d) How a server is sent an edit (ADR-038 amendment (A)).
 #

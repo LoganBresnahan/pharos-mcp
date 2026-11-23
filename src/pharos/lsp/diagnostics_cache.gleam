@@ -258,3 +258,12 @@ pub fn progress_ended_within(pid: Pid, ms: Int) -> Bool
 /// `pid`; -1 if none has come since that sync.
 @external(erlang, "pharos_diagnostics_cache_ffi", "first_publish_age_ms")
 pub fn first_publish_age_ms(uri: String, server_id: String, pid: Pid) -> Int
+
+/// #46: get_diagnostics answered `[]` for `uri` from the server's silence
+/// after its open. Not a publish; read only by a later question on the
+/// still-unpublished file, which then waits as for a carried-over set.
+@external(erlang, "pharos_diagnostics_cache_ffi", "mark_assumed_clean")
+pub fn mark_assumed_clean(uri: String, server_id: String, pid: Pid) -> Nil
+
+@external(erlang, "pharos_diagnostics_cache_ffi", "assumed_clean")
+pub fn assumed_clean(uri: String, server_id: String, pid: Pid) -> Bool

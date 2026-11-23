@@ -316,7 +316,7 @@ fn server_report(
           deadline_ms,
         )
       {
-        FreshEntry(params) ->
+        FreshEntry(params) | SilentEntry(params, _) ->
           items_from_params(params) |> result_map(fn(i) { #(i, False) })
         CarriedEntry(params) ->
           items_from_params(params) |> result_map(fn(i) { #(i, True) })
@@ -348,7 +348,9 @@ fn server_report(
               deadline_ms,
             )
           {
-            FreshEntry(params) | CarriedEntry(params) ->
+            FreshEntry(params)
+            | CarriedEntry(params)
+            | SilentEntry(params, _) ->
               items_from_params(params) |> result_map(fn(i) { #(i, True) })
             NotReported -> Error("no publishDiagnostics within the timeout")
           }
@@ -409,6 +411,9 @@ fn pull_items(
 type PushEntry {
   FreshEntry(params: Dynamic)
   CarriedEntry(params: Dynamic)
+  /// #46: no publish since the sync, and the server's silence rule held:
+  /// its latest set, or none, taken as current.
+  SilentEntry(params: Dynamic, ever_published: Bool)
   NotReported
 }
 
@@ -426,17 +431,60 @@ type PushEntry {
 ///   document): wait until the call's deadline for a first publish.
 /// #45: a server's settle values (ADR-038 amendment #45).
 pub type Settle {
-  Settle(publish_ms: Int, empty_ms: Int, open_ms: Int)
+  Settle(
+    publish_ms: Int,
+    empty_ms: Int,
+    open_ms: Int,
+    silence_ms: Int,
+    silence_open_ms: Int,
+  )
 }
 
-const no_settle = Settle(0, 0, 0)
+const no_settle = Settle(0, 0, 0, 0, 0)
 
 fn settle_of(server: ServerConfig) -> Settle {
   Settle(
     server.publish_settle_ms,
     server.empty_publish_settle_ms,
     server.open_settle_ms,
+    server.silence_settle_ms,
+    server.silence_open_floor_ms,
   )
+}
+
+/// #46: lua-language-server publishes nothing for a file clean from its
+/// open, so a wait for its publish ran to the deadline. With `silence_ms`
+/// set, no publish since the document's didOpen counts as "clean" once
+/// the open and the last progress end are both `silence_open_ms` old (at
+/// least `silence_ms`) and no progress is running: the server diagnoses a
+/// big opened file 0.5-0.9 s after its workspace load ends (B2). After an edit silence
+/// never counts (Logan's option (1)): lua-language-server published a
+/// change 1.33 s after it on Kong with no load, and a timer can't tell
+/// "unchanged" from "not yet". Off (0) for every other server.
+fn silence_holds(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  settle: Settle,
+) -> Bool {
+  case settle.silence_ms > 0 {
+    False -> False
+    True -> {
+      let age = diagnostics_cache.sync_age_ms(file_uri, server_id, pid)
+      diagnostics_cache.last_sync_was_open(file_uri, server_id, pid)
+      && age >= int.max(settle.silence_ms, settle.silence_open_ms)
+      && diagnostics_cache.first_publish_age_ms(file_uri, server_id, pid) < 0
+      && !diagnostics_cache.progress_active(pid, progress_stuck_ms)
+      // #46 B2 (verifier-two): the floor counts from the last progress end
+      // too. lua-language-server ends "Loading workspace", then spends
+      // 0.5-0.9 s diagnosing a big opened file before its first publish
+      // (Kong's 2691-line schema/init.lua), with nothing running between.
+      && !diagnostics_cache.progress_ended_within(
+        pid,
+        int.max(settle.silence_ms, settle.silence_open_ms),
+      )
+    }
+  }
 }
 
 /// The quiet an answer about `params` waits for: the server's
@@ -524,7 +572,7 @@ fn resolve_push(
   // fresh.
   case await_progress_quiet(file_uri, server_id, pid, grace_ms, deadline_ms) {
     True ->
-      case resolve_push_now(file_uri, server_id, pid, deadline_ms) {
+      case resolve_push_now(file_uri, server_id, pid, deadline_ms, settle) {
         FreshEntry(params) -> {
           let windowed = case
             settle_for(settle, params, file_uri, server_id, pid)
@@ -556,7 +604,7 @@ fn resolve_push(
         other -> other
       }
     False ->
-      case resolve_push_now(file_uri, server_id, pid, now_ms()) {
+      case resolve_push_now(file_uri, server_id, pid, now_ms(), no_settle) {
         FreshEntry(params) -> CarriedEntry(params)
         other -> other
       }
@@ -647,7 +695,9 @@ fn resolve_push_now(
   server_id: String,
   pid: Pid,
   deadline_ms: Int,
+  settle: Settle,
 ) -> PushEntry {
+  let silent = fn() { silence_holds(file_uri, server_id, pid, settle) }
   case diagnostics_cache.lookup(file_uri, server_id, pid) {
     diagnostics_cache.Fresh(params) -> FreshEntry(params)
     diagnostics_cache.CarriedOver(params) ->
@@ -658,20 +708,64 @@ fn resolve_push_now(
           pid,
           int.min(now_ms() + diagnostics_cache.settle_left_ms(pid), deadline_ms),
           fresh_only: True,
+          silent: silent,
         )
       {
-        diagnostics_cache.Fresh(newer) -> FreshEntry(newer)
-        diagnostics_cache.CarriedOver(latest) -> CarriedEntry(latest)
-        diagnostics_cache.Missing -> CarriedEntry(params)
+        #(diagnostics_cache.Fresh(newer), _) -> FreshEntry(newer)
+        #(diagnostics_cache.CarriedOver(latest), True) ->
+          SilentEntry(latest, True)
+        #(diagnostics_cache.CarriedOver(latest), False) -> CarriedEntry(latest)
+        #(diagnostics_cache.Missing, _) -> CarriedEntry(params)
       }
-    diagnostics_cache.Missing ->
-      case
-        await_lookup(file_uri, server_id, pid, deadline_ms, fresh_only: False)
-      {
-        diagnostics_cache.Fresh(params) -> FreshEntry(params)
-        diagnostics_cache.CarriedOver(params) -> CarriedEntry(params)
-        diagnostics_cache.Missing -> NotReported
+    diagnostics_cache.Missing -> {
+      let none = synthesized_none(file_uri)
+      case diagnostics_cache.assumed_clean(file_uri, server_id, pid), none {
+        // #46: answered `[]` from the silence after its open, and still
+        // nothing published: wait the settle for a publish about this
+        // change, as for a carried-over set, then `[]` marked carried over.
+        True, Ok(none) ->
+          case
+            await_lookup(
+              file_uri,
+              server_id,
+              pid,
+              int.min(
+                now_ms() + diagnostics_cache.settle_left_ms(pid),
+                deadline_ms,
+              ),
+              fresh_only: False,
+              silent: fn() { False },
+            )
+          {
+            #(diagnostics_cache.Fresh(params), _) -> FreshEntry(params)
+            #(diagnostics_cache.CarriedOver(params), _) -> CarriedEntry(params)
+            #(diagnostics_cache.Missing, _) -> CarriedEntry(none)
+          }
+        _, _ ->
+          case
+            await_lookup(
+              file_uri,
+              server_id,
+              pid,
+              deadline_ms,
+              fresh_only: False,
+              silent: silent,
+            )
+          {
+            #(diagnostics_cache.Fresh(params), _) -> FreshEntry(params)
+            #(diagnostics_cache.CarriedOver(params), _) -> CarriedEntry(params)
+            #(diagnostics_cache.Missing, True) ->
+              case none {
+                Ok(none) -> {
+                  diagnostics_cache.mark_assumed_clean(file_uri, server_id, pid)
+                  SilentEntry(none, False)
+                }
+                Error(_) -> NotReported
+              }
+            #(diagnostics_cache.Missing, False) -> NotReported
+          }
       }
+    }
   }
 }
 
@@ -679,14 +773,17 @@ fn resolve_push_now(
 /// want or the budget runs out; return the last lookup. The proc actor
 /// caches publishes as they arrive, idle or mid-request, so nothing
 /// needs to drain inside it.
+/// The Bool: the wait ended because `silent()` held (#46), before what
+/// we wanted came.
 fn await_lookup(
   file_uri: String,
   server_id: String,
   pid: Pid,
   until_ms: Int,
   fresh_only fresh_only: Bool,
-) -> diagnostics_cache.Lookup {
-  poll_lookup(file_uri, server_id, pid, until_ms, fresh_only)
+  silent silent: fn() -> Bool,
+) -> #(diagnostics_cache.Lookup, Bool) {
+  poll_lookup(file_uri, server_id, pid, until_ms, fresh_only, silent)
 }
 
 fn poll_lookup(
@@ -695,7 +792,8 @@ fn poll_lookup(
   pid: Pid,
   deadline_ms: Int,
   fresh_only: Bool,
-) -> diagnostics_cache.Lookup {
+  silent: fn() -> Bool,
+) -> #(diagnostics_cache.Lookup, Bool) {
   // The clock is read before the lookup, so the last lookup comes after
   // the deadline: when the deadline is the end of a settle window, that
   // lookup already counts the window as passed.
@@ -706,11 +804,13 @@ fn poll_lookup(
     diagnostics_cache.CarriedOver(_), False -> True
     _, _ -> False
   }
-  case wanted || expired {
-    True -> current
-    False -> {
+  case wanted, silent(), expired {
+    True, _, _ -> #(current, False)
+    False, True, _ -> #(current, True)
+    False, False, True -> #(current, False)
+    False, False, False -> {
       process.sleep(poll_step_ms)
-      poll_lookup(file_uri, server_id, pid, deadline_ms, fresh_only)
+      poll_lookup(file_uri, server_id, pid, deadline_ms, fresh_only, silent)
     }
   }
 }
@@ -745,8 +845,44 @@ fn push_result(
           [],
         ),
       )
+    SilentEntry(params, ever_published) ->
+      Diagnostics(
+        uri: file_uri,
+        body_json: silent_envelope(
+          tool_helpers.json_encode(params),
+          ever_published,
+        ),
+      )
     NotReported -> NoDiagnosticsObserved(uri: file_uri)
   }
+}
+
+/// `{"uri": …, "diagnostics": []}` as a decoded term.
+fn synthesized_none(file_uri: String) -> Result(Dynamic, Nil) {
+  case json.parse(synthesized_params(file_uri, "[]"), decode.dynamic) {
+    Ok(none) -> Ok(none)
+    Error(_) -> Error(Nil)
+  }
+}
+
+/// #46: an answer taken from the server's silence says so, briefly.
+fn silent_envelope(params_json: String, ever_published: Bool) -> String {
+  let note = case ever_published {
+    True ->
+      "The server published nothing since this file was opened; it "
+      <> "publishes only when a file's diagnostics change, so its last set "
+      <> "is taken as current."
+    False ->
+      "The server has published nothing for this file since it was opened; "
+      <> "it publishes nothing for a file without problems, so none are "
+      <> "taken as current."
+  }
+  "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
+  <> "\"params\":"
+  <> params_json
+  <> ",\"pharos\":"
+  <> json.to_string(json.object([#("assumed_current", json.string(note))]))
+  <> "}"
 }
 
 fn items_from_params(params: Dynamic) -> Result(String, String) {
@@ -953,7 +1089,7 @@ fn tsserver_result(
           deadline_ms,
         )
       {
-        FreshEntry(params) | CarriedEntry(params) ->
+        FreshEntry(params) | CarriedEntry(params) | SilentEntry(params, _) ->
           Diagnostics(
             uri: file_uri,
             body_json: publish_envelope(

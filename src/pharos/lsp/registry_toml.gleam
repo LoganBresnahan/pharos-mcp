@@ -165,6 +165,10 @@ fn render_server(language_id: String, server: ServerConfig) -> String {
     "empty_publish_settle_ms = "
       <> int.to_string(int.max(server.empty_publish_settle_ms, 0)),
     "open_settle_ms = " <> int.to_string(int.max(server.open_settle_ms, 0)),
+    "silence_settle_ms = "
+      <> int.to_string(int.max(server.silence_settle_ms, 0)),
+    "silence_open_floor_ms = "
+      <> int.to_string(int.max(server.silence_open_floor_ms, 0)),
     case server.full_change_as_range {
       None ->
         "# full_change_as_range unset: ranged for an Incremental server, whole text for Full (ADR-038)"

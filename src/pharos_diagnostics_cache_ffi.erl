@@ -55,6 +55,7 @@
          settle_left/2, progress/2, progress_quiet/5,
          progress_active/2, sync_age_ms/3, publish_age_ms/3,
          mark_opened/3, last_sync_was_open/3, first_publish_age_ms/3, first_open_age_ms/1,
+         mark_assumed_clean/3, assumed_clean/3,
          progress_ended_within/2]).
 
 -define(TABLE, pharos_diagnostics_cache).
@@ -204,7 +205,22 @@ mark_closed(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
     true = ets:insert(?SYNCED, {{Uri, ServerId, self()}, seq(), closed}),
     %% #45: a reopen records its own open.
     ets:delete(?PROGRESS, {opened, Uri, ServerId, self()}),
+    %% #46: and gets its own answer after it.
+    ets:delete(?PROGRESS, {assumed_clean, Uri, ServerId, self()}),
     nil.
+
+%% #46. get_diagnostics answered `[]` for `Uri0` from the server's silence
+%% after its open (lua-language-server publishes nothing for a file clean
+%% from its open). Not a publish: nothing reads it as fresh. It only lets
+%% a later question on the still-unpublished file wait the usual settle
+%% for a publish and answer `[]` marked carried over, not wait out its
+%% whole timeout.
+mark_assumed_clean(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
+    true = ets:insert(?PROGRESS, {{assumed_clean, key(Uri0), ServerId, Pid}, true}),
+    nil.
+
+assumed_clean(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
+    ets:member(?PROGRESS, {assumed_clean, key(Uri0), ServerId, Pid}).
 
 %% reached | pending | failed: has `Pid` written the document's sync at
 %% `Version` (or later), or closed it since?
@@ -310,6 +326,7 @@ forget_proc(Pid) ->
     ets:match_delete(?PROGRESS, {{provisional, '_', '_', Pid}, '_'}),
     ets:match_delete(?PROGRESS, {{published, '_', '_', Pid}, '_'}),
     ets:match_delete(?PROGRESS, {{opened, '_', '_', Pid}, '_'}),
+    ets:match_delete(?PROGRESS, {{assumed_clean, '_', '_', Pid}, '_'}),
     ets:match_delete(?PROGRESS, {{first_pub, '_', '_', Pid}, '_'}),
     ets:delete(?PROGRESS, {versioned, Pid}),
     ets:delete(?PROGRESS, {first_open, Pid}),

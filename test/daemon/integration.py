@@ -605,6 +605,86 @@ def t_reap_on_stop(sb):
     wait_until(lambda: not alive(grandchild), 10, "the grandchild to be reaped at stop")
 
 
+def t_silence_is_settled(sb):
+    """#46: lua-language-server publishes nothing for a file clean from its
+    open, so get_diagnostics waited its whole timeout. No publish since the
+    open, once the open is silence_open_floor_ms old and no progress runs,
+    now means "clean". After an edit silence doesn't count (Logan's option
+    (1)): the old wait, then the last set marked carried over."""
+    sb.write_toml('diagnostics_mode = "push"\nsilence_settle_ms = 600\nsilence_open_floor_ms = 2000\n')
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push-silent"})
+    a.initialize()
+    uri = stub_file(sb, "quiet.stub", "all fine\n")
+    path = uri[len("file://"):]
+    t0 = time.time()
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    took = time.time() - t0
+    check('"diagnostics":[]' in d and "assumed_current" in d and took < 4.5,
+          "clean open: %.1fs %s" % (took, d[-300:]))
+    # Still clean after an edit: carried over `[]` after the settle (~2 s),
+    # not the whole timeout, and never "current".
+    open(path, "w").write("all fine\nstill fine\n")
+    t0 = time.time()
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    took = time.time() - t0
+    check('"diagnostics":[]' in d and "carried_over" in d and "assumed_current" not in d and took < 4,
+          "clean edit: %.1fs %s" % (took, d[-300:]))
+    # An error comes: answered fresh.
+    open(path, "w").write("ERROR here\n")
+    d = a.tool(12, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    check("stub error on line 0" in d and "assumed_current" not in d and "carried_over" not in d,
+          "error: %s" % d[-300:])
+    # A change that leaves it: carried over, not "current".
+    open(path, "w").write("ERROR here\nmore\n")
+    d = a.tool(13, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    check("stub error on line 0" in d and "carried_over" in d and "assumed_current" not in d,
+          "unchanged: %s" % d[-300:])
+
+
+def t_silence_waits_out_the_progress_end(sb):
+    """#46 B2 (verifier-two): lua-language-server ends its workspace load,
+    then spends 0.5-0.9 s diagnosing a big opened file before publishing,
+    with no progress running. The floor counted from the didOpen only, so a
+    file with problems came back `[]` as current. It now counts from the
+    last progress end too: here the publish lands ~0.9 s after the index
+    progress ends, and the answer has the error."""
+    sb.write_toml('diagnostics_mode = "push"\nsilence_settle_ms = 600\nsilence_open_floor_ms = 2000\n')
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push-silent", "STUB_LSP_SILENT_OPEN_MS": "3900",
+                  "STUB_LSP_INDEX_PROGRESS": "1", "STUB_LSP_INDEX_DELAY_MS": "3000"})
+    a.initialize()
+    uri = stub_file(sb, "big_cold.stub", "ERROR here\n")
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 10000})
+    check("stub error on line 0" in d and "assumed_current" not in d, "false clean after the progress: %s" % d[-300:])
+
+
+def t_silence_never_claims_a_late_edit(sb):
+    """#46 B1 (verifier-two): lua-language-server published a change 1.33 s
+    after it on Kong with no load. With a 600 ms silence after edits, the
+    old set came back as current. After an edit silence doesn't count: an
+    error whose publish comes 1 s late is answered, never `[]` as current."""
+    sb.write_toml('diagnostics_mode = "push"\nsilence_settle_ms = 600\nsilence_open_floor_ms = 2000\n')
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push-silent", "STUB_LSP_SILENT_CHANGE_MS": "1000"})
+    a.initialize()
+    uri = stub_file(sb, "late_edit.stub", "all fine\n")
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    check("assumed_current" in d, "clean open: %s" % d[-200:])
+    open(uri[len("file://"):], "w").write("ERROR now\n")
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    check("stub error on line 0" in d and "assumed_current" not in d, "late edit claimed: %s" % d[-300:])
+
+
+def t_silence_waits_out_the_open(sb):
+    """#46: lua-language-server's first publish after an open can come
+    ~0.9 s later. A file with an error, its publish 1 s after the open,
+    must not come back [] (the floor is 2 s)."""
+    sb.write_toml('diagnostics_mode = "push"\nsilence_settle_ms = 600\nsilence_open_floor_ms = 2000\n')
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push-silent", "STUB_LSP_SILENT_OPEN_MS": "1000"})
+    a.initialize()
+    uri = stub_file(sb, "late.stub", "ERROR at once\n")
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 8000})
+    check("stub error on line 0" in d, "false clean after open: %s" % d[-300:])
+
+
 def t_daemon_stop_waits_for_exit(sb):
     """Polish 5: `pharos daemon stop` returned as soon as the daemon
     answered, ~1.3 s before it had gone, so a restart right after could
@@ -2765,6 +2845,10 @@ SCENARIOS = [
     ("find_symbol_caps_its_drills", t_find_symbol_caps_its_drills),
     ("find_symbol_perl_package_layout", t_find_symbol_perl_package_layout),
     ("find_symbol_perl_namespaced_packages", t_find_symbol_perl_namespaced_packages),
+    ("silence_is_settled", t_silence_is_settled),
+    ("silence_waits_out_the_open", t_silence_waits_out_the_open),
+    ("silence_never_claims_a_late_edit", t_silence_never_claims_a_late_edit),
+    ("silence_waits_out_the_progress_end", t_silence_waits_out_the_progress_end),
     ("idle_stop_shuts_servers_down", t_idle_stop_shuts_servers_down),
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),

@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a second package in its file like `Tie::StdHash/TIEHASH`) drills that package's file and is
   found, where it wasn't before; a bare sub name from another file gets the advice to ask
   `Package/sub` or pass scope_uri (#51, ADR-026 amendment).
+- get_diagnostics on lua-language-server answers a file clean from its open in about 2 s, marked
+  `assumed_current`, instead of waiting its whole timeout: the server publishes nothing for such
+  a file. That holds once its workspace is loaded and diagnosed; before then (about 30 s on a
+  project the size of Kong) the answer waits as before. After an edit of it, still clean, the answer is `[]` marked carried over in about 2 s.
+  After any edit silence doesn't count: a change can publish over a second later, so the answer
+  waits as before (`silence_settle_ms`, `silence_open_floor_ms`; #46, ADR-038 amendment).
+- get_diagnostics on lua-language-server no longer answers the first, partial or stale phase of
+  a change: it publishes a change in phases, up to 0.7 s apart on a large project, and pharos
+  now waits for 1 s of quiet after its latest publish (`publish_settle_ms`; #46).
 - `pharos daemon stop` returns once the daemon has exited, not as soon as it answered (about
   1.3 s earlier), so a restart right after can't overlap the old daemon. It waits up to 10 s,
   then says the daemon is still stopping and exits 1.

@@ -133,6 +133,10 @@ pub type ServerOverride {
     empty_publish_settle_ms: Option(Int),
     /// #45. The first answer after a didOpen waits this long of quiet.
     open_settle_ms: Option(Int),
+    /// #46. Silence after a sync taken as "unchanged".
+    silence_settle_ms: Option(Int),
+    /// #46. The same, at least this long after a didOpen.
+    silence_open_floor_ms: Option(Int),
     /// ADR-038 amendment (A). true: send changes as a ranged
     /// whole-document replace; false: the range-less full text. Unset:
     /// the form the server's sync kind asks for.
@@ -241,6 +245,10 @@ pub type LanguageOverride {
     empty_publish_settle_ms: Option(Int),
     /// #45. The first answer after a didOpen waits this long of quiet.
     open_settle_ms: Option(Int),
+    /// #46. Silence after a sync taken as "unchanged".
+    silence_settle_ms: Option(Int),
+    /// #46. The same, at least this long after a didOpen.
+    silence_open_floor_ms: Option(Int),
     /// ADR-038 amendment (A). true: send changes as a ranged
     /// whole-document replace; false: the range-less full text. Unset:
     /// the form the server's sync kind asks for.
@@ -1290,6 +1298,8 @@ fn decode_language_override(value: Dynamic) -> LanguageOverride {
       "empty_publish_settle_ms",
     ),
     open_settle_ms: decode_optional_int(value, "open_settle_ms"),
+    silence_settle_ms: decode_optional_int(value, "silence_settle_ms"),
+    silence_open_floor_ms: decode_optional_int(value, "silence_open_floor_ms"),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     generic_names_carry_params: decode_optional_bool(
       value,
@@ -1458,6 +1468,8 @@ fn decode_server_override(value: Dynamic) -> ServerOverride {
       "empty_publish_settle_ms",
     ),
     open_settle_ms: decode_optional_int(value, "open_settle_ms"),
+    silence_settle_ms: decode_optional_int(value, "silence_settle_ms"),
+    silence_open_floor_ms: decode_optional_int(value, "silence_open_floor_ms"),
     full_change_as_range: decode_optional_bool(value, "full_change_as_range"),
     generic_names_carry_params: decode_optional_bool(
       value,

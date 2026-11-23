@@ -75,6 +75,11 @@ version, applies didOpen / didChange / didClose, and logs what it got:
                               the first, empty set has no version.
                               "push-interim-nov" (#45, jdtls as it is):
                               neither publish has a version.
+                              "push-silent" (#46, lua-language-server):
+                              nothing for a file clean from its open or
+                              a change that leaves its set as it was;
+                              STUB_LSP_SILENT_OPEN_MS delays the open's
+                              publish, STUB_LSP_SILENT_CHANGE_MS a change's
                               "push-open-late" (#45, perlnavigator): after
                               a didOpen, [] and the real set PHASE_MS
                               later, both without a version; after a
@@ -727,6 +732,23 @@ def maybe_publish(stdout, uri):
         timer.start()
         return
     if mode == "push-suppress" and LAST_PUBLISHED.get(uri) == diagnostics:
+        return
+    if mode == "push-silent":
+        # #46, lua-language-server: nothing for a file clean from its open,
+        # nothing when the set didn't change; the open's publish, when
+        # there is one, STUB_LSP_SILENT_OPEN_MS later.
+        if LAST_PUBLISHED.get(uri, []) == diagnostics:
+            return
+        LAST_PUBLISHED[uri] = diagnostics
+        params = {"uri": published_uri(uri), "diagnostics": diagnostics, "version": doc["version"]}
+        delay = int(os.environ.get("STUB_LSP_SILENT_OPEN_MS" if opened else "STUB_LSP_SILENT_CHANGE_MS", "0")) / 1000.0
+        msg = {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": params}
+        if delay:
+            timer = threading.Timer(delay, lambda: write_message(stdout, msg))
+            timer.daemon = True
+            timer.start()
+        else:
+            write_message(stdout, msg)
         return
     LAST_PUBLISHED[uri] = diagnostics
     params = {"uri": published_uri(uri), "diagnostics": diagnostics}

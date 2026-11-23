@@ -377,7 +377,25 @@ answer taken between the steps was unmarked and wrong (verifier's sweep on 74352
   and answers the latest. If the deadline comes first, the latest is answered marked as carried
   over. Bundled: elp 50 ms (it publishes `[]` then the real set at the same version on 280 of
   288 edits, at most 7 ms apart; pharos answered the `[]` about 5% of the time) and
-  perlnavigator 100 ms (`perl -c`'s set, then one with Perl::Critic's, at most 58 ms apart).
+  perlnavigator 100 ms (`perl -c`'s set, then one with Perl::Critic's, at most 58 ms apart),
+  and, since #46, lua-language-server 1000 ms (a partial or stale set, then the full one: on
+  Kong up to 0.4 s apart quiet and at load ~4, 0.7 s with every core busy; 1-6 ms on a small
+  project; verifier-two saw its first phase answered in 23 of 64 answers at 0).
+
+  lua-language-server's largest gap between the phases of one change (raw, 2026-11-22; burners
+  stopped by PID):
+
+  | project | quiet | 4 busy loops | 12 busy loops (every core of 8) |
+  |---|---|---|---|
+  | small (2 files), 12 changes | 2 ms | 2 ms (load 2.5) | 6 ms (load 7.8) |
+  | Kong, kong/db/schema/init.lua, 8 changes | 397 ms (load 2.9) | 400 ms (load 4.1) | 704 ms (load 11.2) |
+
+  1000 ms is 2.5× the quiet and load-4 worst and 1.4× the saturated one, half the 2 s
+  carried-over wait (Logan: correct before fast; 800 was the faster option). Every lua answer
+  after a publish pays it, small projects included. A limit: at twice as many busy loops as
+  cores (16 on 8, load ~9), verifier-two saw phase gaps of 0.9-1.6 s on settled Kong opens, and
+  2 of 8 answered a partial set marked fresh (kong/init.lua 15 of 27, runloop/handler.lua 14 of
+  32); quiet and at 8 loops, none. An adaptive settle is #54, after 0.4.0.
   perlnavigator also repeats its set about every 300 ms, so its value must stay well under
   that: at 500 ms the wait ran past the repeats, about 800 ms per answer. Every other server
   has 0 and is unchanged.
@@ -416,6 +434,45 @@ Two more cases, each a per-server value (Logan's choice, polish 2):
   warnings are enabled" stays on line 3 after edits move the code; a fresh open reports it on
   its new line: 15 of 15 edits in verifier's chain, on every build). pharos answers what the
   server publishes, so those entries can point at a stale line; `perl -c`'s own entries move.
+
+**Amendment (#46, 2026-11-22): silence after an open, lua-language-server.** lua-language-server
+publishes nothing for a file clean from its open, and nothing after a change that leaves a file's
+diagnostics as they were (ranged or range-less), so `get_diagnostics` waited its whole timeout on
+a clean file and answered carried over after ~2 s on an unchanged one. It has no pull diagnostics
+(no `diagnosticProvider`, none registered dynamically, `textDocument/diagnostic` answers -32601),
+so a timer is all pharos has.
+
+Logan's option (1): silence counts only after the open. With `silence_settle_ms` set, no publish
+since the document's didOpen counts as "clean" once the open and the last progress end are both
+`silence_open_floor_ms` old and no progress is running; then the answer is `[]` (or a set
+published before the open), marked `pharos.assumed_current`. After an edit silence never counts:
+the wait is the old one, and with no publish the last set is answered marked carried over. A file
+answered `[]` that way and still unpublished is recorded as assumed clean (not as a publish), so
+an edit of it waits the settle and answers `[]` carried over in ~2 s, not its whole timeout.
+
+Why not after edits: a timer can't tell "unchanged" from "not yet". Logan first chose a 600 ms
+silence after edits too (option (a)); verifier-two's review found lua-language-server publishing
+a change 1.33 s after it on Kong with no load (2 of 3 first edits of a 78 KB file), 0.94 s at
+load ~25, and pharos noticing a publish on the wire up to 0.56 s late under load; a proxy
+delaying publishes past ~0.75 s turned every error edit into the old set answered as current
+(8 of 8). Each was a stale set claimed current, the one wrong answer the rule must not give.
+
+Measured for the open (raw lua-language-server, a small project and Kong): an open's first publish
+comes 623-905 ms after it with no progress on a small project (625-636 ms at load ~4, 873-1423 ms
+with every core of 8 busy; a reopen after close up to 1.03 s); on Kong nothing for ~830 ms, then
+"Loading workspace" progress to 4.3-5 s (15-23 s with every core busy), and the publish 90-130 ms
+after it ends (129-340 ms busy), for a 4-line file. A big file takes longer: verifier-two's cold
+opens of Kong's 2691-line kong/db/schema/init.lua published 488-584 ms after the load ended quiet
+and 590-908 ms with 8 busy loops. The first version counted the floor from the didOpen only and
+600 ms after a progress end, so that file came back `[]` as current (4 of 5 runs loaded, 1 of 9
+quiet; #46 B2). The floor now counts from the later of the open and the last progress end, 2000
+ms, over twice the worst gap; "Diagnosing workspace" begins 1.1-1.4 s after the load ends and
+holds silence off from then. Small cold opens of a file with errors (up to 32 busy loops, load
+~28) never came back `[]` either. Limits: while
+"Diagnosing workspace" progress runs (Kong: until ~25-30 s after start) silence doesn't count, so
+a clean file there waits as before; and on a machine slower than these, a file with problems whose
+first publish comes after the floor would be answered clean; `silence_open_floor_ms` can be
+raised for that. Bundled: lua-language-server 600 and 2000, others 0.
 
 rust-analyzer needed no value: each edit publishes twice about 90 ms apart, and
 #30's save-check grace already holds the answer for the second (24 of 24 right).
