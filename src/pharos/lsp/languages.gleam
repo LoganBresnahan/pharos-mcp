@@ -823,7 +823,12 @@ fn elixir() -> LanguageConfig {
         initialize_timeout_ms: None,
         warm_probe: ProbeWorkspaceSymbol(""),
         lazy_workspace_index_ms: 0,
-        save_check_grace_ms: 0,
+        // #60: next-ls compiles the project after a didSave and publishes
+        // when the compile ends (~3 s on geex), its "Compiling" progress
+        // beginning ~5 ms after the save, after the one check pharos made
+        // before waiting: the old set was answered carried over. 100 ms
+        // keeps the check looking until the compile's progress begins.
+        save_check_grace_ms: 100,
         publish_settle_ms: 0,
         empty_publish_settle_ms: 0,
         open_settle_ms: 0,

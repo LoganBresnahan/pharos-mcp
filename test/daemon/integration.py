@@ -1832,6 +1832,34 @@ def _phased_answers_with(sb, mode, toml, phase_ms):
     return wrong
 
 
+def t_compile_after_save_is_waited_for(sb):
+    """#60: next-ls compiles after a didSave and publishes when the compile
+    ends; its "Compiling" progress begins ~5 ms after the save, after the
+    one check pharos made before waiting, so a fix's answer was the old
+    error, carried over. Its save_check_grace_ms (100) keeps the check
+    looking: the answer is the new set. The stub stands in for next-ls;
+    the language's bundled values are kept."""
+    with open(os.path.join(sb.fixture, ".pharos.toml"), "w") as f:
+        f.write('[languages.elixir]\nroot_markers = ["stub.root"]\ncommand = "%s"\n' % STUB)
+    path = os.path.join(sb.fixture, "app.ex")
+    with open(path, "w") as f:
+        f.write("defmodule App do\n  ERROR here\nend\n")
+    uri = "file://" + path
+    # 3 s, past the 2 s window a carried-over set waits for a fresh one
+    # (next-ls took 3.2 s on geex).
+    a = sb.start({"STUB_LSP_COMPILE_ON_SAVE": "3000", "STUB_LSP_SYNC_SAVE": "true"})
+    a.initialize()
+    d = a.tool(10, "get_diagnostics", {"uri": uri, "timeout_ms": 6000})
+    check("stub error on line 1" in d, "the error: %s" % d[-300:])
+    with open(path, "w") as f:
+        f.write("defmodule App do\n  :ok\nend\n")
+    t0 = time.time()
+    d = a.tool(11, "get_diagnostics", {"uri": uri, "timeout_ms": 6000})
+    took = time.time() - t0
+    check('"diagnostics":[]' in d and "carried_over" not in d and "stub error" not in d,
+          "after the fix (%.1fs): %s" % (took, d[-300:]))
+
+
 def t_phased_publish_settles(sb):
     """#45: elp publishes [] and then the real set, at the same version. An
     answer taken from the first said "no errors", unmarked. With the
@@ -3089,6 +3117,7 @@ SCENARIOS = [
     ("idle_stop_shuts_servers_down", t_idle_stop_shuts_servers_down),
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),
+    ("compile_after_save_is_waited_for", t_compile_after_save_is_waited_for),
     ("unversioned_interim_empty_is_provisional", t_unversioned_interim_empty_is_provisional),
     ("interim_empty_on_a_server_that_never_versions", t_interim_empty_on_a_server_that_never_versions),
     ("first_answer_after_open_settles", t_first_answer_after_open_settles),

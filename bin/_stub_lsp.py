@@ -214,6 +214,11 @@ A check on save, like rust-analyzer's cargo check (#30):
                               current text's diagnostics and end it. Needs
                               STUB_LSP_SYNC_SAVE so pharos sends didSave,
                               and the client's window.workDoneProgress
+  STUB_LSP_COMPILE_ON_SAVE=ms next-ls's shape (#60): publish on didOpen; on
+                              didChange nothing; on didSave begin a progress
+                              "Compiling" 5 ms later (after pharos's first
+                              check) and `ms` after the save publish the
+                              current text's set and end it
   STUB_LSP_INDEX_DELAY_MS=ms  workspace/symbol answers [] until `ms` after
                               `initialized` (a cold index, #27)
   STUB_LSP_INDEX_PROGRESS=1   with STUB_LSP_INDEX_DELAY_MS: at the first
@@ -411,6 +416,37 @@ def check_on_save(stdout, method, uri):
             write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
                                    "params": {"token": "stub/check", "value": {"kind": "end"}}})
         threading.Timer(delay, finish).start()
+
+
+def compile_on_save(stdout, method, uri):
+    """STUB_LSP_COMPILE_ON_SAVE: next-ls's compile after a save (#60)."""
+    doc = DOCS.get(uri)
+    if doc is None:
+        return
+    if method == "textDocument/didOpen":
+        write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                               "params": {"uri": uri, "version": doc["version"],
+                                          "diagnostics": stub_diagnostics(doc["text"])}})
+    elif method == "textDocument/didSave":
+        total = int(os.environ["STUB_LSP_COMPILE_ON_SAVE"]) / 1000.0
+
+        def begin():
+            write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
+                                   "params": {"token": "stub/compile",
+                                              "value": {"kind": "begin", "title": "Compiling"}}})
+
+        def finish():
+            d = DOCS.get(uri)
+            if d is not None:
+                write_message(stdout, {"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                                       "params": {"uri": uri, "version": d["version"],
+                                                  "diagnostics": stub_diagnostics(d["text"])}})
+            write_message(stdout, {"jsonrpc": "2.0", "method": "$/progress",
+                                   "params": {"token": "stub/compile", "value": {"kind": "end"}}})
+        for delay, fn in ((0.005, begin), (total, finish)):
+            timer = threading.Timer(delay, fn)
+            timer.daemon = True
+            timer.start()
 
 
 def after_initialized(stdout):
@@ -1296,12 +1332,17 @@ def main():
             maybe_publish(stdout, uri)
             if os.environ.get("STUB_LSP_CHECK_ON_SAVE"):
                 check_on_save(stdout, method, uri)
+            if os.environ.get("STUB_LSP_COMPILE_ON_SAVE"):
+                compile_on_save(stdout, method, uri)
         elif method == "textDocument/didClose":
             apply_sync(method, msg.get("params") or {})
         elif method == "textDocument/didSave":
             if os.environ.get("STUB_LSP_CHECK_ON_SAVE"):
                 uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
                 check_on_save(stdout, method, uri)
+            if os.environ.get("STUB_LSP_COMPILE_ON_SAVE"):
+                uri = ((msg.get("params") or {}).get("textDocument") or {}).get("uri")
+                compile_on_save(stdout, method, uri)
             continue
         elif method == "workspace/symbol" and os.environ.get("STUB_LSP_WORKSPACE_SYMBOL", "none") != "none":
             write_message(stdout, handle_workspace_symbol(msg))

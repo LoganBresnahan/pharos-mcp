@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks were lost ends as "no publish", not as the close's `[]` (`empty_after_close_is_clear`);
   and the asked file's didOpen now goes after the other documents' syncs in a batch, so a
   change elp applies after it can't cancel its check where no didSave follows.
+- get_diagnostics on next-ls after a fix answers the set its compile publishes, not the old
+  error carried over: next-ls compiles after a save (~3 s), and its compile's progress began
+  just after pharos's first look (`save_check_grace_ms` 100; #60).
 - get_diagnostics on lua-language-server no longer answers the first, partial or stale phase of
   a change: it publishes a change in phases, up to 0.7 s apart on a large project, and pharos
   now waits for 1 s of quiet after its latest publish (`publish_settle_ms`; #46).
