@@ -2016,6 +2016,47 @@ def t_find_symbol_null_result(sb):
     check('"matches":[]' in out.replace(" ", ""), "workspace_symbols: %s" % out[-300:])
 
 
+def t_find_symbol_caps_its_drills(sb):
+    """#51: pyright's substring search named 1186 files for `get`, and
+    find_symbol drilled every one (19.6 s). It now drills scope_uri, then
+    files with a hit named exactly the query, then ones starting with it,
+    then the rest, at most 16, and says how many it left out. The exact
+    file is drilled first, so it's found whatever the cap leaves out."""
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "substring"})
+    a.initialize()
+    for n in range(25):
+        stub_file(sb, "p%02d.stub" % n, "function get_%d() {\n}\n" % n)
+    for n in range(10):
+        stub_file(sb, "s%02d.stub" % n, "function forget_%d() {\n}\n" % n)
+    stub_file(sb, "zz_target.stub", "function get() {\n}\n")
+    scope = stub_file(sb, "aaa_scope.stub", "nothing here\n")
+    log = os.path.join(sb.fixture, "stub.log")
+    drills = lambda: open(log).read().count("textDocument/documentSymbol") if os.path.exists(log) else 0
+    # An exact hit: drilled first (after scope_uri), so found under the cap.
+    before = drills()
+    r = a.tool(10, "find_symbol", {"name_path": "get", "scope_uri": scope})
+    j = json.loads(r)
+    check(j.get("status") == "single" and "zz_target.stub" in json.dumps(j.get("match"))
+          and "searched 15 of the 36 files" in j.get("files_not_searched", "") and drills() - before <= 16,
+          "exact `get`: %d drills, %s" % (drills() - before, r[:300]))
+    # No exact hit: prefix files, then the rest, 16 in all, and the note.
+    before = drills()
+    r = a.tool(11, "find_symbol", {"name_path": "ge", "scope_uri": scope})
+    j = json.loads(r)
+    check("searched 15 of the 36 files" in j.get("files_not_searched", "") and drills() - before <= 16,
+          "capped `ge`: %d drills, %s" % (drills() - before, r[-400:]))
+    # The exact tier itself over the cap: 20 files define `put`.
+    for n in range(20):
+        stub_file(sb, "x%02d.stub" % n, "function put() {\n}\n")
+    before = drills()
+    r = a.tool(12, "find_symbol", {"name_path": "put", "scope_uri": scope})
+    j = json.loads(r)
+    check(j.get("status") == "multiple"
+          and "searched 15 of the 20 files the workspace search named" in j.get("files_not_searched", "")
+          and drills() - before <= 16,
+          "capped exact `put`: %d drills, %s" % (drills() - before, r[-300:]))
+
+
 def t_find_symbol_prefers_the_workspace(sb):
     """#29: with jdtls, find_symbol "helper" answered "single" with a JDK
     class `Helper`: the server matches case-insensitively, names methods
@@ -2167,6 +2208,46 @@ def t_elp_module_handle_and_arity(sb):
     edit = a.tool(12, "edit_at_symbol", {"symbol_handle": _handle_of(out), "mode": "insert_after",
                                          "content": "%% appended\n"})
     check("stale handle" not in edit and "error" not in edit.lower()[:80], "edit on util: %s" % edit[-400:])
+
+
+def t_find_symbol_perl_package_layout(sb):
+    """#51: perlnavigator's workspace search returns every package (kind 2)
+    whatever the name, and its outline is flat with a childless package
+    node beside its subs (`FileHandle`, `import`, `pipe`). `Package/sub`
+    now drills the package's file only and finds the sub; a bare sub name
+    gets the modules-only guidance instead of drilling every package."""
+    sb.write_toml("workspace_symbol_modules_only = true\n")
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "modules", "STUB_LSP_SYMBOL_RAW": "1"})
+    a.initialize()
+    stub_file(sb, "util.stub", "sym 4 util ~2\nsym 12 helper\nsym 12 other\n")
+    uri = stub_file(sb, "main.stub", "sym 12 run\n")
+    out = a.tool(10, "find_symbol", {"name_path": "util/helper", "scope_uri": uri})
+    check('"status":"single"' in out and '"full_path":["util","helper"]' in out, "util/helper: %s" % out[-400:])
+    out = a.tool(11, "find_symbol", {"name_path": "helper", "scope_uri": uri})
+    check('"status":"not_found"' in out and "modules only" in out, "bare helper: %s" % out[-400:])
+
+
+def t_find_symbol_perl_namespaced_packages(sb):
+    """#51 B1 (verifier): perlnavigator names a namespaced package in full
+    (`File::Basename`, in Basename.pm) and a file can hold several, each a
+    childless node whose range spans its own subs, while its search names
+    only a file's first package. Each sub nests in the package whose range
+    holds it, whatever the name, and a package the search doesn't name is
+    looked for among those in its namespace, so `Pkg::Name/sub` resolves,
+    to that package's sub."""
+    sb.write_toml("workspace_symbol_modules_only = true\n")
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "packages", "STUB_LSP_SYMBOL_RAW": "1"})
+    a.initialize()
+    stub_file(sb, "Basename.stub", "sym 4 File::Basename ~2\nsym 12 fileparse\nsym 12 basename\n")
+    stub_file(sb, "Hash.stub", "sym 4 Tie::Hash ~2\nsym 12 new\nsym 12 TIEHASH\nsym 4 Tie::StdHash ~5\nsym 12 TIEHASH\nsym 12 STORE\n")
+    uri = stub_file(sb, "main.stub", "sym 12 run\n")
+    out = a.tool(10, "find_symbol", {"name_path": "File::Basename/fileparse", "scope_uri": uri})
+    check('"status":"single"' in out and '"full_path":["File::Basename","fileparse"]' in out, "File::Basename/fileparse: %s" % out[-400:])
+    for i, (pkg, line) in enumerate((("Tie::StdHash", 4), ("Tie::Hash", 2))):
+        out = a.tool(11 + i, "find_symbol", {"name_path": pkg + "/TIEHASH", "scope_uri": uri})
+        j = json.loads(out)
+        check(j.get("status") == "single" and j["match"]["range"]["start"]["line"] == line,
+              "%s/TIEHASH: %s" % (pkg, out[-400:]))
 
 
 def t_find_symbol_fuzzy_only_says_so(sb):
@@ -2681,6 +2762,9 @@ SCENARIOS = [
     ("uri_shapes_teach", t_uri_shapes_teach),
     ("position_encoding_is_converted", t_position_encoding_is_converted),
     ("daemon_stop_waits_for_exit", t_daemon_stop_waits_for_exit),
+    ("find_symbol_caps_its_drills", t_find_symbol_caps_its_drills),
+    ("find_symbol_perl_package_layout", t_find_symbol_perl_package_layout),
+    ("find_symbol_perl_namespaced_packages", t_find_symbol_perl_namespaced_packages),
     ("idle_stop_shuts_servers_down", t_idle_stop_shuts_servers_down),
     ("phased_publish_settles", t_phased_publish_settles),
     ("phased_publish_control", t_phased_publish_control),

@@ -250,6 +250,44 @@ Implementation is pure composition above the existing tools. No new
 FFIs, no new actor types, no new persistent state. The module lives
 at `src/pharos/tools/symbols.gleam` and registers four new MCP tools.
 
+### Amendment (#51, 2026-11-22): a cap on drilled files
+
+find_symbol drilled (documentSymbol) every file the server's workspace search named. On large
+trees that scaled with the search, not the question: pyright's substring search named 1186
+files for `get` (19.6 s), 370 for `render`; perlnavigator's returns all 71 `lib/` packages for
+any name, and each drill runs Perl::Critic (72 drills, ~10 s and load ~18 per call).
+
+Now at most 16 files are drilled per call, in order: scope_uri, files with a hit named exactly
+the query's first segment, files with a hit whose name starts with it, then the rest. Every file
+up to the cap is drilled, with no early stop: a file can hold a symbol named exactly that without
+the search naming it so (HLS's `Version`: ten matches in six files, one an exact hit). When the
+cap leaves files out, the answer says so in `files_not_searched` ("searched 16 of N files the
+workspace search named, exact names first; pass scope_uri … or a fuller name_path").
+
+On a server whose search finds modules only (elp, and now perlnavigator), only scope_uri and the
+modules named exactly the first segment are drilled: a module's members live in its own file.
+perlnavigator's search names one package per file (the first; `Tie::Hash` for Tie/Hash.pm, never
+the `Tie::StdHash` in it), so for an `A::B` with no exact hit the modules in `A::` are drilled
+instead. Its outline is flat SymbolInformation: each package a childless node whose range spans
+its own section, beside the subs (`Tie::Hash` lines 0-243, `Tie::StdHash` 244-256, three
+`TIEHASH`s listed together). Each top-level symbol inside a childless module, namespace or
+package node's range now nests in the innermost one, whatever its name, so `Pkg::Name/sub`
+resolves to that package's sub. A bare sub name (`croak`, `fileparse`) from another file is no
+longer found by drilling every package: it gets the modules-only guidance to ask `Package/sub`
+or pass scope_uri (Logan's "cap the rest and say so"). verifier caught the first version
+matching packages to files by stem, which left every namespaced package (37 of perl5's 73 lib
+.pm files, and nearly all CPAN code) unresolvable.
+
+Measured, before and after (pyright on django, warm): `get` 1186 → 16 drills, 19.6 → 3.0 s;
+`render` 370 → 16, 8.1 → 1.2 s (76 → 47 matches, with the note); `Model/save` 483 → 16, 9.1 →
+1.3 s; `QuerySet/filter` 149 → 16, 4.2 → 1.3 s; every single answer the same file. A cold first
+call stays ~9 s: pyright's own indexing. perlnavigator on perl5, each not found at ~10 s and 72
+drills before: `FileHandle/import`, `File::Basename/fileparse`, `Getopt::Std/getopt`,
+`Tie::Hash/TIEHASH` 2 drills, found in ≤0.3 s warm; `Tie::StdHash/TIEHASH` and
+`Tie::StdScalar/TIESCALAR` (second packages in their files) 7 drills, found, the right package's
+sub; a three-segment `File::Spec::Unix/catfile` resolves to its file. HLS on Cabal: answers
+identical (`Version` ten matches in six files), 3–14 drills, all under the cap.
+
 ## Consequences
 
 What becomes easier:

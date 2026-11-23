@@ -3443,13 +3443,15 @@ fn handle_find_symbol(
           })
         Ok(name_path) ->
           case symbols.find_symbol(pool, scope_uri, name_path, policy) {
-            Ok(resolution) ->
+            Ok(#(resolution, drill_note)) ->
               success_response(id, fn() {
-                // ADR-043: the scan's note in the answer, not a block.
+                // ADR-043: the scan's note in the answer, not a block; #51:
+                // and the drill cap's, when it left files out.
                 tool_text_result(
-                  json.to_string(symbols.resolution_to_json_noted(
+                  json.to_string(symbols.resolution_to_json_full(
                     resolution,
                     answer_notes.take(),
+                    drill_note,
                   )),
                   False,
                 )

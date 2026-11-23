@@ -149,6 +149,10 @@ Symbols (#21):
                               case-insensitively, like jdtls (#29)
   STUB_LSP_SYMBOL_PARAMS=1    documentSymbol names functions with a
                               parameter list, "helper(int)", as jdtls does
+  STUB_LSP_WORKSPACE_SYMBOL=packages  perlnavigator (#51): each file's
+                              first `sym 4` package, kind 2, any query
+  STUB_LSP_WORKSPACE_SYMBOL=substring  pyright (#51): every function whose
+                              name contains the query, any case
   STUB_LSP_WORKSPACE_SYMBOL=modules  elp 1.1 (#40): workspace/symbol
                               answers modules only (kind 2, named after
                               each .stub file); documentSymbol has no
@@ -791,6 +795,42 @@ def handle_workspace_symbol(req):
                         result.append({"name": stem, "kind": 2,
                                        "location": {"uri": "file://" + os.path.join(dirpath, name), "range": rng}})
         return {"jsonrpc": "2.0", "id": req["id"], "result": result}
+    if mode == "packages":
+        # perlnavigator's shape (#51): each .stub file's first package
+        # (`sym 4 NAME` line; it names one per file, never a second package
+        # in it) under the open documents' folders, kind 2, whatever the
+        # query.
+        result = []
+        for folder in {os.path.dirname(uri_path(u)) for u in DOCS}:
+            for dirpath, _, names in os.walk(folder):
+                for name in sorted(names):
+                    if not name.endswith(".stub"):
+                        continue
+                    path = os.path.join(dirpath, name)
+                    for i, line in enumerate(open(path).read().split("\n")):
+                        if line.startswith("sym 4 "):
+                            pkg = line[6:].split(" ~")[0]
+                            rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": 0}}
+                            result.append({"name": pkg, "kind": 2, "location": {"uri": "file://" + path, "range": rng}})
+                            break
+        return {"jsonrpc": "2.0", "id": req["id"], "result": result}
+    if mode == "substring":
+        # pyright's shape (#51): every function whose name contains the
+        # query, case-insensitively, in any .stub file under the open
+        # documents' folders.
+        query = ((req.get("params") or {}).get("query") or "").lower()
+        result = []
+        for folder in {os.path.dirname(uri_path(u)) for u in DOCS}:
+            for dirpath, _, names in os.walk(folder):
+                for name in sorted(names):
+                    if not name.endswith(".stub"):
+                        continue
+                    path = os.path.join(dirpath, name)
+                    for i, fname, line in function_lines(open(path).read()):
+                        if query and query in fname.lower():
+                            rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
+                            result.append({"name": fname, "kind": 12, "location": {"uri": "file://" + path, "range": rng}})
+        return {"jsonrpc": "2.0", "id": req["id"], "result": result}
     if mode == "all":
         # jdtls's shape: every file under the open documents' folders,
         # node_modules included, matched case-insensitively.
@@ -869,14 +909,20 @@ def raw_symbols(text):
     """#50: each `sym KIND NAME` line is a symbol named NAME (spaces
     allowed) of LSP kind KIND; indented two spaces, a child of the last
     unindented one. Lets a test lay symbols out as any server does:
-    gopls's flat `(T).m` methods, rust-analyzer's `impl T` blocks."""
+    gopls's flat `(T).m` methods, rust-analyzer's `impl T` blocks. A
+    trailing ` ~N` ends the symbol's range at line N (#51: perlnavigator's
+    package node spans its own subs, which sit beside it)."""
     out = []
     for i, line in enumerate(text.split("\n")):
         child = line.startswith("  ")
         words = line.strip().split(" ", 2)
         if len(words) < 3 or words[0] != "sym":
             continue
-        rng = {"start": {"line": i, "character": 0}, "end": {"line": i, "character": len(line)}}
+        end = i
+        if " ~" in words[2]:
+            words[2], last = words[2].rsplit(" ~", 1)
+            end = int(last)
+        rng = {"start": {"line": i, "character": 0}, "end": {"line": end, "character": 80}}
         sym = {"name": words[2], "kind": int(words[1]), "range": rng, "selectionRange": rng, "children": []}
         if child and out:
             out[-1]["children"].append(sym)

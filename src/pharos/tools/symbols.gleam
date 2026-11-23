@@ -33,6 +33,7 @@ import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/result
 import gleam/string
 import pharos/lsp/capabilities
@@ -269,12 +270,93 @@ pub type SymbolsError {
 /// Locate symbols by `name_path` within `scope_uri` (any file inside
 /// the target workspace works). Returns the set of matches; the
 /// caller applies the desired `Disambiguation` policy.
+/// #51: at most this many files are drilled (documentSymbol) per
+/// find_symbol call, scope_uri included. pyright's substring search named
+/// 1186 files for `get` (19.6 s); perlnavigator's returns every package
+/// for any name, and each drill runs Perl::Critic (72 drills, ~10 s).
+const drill_cap = 16
+
+/// #51: which files to drill, in order: scope_uri, then files with a hit
+/// named exactly the query's first segment, then files with a hit whose
+/// name starts with it, then the rest; at most `drill_cap`. Every file up
+/// to the cap is drilled: a file can hold a symbol named exactly that
+/// without the search naming it so (HLS's `Version`: ten matches in six
+/// files, only one an exact hit). Also, of the files the search named, how
+/// many were drilled and how many there were (scope_uri not counted
+/// unless the search named it).
+/// `modules_only`: a server whose search finds modules only (elp;
+/// perlnavigator returns every package for any name) drills scope_uri and
+/// the modules named exactly that (or, for `A::B` with none, those in `A::`),
+/// nothing else: a module's members live in its own file, and a bare
+/// name's not-found note says how to ask.
+fn drill_plan(
+  scope_uri: String,
+  hits: List(WorkspaceSymbolRow),
+  head: String,
+  generic: Bool,
+  modules_only: Bool,
+) -> #(List(String), Int, Int) {
+  let bare = fn(name) {
+    case generic {
+      True -> strip_type_params(name)
+      False -> name
+    }
+  }
+  let lower_head = string.lowercase(head)
+  let starts = fn(s: WorkspaceSymbolRow) {
+    string.starts_with(string.lowercase(bare(s.name)), lower_head)
+  }
+  let exact = list.filter(hits, fn(s) { bare(s.name) == head })
+  let ranked = case modules_only {
+    // A file can hold several packages, and perlnavigator's search names
+    // only one per file (`Tie::Hash` for Tie/Hash.pm, never the
+    // `Tie::StdHash` in it): with no module named exactly that, the ones
+    // in the same namespace are drilled instead.
+    True ->
+      case exact, string.split(head, "::") |> list.reverse {
+        [], [_, first, ..more] -> {
+          let namespace =
+            string.join(list.reverse([first, ..more]), "::") <> "::"
+          list.filter(hits, fn(s) { string.starts_with(s.name, namespace) })
+        }
+        _, _ -> exact
+      }
+    False ->
+      list.flatten([
+        exact,
+        list.filter(hits, fn(s) { bare(s.name) != head && starts(s) }),
+        list.filter(hits, fn(s) { !starts(s) }),
+      ])
+  }
+  let named = list.map(ranked, fn(s) { s.uri }) |> list.unique
+  let uris = list.take(list.unique([scope_uri, ..named]), drill_cap)
+  let searched = list.length(list.filter(named, list.contains(uris, _)))
+  #(uris, searched, list.length(named))
+}
+
+/// #51: the answer's note when the cap left files undrilled: `searched`
+/// of the `named` files the workspace search named were drilled, besides
+/// scope_uri.
+fn capped_note(searched: Int, named: Int) -> option.Option(String) {
+  case named > searched {
+    False -> None
+    True ->
+      Some(
+        "searched "
+        <> int.to_string(searched)
+        <> " of the "
+        <> int.to_string(named)
+        <> " files the workspace search named (exact names first), and scope_uri; pass scope_uri in the file that defines it, or a fuller name_path (Type/member), to narrow",
+      )
+  }
+}
+
 pub fn find_symbol(
   pool: Pool,
   scope_uri: String,
   name_path: NamePath,
   policy: Disambiguation,
-) -> Result(Resolution, SymbolsError) {
+) -> Result(#(Resolution, option.Option(String)), SymbolsError) {
   let NamePath(parts) = name_path
   use Nil <- result.try(check_scope(scope_uri))
   // #39: a server that names generic types with their type parameters
@@ -319,40 +401,47 @@ pub fn find_symbol(
       // respond — and still gives the LLM a usable handle for the
       // common "edit a symbol I know lives in this file" workflow.
       use ws_supported <- result.try(workspace_symbol_supported(pool, scope_uri))
-      use #(unique_uris, module_hits) <- result.try(case ws_supported {
-        False -> Ok(#([scope_uri], []))
-        True -> {
-          use ws_results <- result.try(workspace_symbol_query(
-            pool,
-            scope_uri,
-            search_head,
-            default_timeout_ms,
-          ))
-          // Each workspace_symbol result is a `(name, kind,
-          // location.uri)` pointer to a file containing a top-level
-          // match for `head`. Bias toward `scope_uri` first so a
-          // single-file caller hits its target without paying for
-          // unrelated repo-wide candidates.
-          //
-          // Empty result list: some servers advertise
-          // `workspaceSymbolProvider` but never return matches
-          // (jdtls on freshly-opened workspaces; ELP doesn't
-          // workspace-index `.erl` file functions globally; some
-          // language servers return [] until a save event occurs).
-          // Fall back to single-file drill the same way as the
-          // unsupported-capability branch — gives the LLM a usable
-          // resolution against `scope_uri` rather than a misleading
-          // not_found.
-          // scope_uri is always drilled too, first: the server's
-          // workspace search can miss what the scope file defines (jdtls
-          // answered only a JDK class for `helper`, #29).
-          Ok(#(
-            [scope_uri, ..list.map(ws_results, fn(s) { s.uri })]
-              |> list.unique,
-            list.filter(ws_results, fn(s) { s.kind == 2 }),
-          ))
-        }
-      })
+      use #(#(unique_uris, searched, named), module_hits) <- result.try(
+        case ws_supported {
+          False -> Ok(#(#([scope_uri], 0, 0), []))
+          True -> {
+            use ws_results <- result.try(workspace_symbol_query(
+              pool,
+              scope_uri,
+              search_head,
+              default_timeout_ms,
+            ))
+            // Each workspace_symbol result is a `(name, kind,
+            // location.uri)` pointer to a file containing a top-level
+            // match for `head`. Bias toward `scope_uri` first so a
+            // single-file caller hits its target without paying for
+            // unrelated repo-wide candidates.
+            //
+            // Empty result list: some servers advertise
+            // `workspaceSymbolProvider` but never return matches
+            // (jdtls on freshly-opened workspaces; ELP doesn't
+            // workspace-index `.erl` file functions globally; some
+            // language servers return [] until a save event occurs).
+            // Fall back to single-file drill the same way as the
+            // unsupported-capability branch — gives the LLM a usable
+            // resolution against `scope_uri` rather than a misleading
+            // not_found.
+            // scope_uri is always drilled too, first: the server's
+            // workspace search can miss what the scope file defines (jdtls
+            // answered only a JDK class for `helper`, #29).
+            Ok(#(
+              drill_plan(
+                scope_uri,
+                ws_results,
+                search_head,
+                generic,
+                modules_only,
+              ),
+              list.filter(ws_results, fn(s) { s.kind == 2 }),
+            ))
+          }
+        },
+      )
       // workspace_symbol can return URIs that the same LSP cannot
       // open (eg cpp's clangd surfacing `/usr/include/...` matches —
       // outside the fixture's workspace root). Swallow SessionFailed
@@ -366,36 +455,28 @@ pub fn find_symbol(
       // wider net safely (LLM disambiguates via `matched_via`);
       // results are capped at `fuzzy_match_cap` to keep payloads
       // bounded.
-      use trees <- result.try(
-        list.try_map(unique_uris, fn(uri) {
+      // #40, #50: each file's outline read as one tree of containers, so a
+      // `Type/member` or `module/function` path drills the same way on
+      // every server.
+      let drill_files = fn(uris) {
+        list.try_map(uris, fn(uri) {
           case document_symbol_query(pool, uri, default_timeout_ms) {
-            Ok(tree) -> Ok(Some(#(uri, tree)))
+            Ok(tree) -> Ok(Some(#(uri, normalize_tree(uri, tree, module_hits))))
             Error(SessionFailed(_)) -> Ok(None)
             Error(other) -> Error(other)
           }
         })
-        |> result.map(
-          list.filter_map(_, fn(o) {
-            case o {
-              Some(pair) -> Ok(pair)
-              None -> Error(Nil)
-            }
-          }),
-        ),
-      )
-      // #40, #50: each server's layout read as one tree of containers,
-      // so a `Type/member` or `module/function` path drills the same way
-      // on every server.
-      let trees =
-        list.map(trees, fn(pair) {
-          let #(uri, tree) = pair
-          #(uri, normalize_tree(uri, tree, module_hits))
-        })
-      let strict =
+        |> result.map(option.values)
+      }
+      let strict_in = fn(trees) {
         list.flat_map(trees, fn(pair) {
           let #(uri, tree) = pair
           drill(tree, [head, ..rest], [], uri, name_match_strategy)
         })
+      }
+      use trees <- result.try(drill_files(unique_uris))
+      let strict = strict_in(trees)
+      let drill_note = capped_note(searched, named)
       let matches = case strict {
         [] -> {
           let fuzzy =
@@ -481,6 +562,8 @@ pub fn find_symbol(
           ))
         resolution, _ -> Ok(resolution)
       }
+      // #51: and the note when the cap left files out.
+      |> result.map(fn(r) { #(r, drill_note) })
     }
   }
 }
@@ -824,12 +907,79 @@ fn normalize_tree(
 ) -> List(DocumentSymbolDecoded) {
   let tree = attach_members(tree)
   let stem = file_stem(uri)
-  case
-    list.any(module_hits, fn(m) { m.uri == uri && m.name == stem }),
-    list.any(tree, fn(s) { s.name == stem })
-  {
-    True, False -> [module_root(stem, tree)]
-    _, _ -> tree
+  case nest_in_packages(tree) {
+    Ok(nested) -> nested
+    // #40: elp's outline has no module node: a module hit named like the
+    // file makes one.
+    Error(Nil) ->
+      case
+        list.any(module_hits, fn(m) { m.uri == uri && m.name == stem }),
+        list.any(tree, fn(s) { s.name == stem })
+      {
+        True, False -> [module_root(stem, tree)]
+        _, _ -> tree
+      }
+  }
+}
+
+/// #51: perlnavigator's outline is flat: each package is a childless node
+/// (kind 4) whose range spans its own section of the file, beside its subs
+/// (`Tie::Hash` lines 0-243, `Tie::StdHash` 244-256, with three
+/// `TIEHASH`s between them). Each top-level symbol inside a childless
+/// module, namespace or package node's range becomes that node's child
+/// (the innermost one's), so `Package/sub` drills whatever the package's
+/// name and however many a file holds. Error when there's none to nest.
+fn nest_in_packages(
+  tree: List(DocumentSymbolDecoded),
+) -> Result(List(DocumentSymbolDecoded), Nil) {
+  let within = fn(inner: DocumentSymbolDecoded, outer: DocumentSymbolDecoded) {
+    position_le(outer.range.start, inner.range.start)
+    && position_le(inner.range.end, outer.range.end)
+  }
+  let packages =
+    list.filter(tree, fn(s) {
+      s.children == []
+      && { s.kind == 2 || s.kind == 3 || s.kind == 4 }
+      && list.any(tree, fn(o) { o != s && within(o, s) })
+    })
+  case packages {
+    [] -> Error(Nil)
+    _ -> {
+      // The innermost package holding a symbol, if any.
+      let home = fn(s: DocumentSymbolDecoded) {
+        packages
+        |> list.filter(fn(p) { p != s && within(s, p) })
+        |> list.sort(fn(a, b) {
+          case within(a, b) {
+            True -> order.Lt
+            False -> order.Gt
+          }
+        })
+        |> list.first
+      }
+      let homes = list.map(tree, fn(s) { #(s, home(s)) })
+      Ok(
+        list.filter_map(homes, fn(pair) {
+          let #(s, owner) = pair
+          case owner, list.contains(packages, s) {
+            Ok(_), _ -> Error(Nil)
+            Error(Nil), True ->
+              Ok(
+                DocumentSymbolDecoded(
+                  ..s,
+                  children: list.filter_map(homes, fn(h) {
+                    case h.1 {
+                      Ok(p) if p == s -> Ok(h.0)
+                      _ -> Error(Nil)
+                    }
+                  }),
+                ),
+              )
+            Error(Nil), False -> Ok(s)
+          }
+        }),
+      )
+    }
   }
 }
 
@@ -2125,15 +2275,24 @@ pub fn resolution_to_json_noted(
   res: Resolution,
   notes: List(String),
 ) -> json.Json {
-  case notes {
-    [] -> resolution_to_json(res)
-    _ ->
-      json.object(
-        list.append(resolution_fields(res), [
-          #("files_unchecked", json.string(string.join(notes, " "))),
-        ]),
-      )
+  resolution_to_json_full(res, notes, None)
+}
+
+/// Plus #51's `files_not_searched` when the drill cap left files out.
+pub fn resolution_to_json_full(
+  res: Resolution,
+  notes: List(String),
+  drill_note: option.Option(String),
+) -> json.Json {
+  let unchecked = case notes {
+    [] -> []
+    _ -> [#("files_unchecked", json.string(string.join(notes, " ")))]
   }
+  let capped = case drill_note {
+    Some(text) -> [#("files_not_searched", json.string(text))]
+    None -> []
+  }
+  json.object(list.flatten([resolution_fields(res), unchecked, capped]))
 }
 
 pub fn resolution_to_json(res: Resolution) -> json.Json {

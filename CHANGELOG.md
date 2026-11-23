@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.3.5 resolved it against the working directory. The error says what to send instead:
   `file:///absolute/path` (or `file://localhost/absolute/path`, now accepted). Paths given
   to `pharos diagnostics` and the captAInHook payload aren't URIs and are unaffected (#24).
+- find_symbol drills at most 16 files per call: scope_uri, then the files the workspace search
+  named with a symbol named exactly the query, then ones starting with it, then the rest. It
+  used to open every file the search named: pyright's substring search named 1186 files for
+  `get` (19.6 s, now 3.0 s); perlnavigator's names every package for any name (~10 s per call).
+  When files were left out the answer says so (`files_not_searched`). perlnavigator is treated
+  as a modules-only server, like elp: `Package/sub` (`FileHandle/import`, `File::Basename/fileparse`,
+  a second package in its file like `Tie::StdHash/TIEHASH`) drills that package's file and is
+  found, where it wasn't before; a bare sub name from another file gets the advice to ask
+  `Package/sub` or pass scope_uri (#51, ADR-026 amendment).
 - `pharos daemon stop` returns once the daemon has exited, not as soon as it answered (about
   1.3 s earlier), so a restart right after can't overlap the old daemon. It waits up to 10 s,
   then says the daemon is still stopping and exits 1.

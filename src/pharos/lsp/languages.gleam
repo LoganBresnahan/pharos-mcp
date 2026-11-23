@@ -1171,7 +1171,9 @@ fn perl() -> LanguageConfig {
         open_settle_ms: 650,
         full_change_as_range: None,
         generic_names_carry_params: False,
-        workspace_symbol_modules_only: False,
+        // #51: perlnavigator's workspace/symbol returns every package under
+        // lib/ (kind 2) whatever the name asked, never a sub.
+        workspace_symbol_modules_only: True,
         pull_after_change_ms: 0,
         position_encoding: None,
         returned_position_encoding: None,
