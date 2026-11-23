@@ -20,3 +20,11 @@ pub fn rust_impl_types_test() {
   |> should.equal(Ok("Wrapper"))
   symbols.rust_impl_type("implement") |> should.equal(Error(Nil))
 }
+
+pub fn a_trailing_number_is_an_arity_test() {
+  symbols.join_arity(["util", "helper", "1"])
+  |> should.equal(["util", "helper/1"])
+  symbols.join_arity(["helper", "2"]) |> should.equal(["helper/2"])
+  symbols.join_arity(["util", "helper"]) |> should.equal(["util", "helper"])
+  symbols.join_arity(["1"]) |> should.equal(["1"])
+}

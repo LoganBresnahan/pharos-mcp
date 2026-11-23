@@ -253,3 +253,8 @@ pub fn first_open_age_ms(pid: Pid) -> Int
 /// #44: did a progress of proc `pid` end less than `ms` ago?
 @external(erlang, "pharos_diagnostics_cache_ffi", "progress_ended_within")
 pub fn progress_ended_within(pid: Pid, ms: Int) -> Bool
+
+/// #45: ms since the first publish after the latest sync of `uri` on proc
+/// `pid`; -1 if none has come since that sync.
+@external(erlang, "pharos_diagnostics_cache_ffi", "first_publish_age_ms")
+pub fn first_publish_age_ms(uri: String, server_id: String, pid: Pid) -> Int

@@ -14,6 +14,7 @@ pub fn notes_never_say_zero_or_still_scanning_test() {
   [
     watch.FirstPass(3),
     watch.Checked(120, 1400),
+    watch.CheckedSqueezed(120, 1400),
     watch.TooSoon,
     watch.NoTime,
     watch.NotChecked,

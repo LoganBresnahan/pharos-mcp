@@ -252,14 +252,16 @@ pub type ServerConfig {
     /// real set at the same version, perlnavigator's `perl -c` then
     /// Perl::Critic. 0: the first publish is the answer.
     publish_settle_ms: Int,
-    /// #45 polish 2: when the publish an answer would take is empty, wait
-    /// for this long of quiet instead (if longer than
-    /// `publish_settle_ms`): jdtls sometimes publishes an interim `[]`,
-    /// without a version, about 0.5 s before the real set.
+    /// #45: when the publish an answer would take is empty, wait until this
+    /// long after the sync's first publish, then answer the latest (a fixed
+    /// window, not quiet, so a repeat doesn't extend it): jdtls sometimes
+    /// publishes an interim `[]`, without a version, about 0.5 s before
+    /// the real set, and republishes `[]` about 0.95 s after a clean edit.
     empty_publish_settle_ms: Int,
-    /// #45 polish 2: the first answer after a document's didOpen waits for
-    /// this long of quiet instead (if longer): perlnavigator publishes
-    /// `[]` about 35 ms after an open and Perl::Critic's set about 355 ms.
+    /// #45: an answer while the document's latest sync is its didOpen
+    /// waits until this long after the open's first publish (a fixed
+    /// window): perlnavigator publishes at about 35, 340, 1035 and 1345 ms
+    /// after an open, Perl::Critic's findings from the second on.
     open_settle_ms: Int,
     /// ADR-038 amendment (A): the form of a re-sync's didChange. None
     /// (every bundled server): the form the server's sync kind asks for,
@@ -1123,11 +1125,15 @@ fn perl() -> LanguageConfig {
         lazy_workspace_index_ms: 0,
         save_check_grace_ms: 0,
         // #45: perlnavigator publishes perl -c's set and then, within 58 ms,
-        // one with Perl::Critic's too; it repeats the set about every 300 ms,
-        // so the settle must stay well under that.
+        // one with Perl::Critic's too; after an open it publishes at about
+        // 35, 340, 1035 and 1345 ms, then stops, so the settle must stay
+        // well under those gaps.
         publish_settle_ms: 100,
         empty_publish_settle_ms: 0,
-        open_settle_ms: 400,
+        // #45: Critic's set came 299–394 ms after the open's first publish
+        // (verifier); the next repeat about 1 s after it. 650 leaves
+        // about 250 ms past the latest seen and 350 ms before the repeat.
+        open_settle_ms: 650,
         full_change_as_range: None,
         generic_names_carry_params: False,
         workspace_symbol_modules_only: False,

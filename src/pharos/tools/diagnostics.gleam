@@ -470,7 +470,41 @@ fn settle_for(
       }
     False -> 0
   }
-  int.max(settle.publish_ms, int.max(empty, open))
+  int.max(empty, open)
+}
+
+/// #45 polish 3: the empty-set and open waits are a fixed window from the
+/// sync's first publish, not quiet: jdtls republishes `[]` about 0.95 s
+/// after a clean edit, and perlnavigator repeats its set at about 1035
+/// and 1345 ms after an open; with quiet, each repeat started the wait
+/// again (a jdtls clean answer took about 1.05 s, not 0.6). Then the
+/// latest publish is the answer. If the deadline would end the window
+/// first, the latest is answered marked carried over.
+fn settle_window(
+  file_uri: String,
+  server_id: String,
+  pid: Pid,
+  window_ms: Int,
+  deadline_ms: Int,
+  params: Dynamic,
+) -> PushEntry {
+  let latest = fn() {
+    case diagnostics_cache.lookup(file_uri, server_id, pid) {
+      diagnostics_cache.Fresh(newer) -> newer
+      _ -> params
+    }
+  }
+  case diagnostics_cache.first_publish_age_ms(file_uri, server_id, pid) {
+    age if age < 0 || age >= window_ms -> FreshEntry(latest())
+    age ->
+      case now_ms() + window_ms - age > deadline_ms {
+        True -> CarriedEntry(latest())
+        False -> {
+          process.sleep(window_ms - age)
+          FreshEntry(latest())
+        }
+      }
+  }
 }
 
 fn resolve_push(
@@ -491,19 +525,34 @@ fn resolve_push(
   case await_progress_quiet(file_uri, server_id, pid, grace_ms, deadline_ms) {
     True ->
       case resolve_push_now(file_uri, server_id, pid, deadline_ms) {
-        FreshEntry(params) ->
-          case settle_for(settle, params, file_uri, server_id, pid) {
+        FreshEntry(params) -> {
+          let windowed = case
+            settle_for(settle, params, file_uri, server_id, pid)
+          {
             0 -> FreshEntry(params)
-            settle_ms ->
-              settle_publishes(
+            window_ms ->
+              settle_window(
                 file_uri,
                 server_id,
                 pid,
-                settle_ms,
+                window_ms,
                 deadline_ms,
                 params,
               )
           }
+          case windowed, settle.publish_ms {
+            FreshEntry(params), quiet_ms if quiet_ms > 0 ->
+              settle_publishes(
+                file_uri,
+                server_id,
+                pid,
+                quiet_ms,
+                deadline_ms,
+                params,
+              )
+            other, _ -> other
+          }
+        }
         other -> other
       }
     False ->

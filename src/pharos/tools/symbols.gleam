@@ -294,6 +294,13 @@ pub fn find_symbol(
     Some(server) -> server.workspace_symbol_modules_only
     None -> False
   }
+  // #40: elp names a function with its arity (`helper/1`), and its own
+  // form `util/helper/1` read the arity as one more path segment: on a
+  // modules-only server a trailing numeric segment is the arity.
+  let parts = case modules_only {
+    True -> join_arity(parts)
+    False -> parts
+  }
   let name_match_strategy = name_match_strategy_for(generic)
   let name_match_strategy_with_fuzzy =
     name_match_strategy_with_fuzzy_for(generic)
@@ -868,7 +875,10 @@ fn attach_members(
                 Ok(
                   DocumentSymbolDecoded(
                     ..s,
-                    children: list.append(s.children, members),
+                    children: list.append(
+                      s.children,
+                      short_go_names(s.children, members),
+                    ),
                   ),
                 )
               Error(Nil) -> Ok(s)
@@ -876,6 +886,30 @@ fn attach_members(
         }
       })
   }
+}
+
+/// Moved Go methods named `m` instead of `(T).m`, so a path reads
+/// `Box/Get`, not `Box/(Box).Get`; the receiver form stays where `m`
+/// alone would name two of the type's members.
+fn short_go_names(
+  children: List(DocumentSymbolDecoded),
+  members: List(DocumentSymbolDecoded),
+) -> List(DocumentSymbolDecoded) {
+  let short = fn(s: DocumentSymbolDecoded) {
+    case go_receiver(s.name), string.split_once(s.name, ").") {
+      Ok(_), Ok(#(_, method)) -> method
+      _, _ -> s.name
+    }
+  }
+  let taken =
+    list.append(list.map(children, fn(c) { c.name }), list.map(members, short))
+  list.map(members, fn(m) {
+    let name = short(m)
+    case list.count(taken, fn(n) { n == name }) {
+      1 -> DocumentSymbolDecoded(..m, name: name)
+      _ -> m
+    }
+  })
 }
 
 fn add(
@@ -955,6 +989,35 @@ fn skip_angle(text: String, depth: Int) -> String {
     Ok(#(">", rest)), _ -> skip_angle(rest, depth - 1)
     Ok(#(_, rest)), _ -> skip_angle(rest, depth)
     Error(Nil), _ -> ""
+  }
+}
+
+/// The tree as find_symbol reads it, for checking a handle named
+/// `name`: a handle named like the file's module may point at the module
+/// node find_symbol made from a workspace hit (#40), which a re-read of
+/// documentSymbol alone doesn't have.
+fn normalize_for_handle(
+  uri: String,
+  tree: List(DocumentSymbolDecoded),
+  name: String,
+) -> List(DocumentSymbolDecoded) {
+  let stem = file_stem(uri)
+  let hits = case name == stem {
+    True -> [WorkspaceSymbolRow(name: stem, kind: 2, uri: uri)]
+    False -> []
+  }
+  normalize_tree(uri, tree, hits)
+}
+
+/// `[…, "helper", "1"]` → `[…, "helper/1"]`.
+pub fn join_arity(parts: List(String)) -> List(String) {
+  case list.reverse(parts) {
+    [arity, name, ..rest] ->
+      case int.parse(arity) {
+        Ok(_) -> list.reverse([name <> "/" <> arity, ..rest])
+        Error(Nil) -> parts
+      }
+    _ -> parts
   }
 }
 
@@ -1285,6 +1348,9 @@ pub fn edit_at_symbol(
     handle.uri,
     default_timeout_ms,
   ))
+  // Read the tree as find_symbol did (#40): a handle to the module node
+  // pharos makes for an elp file was stale against the raw tree.
+  let tree = normalize_for_handle(handle.uri, tree, handle.name)
   use sym <- result.try(verify_handle(tree, handle))
   // Drift check: recompute body_hash from the freshly-fetched range
   // and compare. Catches external edits that left identity intact

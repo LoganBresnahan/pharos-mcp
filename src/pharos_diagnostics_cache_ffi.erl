@@ -54,7 +54,7 @@
          expect_closed/3, expect_batch/2, forget_proc/1, lookup/4,
          settle_left/2, progress/2, progress_quiet/5,
          progress_active/2, sync_age_ms/3, publish_age_ms/3,
-         mark_opened/3, last_sync_was_open/3, first_open_age_ms/1,
+         mark_opened/3, last_sync_was_open/3, first_publish_age_ms/3, first_open_age_ms/1,
          progress_ended_within/2]).
 
 -define(TABLE, pharos_diagnostics_cache).
@@ -111,6 +111,7 @@ put_publish(Uri0, ServerId, Version, Term) when is_binary(Uri0), is_binary(Serve
         false ->
             put(Uri, ServerId, Term),
             ets:insert(?PROGRESS, {{published, Uri, ServerId, self()}, now_ms()}),
+            note_first_publish(Uri, ServerId),
             Key = {provisional, Uri, ServerId, self()},
             case provisional(Version, Term) of
                 true ->
@@ -201,6 +202,8 @@ mark_failed(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
 mark_closed(Uri0, ServerId) when is_binary(Uri0), is_binary(ServerId) ->
     Uri = key(Uri0),
     true = ets:insert(?SYNCED, {{Uri, ServerId, self()}, seq(), closed}),
+    %% #45: a reopen records its own open.
+    ets:delete(?PROGRESS, {opened, Uri, ServerId, self()}),
     nil.
 
 %% reached | pending | failed: has `Pid` written the document's sync at
@@ -307,6 +310,7 @@ forget_proc(Pid) ->
     ets:match_delete(?PROGRESS, {{provisional, '_', '_', Pid}, '_'}),
     ets:match_delete(?PROGRESS, {{published, '_', '_', Pid}, '_'}),
     ets:match_delete(?PROGRESS, {{opened, '_', '_', Pid}, '_'}),
+    ets:match_delete(?PROGRESS, {{first_pub, '_', '_', Pid}, '_'}),
     ets:delete(?PROGRESS, {versioned, Pid}),
     ets:delete(?PROGRESS, {first_open, Pid}),
     ets:delete(?PROGRESS, {progress_end, Pid}),
@@ -454,4 +458,30 @@ last_sync_was_open(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId
           ets:lookup(?SYNCED, {Uri, ServerId, Pid})} of
         {[{_, V}], [{_, _, V}]} -> true;
         _ -> false
+    end.
+
+%% #45. The latest sync's seq on the calling (or a given) proc; 0 if none.
+sync_seq(Uri, ServerId, Pid) ->
+    case ets:lookup(?SYNCED, {Uri, ServerId, Pid}) of
+        [{_, S, _}] -> S;
+        [] -> 0
+    end.
+
+%% #45. Records the first publish after the latest sync, and when.
+note_first_publish(Uri, ServerId) ->
+    Key = {first_pub, Uri, ServerId, self()},
+    SyncSeq = sync_seq(Uri, ServerId, self()),
+    case ets:lookup(?PROGRESS, Key) of
+        [{_, {Seq, _}}] when Seq > SyncSeq -> ok;
+        _ -> ets:insert(?PROGRESS, {Key, {seq(), now_ms()}})
+    end.
+
+%% #45. ms since the first publish after the latest sync of `Uri0` on proc
+%% `Pid`; -1 if none has come since that sync.
+first_publish_age_ms(Uri0, ServerId, Pid) when is_binary(Uri0), is_binary(ServerId) ->
+    Uri = key(Uri0),
+    SyncSeq = sync_seq(Uri, ServerId, Pid),
+    case ets:lookup(?PROGRESS, {first_pub, Uri, ServerId, Pid}) of
+        [{_, {Seq, Ms}}] when Seq > SyncSeq -> now_ms() - Ms;
+        _ -> -1
     end.

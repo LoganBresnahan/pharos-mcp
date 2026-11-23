@@ -334,7 +334,9 @@ pub fn before_question(
                 notifications: changes_notification(ws, outcome.events, fn() {
                   list.append(option.values([asked_file]), open())
                 }),
-                note: case outcome_progress(outcome) {
+                note: case
+                  outcome_progress(outcome, budget_ms < server.budget_ms)
+                {
                   Ok(progress) -> Some(note(server.root, progress))
                   Error(Nil) -> None
                 },
@@ -398,6 +400,9 @@ pub type Progress {
   /// A pass is under way: `visited` of about `total` directories checked
   /// for this question.
   Checked(visited: Int, total: Int)
+  /// The same, in a scan the question's short timeout squeezed: such
+  /// scans move on through the tree with every question, not every 2 s.
+  CheckedSqueezed(visited: Int, total: Int)
   /// Not scanned: the last scan was under `scan_interval_ms` ago.
   TooSoon
   /// Not scanned: no time left before the question's deadline.
@@ -406,7 +411,7 @@ pub type Progress {
   NotChecked
 }
 
-fn outcome_progress(outcome: Outcome) -> Result(Progress, Nil) {
+fn outcome_progress(outcome: Outcome, squeezed: Bool) -> Result(Progress, Nil) {
   case outcome.coverage, outcome.scanned {
     watch_scan.Complete, _ -> Error(Nil)
     watch_scan.FirstPassRunning(_), False -> Ok(TooSoon)
@@ -414,7 +419,11 @@ fn outcome_progress(outcome: Outcome) -> Result(Progress, Nil) {
     watch_scan.FirstPassRunning(dirs), True -> Ok(FirstPass(dirs))
     watch_scan.Partial(..), False -> Ok(TooSoon)
     watch_scan.Partial(0, _), True -> Ok(NoTime)
-    watch_scan.Partial(visited, total), True -> Ok(Checked(visited, total))
+    watch_scan.Partial(visited, total), True ->
+      case squeezed {
+        True -> Ok(CheckedSqueezed(visited, total))
+        False -> Ok(Checked(visited, total))
+      }
   }
 }
 
@@ -500,6 +509,12 @@ pub fn note(root: String, progress: Progress) -> String {
       <> int.to_string(total)
       <> " directories before this answer and checks more on later questions, at most every "
       <> interval
+    CheckedSqueezed(visited, total) ->
+      "pharos checked "
+      <> int.to_string(visited)
+      <> " of about "
+      <> int.to_string(total)
+      <> " directories before this answer (its short timeout left little time) and checks more with each later question"
     TooSoon ->
       "pharos checks a tree this size at most every "
       <> interval

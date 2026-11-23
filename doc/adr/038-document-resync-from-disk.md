@@ -395,16 +395,24 @@ Two more cases, each a per-server value (Logan's choice, polish 2):
 - **An empty answer waits: `empty_publish_settle_ms`.** jdtls sometimes publishes an interim
   `[]` without a version before the real set (about 0.5 s later, once in 62 edits a second apart,
   verifier-two), and it never versions a publish, so the provisional rule above can't see it.
-  When the publish an answer would take is empty, get_diagnostics waits for that much quiet
-  instead (when longer than `publish_settle_ms`), whatever the previous answer was. Bundled:
-  jdtls 600 ms, which covers the 0.49 s case with room, at that cost on a clean answer only;
-  others 0. With rapid edits the real set can still never come for an edit (1–4% of answers):
+  When the publish an answer would take is empty, get_diagnostics waits until that long after
+  the sync's first publish, whatever the previous answer was, then answers the latest. A fixed
+  window, not quiet: jdtls republishes `[]` about 0.95 s after a clean edit, and with quiet that
+  repeat started the wait again (a clean answer took about 1.05 s, verifier). Bundled: jdtls
+  600 ms, which covers the 0.49 s case with room and ends before the repeat, adding about 0.6 s
+  to a clean answer only; others 0. With rapid edits the real set can still never come for an edit (1–4% of answers):
   then nothing tells that `[]` from a clean result.
 - **The open's own answer waits: `open_settle_ms`.** perlnavigator publishes `[]` about 35 ms
   after a didOpen and Perl::Critic's set about 355 ms (3 of 3 cold opens, 344–357 ms); with 100 ms
-  of quiet the open's answer was `[]`, unmarked. The first answer after a document's didOpen waits
-  for that much quiet instead (when longer). Bundled: perlnavigator 400 ms (its next repeat comes
-  about 680 ms after Critic's set), others 0; changes after the open are unaffected. rust-analyzer needed no value: each edit publishes twice about 90 ms apart, and
+  of quiet the open's answer was `[]`, unmarked. An answer while the document's latest sync is its
+  didOpen waits until that long after the open's first publish, a fixed window like the empty
+  one: perlnavigator publishes at about 35, 340, 1035 and 1345 ms after an open, then stops, and
+  with quiet a question landing near the later two waited about 0.65 s more. Bundled:
+  perlnavigator 650 ms (Critic's set came 299–394 ms after the open's first publish in
+  verifier's runs, the next repeat about 1 s after it; the open's answer costs about 0.7 s),
+  others 0; changes after the open are unaffected.
+
+rust-analyzer needed no value: each edit publishes twice about 90 ms apart, and
 #30's save-check grace already holds the answer for the second (24 of 24 right).
 
 ## Alternatives considered

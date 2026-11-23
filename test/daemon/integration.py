@@ -1600,6 +1600,31 @@ def t_interim_empty_on_a_server_that_never_versions(sb):
     check(wrong == [], "answered the interim []: %s" % wrong)
 
 
+def t_empty_settle_is_a_window(sb):
+    """#45 polish 3: jdtls republishes [] about 0.95 s after a clean edit.
+    Waiting for quiet started over at that repeat (a clean answer took
+    about 1.05 s, not the 0.6 s approved); the wait is now a fixed window
+    from the sync's first publish."""
+    sb.write_toml("empty_publish_settle_ms = 600\n")
+    a = sb.start({"STUB_LSP_DIAGNOSTICS": "push-interim-nov", "STUB_LSP_PHASE_MS": "500"})
+    a.initialize()
+    path = os.path.join(sb.fixture, "main.stub")
+    with open(path, "w") as f:
+        f.write("start\n")
+    a.tool(9, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+    time.sleep(1.2)
+    took = []
+    for i in range(3):
+        with open(path, "w") as f:
+            f.write("clean %d\n" % i)
+        t0 = time.time()
+        d = a.tool(10 + i, "get_diagnostics", {"uri": "file://" + path, "timeout_ms": 5000})
+        took.append(time.time() - t0)
+        check("stub error" not in d, "clean answer: %s" % d[-200:])
+        time.sleep(1.2)
+    check(max(took) < 0.95, "a clean answer waited past the window: %s" % ["%.2f" % x for x in took])
+
+
 def t_first_answer_after_open_settles(sb):
     """#45 polish 2: perlnavigator publishes [] about 35 ms after a didOpen
     and Perl::Critic's set about 355 ms; the open's own answer was []
@@ -2009,6 +2034,47 @@ def t_find_symbol_type_member_layouts(sb):
     for path in ("Box/Get", "Box/Put", "Get"):
         out = a.tool(20, "find_symbol", {"name_path": path, "scope_uri": go})
         check('"status":"single"' in out, "go layout %s: %s" % (path, out[-400:]))
+    # Polish 3: the path reads Box/Get, not Box/(Box[T]).Get.
+    out = a.tool(21, "find_symbol", {"name_path": "Box/Get", "scope_uri": go})
+    check('"full_path":["Box","Get"]' in out, "go path display: %s" % out[-400:])
+
+
+def _handle_of(out):
+    """The symbol_handle in a find_symbol answer."""
+    def walk(v):
+        if isinstance(v, dict):
+            if "handle" in v and isinstance(v["handle"], dict):
+                return v["handle"]
+            for x in v.values():
+                h = walk(x)
+                if h:
+                    return h
+        if isinstance(v, list):
+            for x in v:
+                h = walk(x)
+                if h:
+                    return h
+        return None
+    return walk(json.loads(out))
+
+
+def t_elp_module_handle_and_arity(sb):
+    """Polish 3 (#40 N1, N2): a handle to the module node pharos makes for
+    an elp file (`util`) was a dead end in edit_at_symbol ("stale handle"),
+    checked against the raw tree; and elp's own `util/helper/1` read the
+    arity as a path segment."""
+    sb.write_toml("workspace_symbol_modules_only = true\n")
+    a = sb.start({"STUB_LSP_WORKSPACE_SYMBOL": "modules", "STUB_LSP_SYMBOL_RAW": "1"})
+    a.initialize()
+    stub_file(sb, "util.stub", "sym 12 helper/1\nsym 12 helper/2\n")
+    uri = stub_file(sb, "main.stub", "sym 12 run/0\n")
+    out = a.tool(10, "find_symbol", {"name_path": "util/helper/1", "scope_uri": uri})
+    check('"status":"single"' in out and "helper/1" in out, "util/helper/1: %s" % out[-400:])
+    out = a.tool(11, "find_symbol", {"name_path": "util", "scope_uri": uri})
+    check('"status":"single"' in out, "util: %s" % out[-400:])
+    edit = a.tool(12, "edit_at_symbol", {"symbol_handle": _handle_of(out), "mode": "insert_after",
+                                         "content": "%% appended\n"})
+    check("stale handle" not in edit and "error" not in edit.lower()[:80], "edit on util: %s" % edit[-400:])
 
 
 def t_find_symbol_library_guess_is_a_near_miss(sb):
@@ -2466,6 +2532,7 @@ SCENARIOS = [
     ("find_symbol_cold_grace_for_every_server", t_find_symbol_cold_grace_for_every_server),
     ("find_symbol_modules_only_server", t_find_symbol_modules_only_server),
     ("find_symbol_type_member_layouts", t_find_symbol_type_member_layouts),
+    ("elp_module_handle_and_arity", t_elp_module_handle_and_arity),
     ("find_symbol_generic_names_need_the_flag", t_find_symbol_generic_names_need_the_flag),
     ("find_symbol_cold_index_while_indexing", t_find_symbol_cold_index_while_indexing),
     ("find_symbol_cold_index_lazy_flag", t_find_symbol_cold_index_lazy_flag),
@@ -2502,6 +2569,7 @@ SCENARIOS = [
     ("unversioned_interim_empty_is_provisional", t_unversioned_interim_empty_is_provisional),
     ("interim_empty_on_a_server_that_never_versions", t_interim_empty_on_a_server_that_never_versions),
     ("first_answer_after_open_settles", t_first_answer_after_open_settles),
+    ("empty_settle_is_a_window", t_empty_settle_is_a_window),
     ("project_config_names", t_project_config_names),
 ]
 
