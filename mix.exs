@@ -20,7 +20,7 @@ defmodule Pharos.MixProject do
   # fresh binary run the previous build's extracted code, which bit us
   # during ADR-029 dogfood. Each build's daemon is told apart by its
   # BUILD_ID, a content hash (ADR-034), independently of this suffix.
-  @version_base "0.3.5"
+  @version_base "0.4.0"
 
   defp version do
     case System.get_env("PHAROS_RELEASE") do
