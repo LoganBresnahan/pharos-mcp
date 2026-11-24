@@ -748,7 +748,14 @@ Initial public release. Headless LSP↔MCP bridge for AI agents.
   project; pass explicit languages (`pharos warm rust go`) for
   precise control.
 
-[Unreleased]: https://github.com/LoganBresnahan/pharos-mcp/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/LoganBresnahan/pharos-mcp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.4.0
+[0.3.5]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.3.5
+[0.3.4]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.3.4
+[0.3.3]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.3.3
+[0.3.2]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.3.2
+[0.3.1]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.3.1
+[0.3.0]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.3.0
 [0.2.2]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.2.2
 [0.2.1]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.2.1
 [0.2.0]: https://github.com/LoganBresnahan/pharos-mcp/releases/tag/v0.2.0
